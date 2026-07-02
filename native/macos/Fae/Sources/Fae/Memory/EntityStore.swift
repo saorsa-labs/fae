@@ -373,39 +373,48 @@ actor EntityStore {
         confidence: Float = 0.7
     ) throws {
         let now = UInt64(Date().timeIntervalSince1970)
-        try dbQueue.write { db in
-            // Find existing active fact with same key.
-            let existing = try Row.fetchOne(
-                db,
-                sql: "SELECT * FROM entity_facts WHERE entity_id = ? AND fact_key = ? AND ended_at IS NULL",
-                arguments: [entityId, key]
-            )
-            if let existing {
-                let existingValue: String = existing["fact_value"]
-                if existingValue == value {
-                    // Same value — nothing to do.
-                    return
+        do {
+            try dbQueue.write { db in
+                // Find existing active fact with same key.
+                let existing = try Row.fetchOne(
+                    db,
+                    sql: "SELECT * FROM entity_facts WHERE entity_id = ? AND fact_key = ? AND ended_at IS NULL",
+                    arguments: [entityId, key]
+                )
+                if let existing {
+                    let existingValue: String = existing["fact_value"]
+                    if existingValue == value {
+                        // Same value — nothing to do.
+                        return
+                    }
+                    // Close existing fact BEFORE inserting the new active row so the partial unique
+                    // index on (entity_id, fact_key) WHERE ended_at IS NULL holds within the write.
+                    let existingId: String = existing["id"]
+                    try db.execute(
+                        sql: "UPDATE entity_facts SET ended_at = ?, updated_at = ? WHERE id = ?",
+                        arguments: [now, now, existingId]
+                    )
                 }
-                // Close existing fact.
-                let existingId: String = existing["id"]
+                // Insert new current fact.
                 try db.execute(
-                    sql: "UPDATE entity_facts SET ended_at = ?, updated_at = ? WHERE id = ?",
-                    arguments: [now, now, existingId]
+                    sql: """
+                        INSERT INTO entity_facts
+                            (id, entity_id, fact_key, fact_value, source_record_id,
+                             created_at, updated_at, confidence, started_at, ended_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                    arguments: [
+                        newEntityId(), entityId, key, value, sourceRecordId,
+                        now, now, Double(confidence), startedAt ?? now, endedAt,
+                    ]
                 )
             }
-            // Insert new current fact.
-            try db.execute(
-                sql: """
-                    INSERT INTO entity_facts
-                        (id, entity_id, fact_key, fact_value, source_record_id,
-                         created_at, updated_at, confidence, started_at, ended_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                arguments: [
-                    newEntityId(), entityId, key, value, sourceRecordId,
-                    now, now, Double(confidence), startedAt ?? now, endedAt,
-                ]
+        } catch {
+            NSLog(
+                "EntityStore: upsertTemporalFact failed for entity %@ key %@: %@",
+                entityId, key, error.localizedDescription
             )
+            throw error
         }
     }
 

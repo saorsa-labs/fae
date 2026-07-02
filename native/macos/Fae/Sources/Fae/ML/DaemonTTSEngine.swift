@@ -36,8 +36,12 @@ enum DaemonTTSEngineError: LocalizedError {
 /// `tts.speed` once, at playback (`AudioPlaybackManager` resample ratio), the
 /// same as the in-process Kokoro lane.
 actor DaemonTTSEngine: TTSEngine {
-    private let socketPath: String
-    private let tokenPath: String
+    // `var` (not `let`) so `reconnect(socketPath:tokenPath:)` can retarget this
+    // SAME engine instance at the daemon's new endpoints after a supervised
+    // restart — the pipeline holds this exact object, so reconnecting in place
+    // restores its voice lane without a swappable-reference refactor.
+    private var socketPath: String
+    private var tokenPath: String
     /// Daemon-side Kokoro voice id, resolved from the configured voice at
     /// init; switchable live via `switchVoice(to:)`.
     private var voice: String
@@ -99,6 +103,23 @@ actor DaemonTTSEngine: TTSEngine {
             connection = nil
             throw error
         }
+    }
+
+    /// Retarget this engine at the daemon's new endpoints after a supervised
+    /// restart and reopen the connection. The old socket (to the dead process)
+    /// is torn down first; `loadState` is reset so `load`'s idempotent guard
+    /// doesn't short-circuit the reconnect. Called by `FaeCore` on the SAME
+    /// instance the pipeline holds, so a successful reconnect revives the
+    /// pipeline's voice lane. Throws (leaving `loadState == .failed`) if the new
+    /// endpoints can't be reached — the caller keeps the local Kokoro fallback.
+    func reconnect(socketPath: String, tokenPath: String, modelID: String) async throws {
+        connection?.close()
+        connection = nil
+        self.socketPath = socketPath
+        self.tokenPath = tokenPath
+        loadState = .notStarted
+        try await load(modelID: modelID)
+        NSLog("DaemonTTSEngine: reconnected to fae-daemon at new endpoints after supervised restart")
     }
 
     func synthesize(text: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {

@@ -336,6 +336,68 @@ final class ImprovementStoreMetaOptTests: XCTestCase {
     }
 }
 
+// MARK: - MetaOptimizer directive IO (fail-closed)
+
+/// The directive amendment path must never collapse a real IO error to "" — doing so
+/// would overwrite the owner's directive on apply and wipe it via the captured rollback.
+final class MetaOptimizerDirectiveIOTests: XCTestCase {
+
+    private var store: ImprovementStore!
+    private var tempURL: URL!
+
+    override func setUp() async throws {
+        store = ImprovementStore()
+        tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_meta_opt_dir_\(UUID().uuidString).db")
+        try await store.open(at: tempURL)
+    }
+
+    override func tearDown() async throws {
+        await store.close()
+        try? FileManager.default.removeItem(at: tempURL)
+    }
+
+    private struct ReaderIOError: Error {}
+
+    /// A real IO error from the directive reader ABORTS the amendment (rethrows) and never
+    /// calls the writer — directive.md is left untouched instead of being overwritten with "".
+    func testDirectiveAmendmentAbortsOnReaderIOError() async throws {
+        let optimizer = MetaOptimizer(store: store)
+        await optimizer.setDirectiveReader { throw ReaderIOError() }
+        let writes = Writes()
+        await optimizer.setDirectiveWriter { text in writes.record(text) }
+
+        do {
+            _ = try await optimizer.applyChange(.directiveAmendment("\n- Be concise."))
+            XCTFail("expected applyChange to rethrow the reader IO error")
+        } catch is ReaderIOError {
+            // Expected: the real IO error propagates, aborting the directive hypothesis.
+        }
+        XCTAssertTrue(writes.all.isEmpty, "directive.md must be untouched when the reader fails")
+    }
+
+    /// A file-absent directive (reader returns nil) reads legitimately as empty, so the
+    /// amendment applies onto "" — file-absent is NOT treated as an error.
+    func testDirectiveAmendmentAppliesWhenReaderReturnsNil() async throws {
+        let optimizer = MetaOptimizer(store: store)
+        await optimizer.setDirectiveReader { nil }
+        let writes = Writes()
+        await optimizer.setDirectiveWriter { text in writes.record(text) }
+
+        _ = try await optimizer.applyChange(.directiveAmendment("\n- Be concise."))
+        XCTAssertEqual(writes.all, ["\n- Be concise."], "absent directive applies the amendment onto empty")
+    }
+
+    /// Records directive writes for assertion. Lock-guarded so the `@escaping` writer
+    /// closure can capture it across the actor boundary.
+    private final class Writes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [String] = []
+        func record(_ text: String) { lock.lock(); storage.append(text); lock.unlock() }
+        var all: [String] { lock.lock(); defer { lock.unlock() }; return storage }
+    }
+}
+
 // MARK: - Phase 2: MetaOptSkillGenerator Tests
 
 final class MetaOptSkillGeneratorTests: XCTestCase {

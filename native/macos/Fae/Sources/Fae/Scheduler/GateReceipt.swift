@@ -32,7 +32,9 @@ struct GateReceipt: Codable, Sendable, Equatable {
     let artifactDigest: String
     /// The measured correctness deltas that produced the pass (dimension → delta).
     let measured: [String: Double]
-    /// The gate decision the receipt certifies. Only `"pass"` is ever persisted.
+    /// The gate decision the receipt certifies, computed by `AdapterGate.decide` over
+    /// `measured` at mint time. Only a `"pass"` receipt can verify; a receipt minted for a
+    /// regressed candidate records its true (`"fail"`/`"concern"`) decision and is rejected.
     let decision: String
     /// The evaluator that produced the measurement — must be on the allowlist.
     let evaluatorId: String
@@ -64,6 +66,7 @@ enum GateReceiptError: Error, Equatable, CustomStringConvertible {
     case candidateMismatch
     case stalePolicyVersion(found: Int, expected: Int)
     case wrongDecision(String)
+    case measuredDeltasRejected
     case alreadyConsumed(String)
 
     var description: String {
@@ -78,6 +81,7 @@ enum GateReceiptError: Error, Equatable, CustomStringConvertible {
         case .candidateMismatch: return "receipt is for a different candidate path"
         case .stalePolicyVersion(let f, let e): return "receipt gatePolicyVersion \(f) != \(e)"
         case .wrongDecision(let d): return "receipt decision is not pass: \(d)"
+        case .measuredDeltasRejected: return "receipt measured deltas do not pass the gate rule"
         case .alreadyConsumed(let c): return "gate receipt already consumed for cycle \(c)"
         }
     }
@@ -280,10 +284,17 @@ enum GateMinter {
         let measuredStrings = Dictionary(
             uniqueKeysWithValues: measured.map { ($0.key.rawValue, $0.value) }
         )
+        // Record the REAL gate decision over the measured deltas — never a hardcoded
+        // "pass". A receipt minted for a regressed candidate carries its true decision,
+        // so the verifier's `decision == "pass"` guard rejects it even if a future bug
+        // reaches this mint for a non-passing candidate.
+        let decision = AdapterGate.decide(
+            MeasuredDeltas(measured: measured, throughputDelta: nil)
+        ).rawValue
         func receipt(hmac: String) -> GateReceipt {
             GateReceipt(
                 cycleId: cycleId, candidatePath: candidatePath, kind: kind,
-                artifactDigest: digest, measured: measuredStrings, decision: "pass",
+                artifactDigest: digest, measured: measuredStrings, decision: decision,
                 evaluatorId: evaluatorId, baseModelId: baseModelId,
                 evalSuiteVersion: evalSuiteVersion,
                 gatePolicyVersion: GatePolicy.policyVersion,
@@ -301,8 +312,11 @@ enum GateMinter {
 /// Verifies a receipt at the deploy boundary (used by W4). All checks fail closed.
 enum GateReceiptVerifier {
     /// Verify that `receipt` authorizes deploying the artifact at `expectedCandidatePath`.
-    /// Checks (in order): decision is pass, evaluator allowlist, gate-policy version,
-    /// candidate-path match, HMAC signature, and the on-disk artifact digest.
+    /// Checks (in order): decision is pass, the measured deltas independently PASS the gate
+    /// rule, evaluator allowlist, gate-policy version, candidate-path match, HMAC signature,
+    /// and the on-disk artifact digest. Re-deciding the gate over the receipt's own measured
+    /// deltas means a receipt for a regressed candidate can NEVER verify — even if a future
+    /// minting bug stamped `decision:"pass"` onto it.
     /// Single-use (consumed) enforcement is done against the store by the caller (W4).
     static func verify(_ receipt: GateReceipt, expectedCandidatePath: String) throws {
         try verify(receipt, expectedCandidatePath: expectedCandidatePath, using: try GateReceiptCrypto.keychainKey())
@@ -312,6 +326,13 @@ enum GateReceiptVerifier {
     static func verify(_ receipt: GateReceipt, expectedCandidatePath: String, using key: SymmetricKey) throws {
         guard receipt.decision == "pass" else {
             throw GateReceiptError.wrongDecision(receipt.decision)
+        }
+        // Re-run the fail-closed gate rule over the receipt's OWN measured deltas. The
+        // stored `decision` is not trusted on its own: a receipt whose measured deltas
+        // carry a regression (or an incomplete measurement) is rejected here regardless
+        // of what the `decision` field claims.
+        guard recomputedGatePasses(receipt.measured) else {
+            throw GateReceiptError.measuredDeltasRejected
         }
         guard GatePolicy.allowedEvaluators.contains(receipt.evaluatorId) else {
             throw GateReceiptError.evaluatorNotAllowed(receipt.evaluatorId)
@@ -335,6 +356,17 @@ enum GateReceiptVerifier {
         guard onDiskDigest == receipt.artifactDigest else {
             throw GateReceiptError.digestMismatch
         }
+    }
+
+    /// Re-decide the gate over a receipt's stored (string-keyed) measured deltas. Unknown
+    /// dimension keys are dropped, which makes the measurement incomplete and fails closed.
+    private static func recomputedGatePasses(_ measured: [String: Double]) -> Bool {
+        var dims: [GateDimension: Double] = [:]
+        for (key, value) in measured {
+            guard let dim = GateDimension(rawValue: key) else { continue }
+            dims[dim] = value
+        }
+        return AdapterGate.decide(MeasuredDeltas(measured: dims, throughputDelta: nil)) == .pass
     }
 
     private static func constantTimeEquals(_ a: String, _ b: String) -> Bool {

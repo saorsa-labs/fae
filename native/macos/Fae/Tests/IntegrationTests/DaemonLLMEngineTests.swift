@@ -456,6 +456,26 @@ final class DaemonAudioTwoPassTests: XCTestCase {
         XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("sto").isUsable)
     }
 
+    func testAudioTranscriptRunawayGateScalesWithClipDuration() {
+        // A legitimate 25-30s PTT capture transcribes to ~390-480 chars. With
+        // the duration threaded through, a 30s clip must accept it; without a
+        // duration (short-clip default) the same length still trips the runaway
+        // gate at the 300-char floor.
+        let longUtterance = "I was thinking that we could go over the quarterly plans "
+            + "together tomorrow morning and then maybe grab some lunch somewhere downtown "
+            + "before our afternoon meeting with the design team, because they really wanted "
+            + "to talk through the new onboarding flow and the small changes to the settings "
+            + "screen that we first discussed last week during our sync about roadmap priorities."
+        XCTAssertGreaterThan(longUtterance.count, 300)
+        XCTAssertTrue(
+            DaemonLLMEngine.assessAudioTranscript(longUtterance, durationSeconds: 30).isUsable)
+        let shortClip = DaemonLLMEngine.assessAudioTranscript(longUtterance, durationSeconds: 2)
+        XCTAssertFalse(shortClip.isUsable)
+        XCTAssertEqual(shortClip.reason, "runaway_transcript")
+        // No duration keeps the 300-char floor (backward compatible).
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript(longUtterance).isUsable)
+    }
+
     func testAudioFallbackTriggersOnQualityFailure() {
         let quality = DaemonLLMEngine.assessAudioTranscript("sto")
         XCTAssertTrue(DaemonLLMEngine.shouldAttemptAudioFallback(

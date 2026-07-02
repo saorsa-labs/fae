@@ -123,12 +123,16 @@ struct MemoryCaptureReport: Sendable {
     var extractedCount: Int = 0
     var supersededCount: Int = 0
     var forgottenCount: Int = 0
+    /// True when an EXPLICIT user command ("remember ...", "forget ...") was
+    /// detected but its persistence threw. Callers can surface a degraded
+    /// signal instead of falsely confirming "I'll remember that".
+    var failedExplicitCommand: Bool = false
 }
 
 // MARK: - Constants
 
 enum MemoryConstants {
-    static let schemaVersion: UInt32 = 9
+    static let schemaVersion: UInt32 = 10
     static let maxRecordTextLen: Int = 32_768
     static let maxArtifactTextLen: Int = 200_000
     static let truncationSuffix: String = " [truncated]"

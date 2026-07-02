@@ -724,7 +724,7 @@ actor ImprovementCycleCoordinator {
                     let baseline = try await bridge.runBenchmark(adapterPath: nil)
                     // Store baseline for historical comparison.
                     let pendingCount = (try? await store.pendingFeedbackEvents().count) ?? 0
-                    try? await store.insertBaseline(baseline.toBaseline(feedbackEventCount: pendingCount))
+                    _ = try? await store.insertBaseline(baseline.toBaseline(feedbackEventCount: pendingCount))
 
                     NSLog("ImprovementCycleCoordinator: running FaeBenchmark with adapter")
                     let adapterResult = try await bridge.runBenchmark(adapterPath: adapterPath)
@@ -752,17 +752,32 @@ actor ImprovementCycleCoordinator {
                 evalDelta = .unmeasured
             }
 
-            // P9/C4 (W1, F1/F2/F16): fail-closed gate. A candidate with no COMPLETE
-            // measurement (any correctness dimension unmeasured, or nothing
-            // improved) is blocked BEFORE the external review gate — the external
-            // providers must never get a chance to PASS an un-evaluated candidate.
-            // `failClosed` discards the pending candidate; the deployed
-            // `currentAdapterPath` is untouched (W3). (The audited `candidate_blocked`
-            // security event + the receipt deploy gate land in W4.)
-            if AdapterGate.decide(evalDelta.measuredDeltas) == .blockedNoMeasurement {
+            // P9/C4 (W1, F1/F2/F16): fail-closed gate. The gate's decision over the
+            // MEASURED deltas is authoritative and enforced BEFORE the external review
+            // gate — only a `.pass` may proceed to mint + review. A regression (`.fail`
+            // or `.concern`) or a non-measurement must never reach the external providers
+            // (which, once wired, can PASS anything). `failClosed` discards the pending
+            // candidate; the deployed `currentAdapterPath` is untouched (W3).
+            switch AdapterGate.decide(evalDelta.measuredDeltas) {
+            case .blockedNoMeasurement:
                 NSLog("ImprovementCycleCoordinator: candidate_blocked — no measured improvement; fail-closed (no review, no deploy)")
                 await failClosed(reason: "candidate_blocked: no_measured_improvement")
                 return
+            case .fail:
+                NSLog("ImprovementCycleCoordinator: candidate_blocked — measured regression exceeds gate threshold; fail-closed (no review, no deploy)")
+                await failClosed(reason: "candidate_blocked: measured_regression")
+                return
+            case .concern:
+                // A measured regression within threshold is not a hard fail but must NOT
+                // auto-deploy. Defer deterministically via the same deferral mechanism the
+                // review-gate `.concern` path uses, rather than trusting the external
+                // reviewer to catch it. A deferral persist failure still fails closed.
+                let newCount = (try? await store.incrementDeferral()) ?? 0
+                NSLog("ImprovementCycleCoordinator: candidate_blocked — measured regression; deferring (count now %d; no review, no deploy)", newCount)
+                await failClosed(reason: "candidate_blocked_concern_deferred")
+                return
+            case .pass:
+                break
             }
 
             // P9/C4 (W7): ONLY a real `AdapterEvaluator` may pass the gate. It is the sole
@@ -1325,6 +1340,7 @@ actor ImprovementCycleCoordinator {
                let cycleId = state.pendingCycleId,
                await hasResumableReceipt(cycleId: cycleId, candidate: candidate) {
                 NSLog("ImprovementCycleCoordinator: recovered resumable proposing (valid receipt) — keeping")
+                await replayDeployedAdapterOnStartup()
                 return
             }
 
@@ -1365,6 +1381,100 @@ actor ImprovementCycleCoordinator {
         } catch {
             NSLog("ImprovementCycleCoordinator: recoverStaleStateIfNeeded failed: %@", error.localizedDescription)
         }
+        // After state repair, re-apply the deployed adapter for THIS process (F6).
+        await replayDeployedAdapterOnStartup()
+    }
+
+    /// Re-apply the gated, deployed personal adapter on every process start (P9/C4 F6).
+    ///
+    /// `performDeploy` writes the promoted candidate ONLY to
+    /// `ImprovementState.currentAdapterPath` and hot-swaps the LIVE engine — but no
+    /// startup path re-applied that pointer. So after a restart the approved
+    /// personalization silently vanished (the engine served base), AND subsequent
+    /// nightly/shadow evals used `currentAdapterPath` as the "deployed baseline"
+    /// while the engine actually served base — a delta against a phantom.
+    ///
+    /// This closes both: read `currentAdapterPath`; RE-VERIFY the consumed
+    /// `GateReceipt` for that path against the on-disk artifact (digest + HMAC via
+    /// `GateReceiptVerifier`, the same crypto the deploy gate used); only then
+    /// re-apply it via the SAME `adapterPatchCallback` path `performDeploy` uses
+    /// (which routes polymorphically to the daemon reload or the MLX hot-swap).
+    ///
+    /// Fail-closed: no verifying receipt (missing/moved/edited artifact, tampered
+    /// row) ⇒ log LOUDLY, audit, and CLEAR the `currentAdapterPath` pointer so eval
+    /// baselines can never diverge from what the engine actually serves.
+    private func replayDeployedAdapterOnStartup() async {
+        let state: ImprovementState
+        do {
+            state = try await store.readState()
+        } catch {
+            NSLog("ImprovementCycleCoordinator: startup adapter replay — could not read state: %@", error.localizedDescription)
+            return
+        }
+        // Nothing deployed ⇒ base model is correct; nothing to replay.
+        guard let deployed = state.currentAdapterPath else { return }
+
+        // The deployed pointer MUST carry a consumed, verifying receipt. Absence, a
+        // failed verify, or a missing/edited artifact all fail closed: clear the
+        // pointer so it can never masquerade as the eval baseline, and do NOT apply.
+        guard let receipt = try? await store.consumedGateReceipt(forCandidatePath: deployed) else {
+            await clearDivergedDeployedPointer(
+                deployed, reason: "no_consumed_receipt")
+            return
+        }
+        do {
+            if let key = injectedGateKey {
+                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: deployed, using: key)
+            } else {
+                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: deployed)
+            }
+        } catch {
+            await clearDivergedDeployedPointer(
+                deployed, reason: "receipt_verify_failed: \(error)")
+            return
+        }
+
+        // Verified: re-apply on the live engine via the same path performDeploy uses.
+        // Nil callback (not yet wired) ⇒ leave the pointer intact; a later wiring +
+        // recovery pass re-applies. We do NOT clear a verified pointer.
+        if adapterPatchCallback != nil {
+            adapterPatchCallback?(deployed)
+            NSLog("ImprovementCycleCoordinator: startup adapter replay — re-applied verified deployed adapter %@", deployed)
+        } else {
+            NSLog("ImprovementCycleCoordinator: startup adapter replay — verified %@ but no patch callback wired yet (not applied)", deployed)
+        }
+    }
+
+    /// Fail-closed teardown for a `currentAdapterPath` that no longer has a verifying
+    /// receipt (F6): audit LOUDLY and clear the deployed pointer so eval baselines
+    /// track what the engine actually serves (base). Also drops the running adapter
+    /// (nil apply) if a patch callback is wired, so the engine + pointer agree.
+    private func clearDivergedDeployedPointer(_ deployed: String, reason: String) async {
+        NSLog(
+            "ImprovementCycleCoordinator: startup adapter replay FAILED for deployed %@ (%@) — clearing pointer (fail-closed)",
+            deployed, reason
+        )
+        await SecurityEventLogger.shared.log(
+            event: "adapter_startup_replay_rejected",
+            toolName: "ImprovementCycleCoordinator",
+            decision: "clear",
+            reasonCode: reason,
+            success: false,
+            error: "deployed adapter \(deployed) has no verifying gate receipt",
+            arguments: ["deployed_path": deployed]
+        )
+        do {
+            try await store.ensureStateRow()
+            var state = try await store.readState()
+            if state.currentAdapterPath == deployed {
+                state.currentAdapterPath = nil
+                try await store.writeState(state)
+            }
+        } catch {
+            NSLog("ImprovementCycleCoordinator: startup adapter replay — failed to clear diverged pointer: %@", error.localizedDescription)
+        }
+        // Ensure the live engine is NOT serving the un-verifiable adapter.
+        adapterPatchCallback?(nil)
     }
 
     /// Whether the pending candidate for `cycleId` has a stored, unconsumed, verifying

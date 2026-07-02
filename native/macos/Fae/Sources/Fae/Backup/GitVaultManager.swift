@@ -106,7 +106,7 @@ actor GitVaultManager {
         defer { state = .ready }
 
         do {
-            try copySourceFiles(configOnly: false)
+            let skippedDatabases = try copySourceFiles(configOnly: false)
             try runGit("add", "-A")
 
             let status = try runGitOutput("status", "--porcelain")
@@ -119,6 +119,16 @@ actor GitVaultManager {
 
             let hash = try runGitOutput("rev-parse", "--short", "HEAD")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // A partial snapshot (some WAL databases could not be vacuumed) must not report success.
+            guard skippedDatabases.isEmpty else {
+                let joined = skippedDatabases.joined(separator: ", ")
+                NSLog(
+                    "GitVaultManager: backup partial (%@) — %@; databases not snapshotted: %@",
+                    hash, reason, joined
+                )
+                return .failure("partial backup \(hash): databases not snapshotted: \(joined)")
+            }
 
             NSLog("GitVaultManager: backup complete (%@) — %@", hash, reason)
             return .success(commitHash: hash)
@@ -137,7 +147,8 @@ actor GitVaultManager {
         defer { state = .ready }
 
         do {
-            try copySourceFiles(configOnly: true)
+            // Config-only backups touch no SQLite databases, so there are no vacuum skips to surface.
+            _ = try copySourceFiles(configOnly: true)
             try runGit("add", "-A")
 
             let status = try runGitOutput("status", "--porcelain")
@@ -200,8 +211,7 @@ actor GitVaultManager {
             let src = dataURL.appendingPathComponent(file)
             let dst = sourceDir.appendingPathComponent(file)
             if fm.fileExists(atPath: src.path) {
-                try? fm.removeItem(at: dst)
-                try fm.copyItem(at: src, to: dst)
+                try Self.atomicallyReplace(itemAt: dst, withCopyOf: src)
             }
         }
 
@@ -209,26 +219,26 @@ actor GitVaultManager {
             let src = dataURL.appendingPathComponent(dbFile)
             let dst = sourceDir.appendingPathComponent(dbFile)
             if fm.fileExists(atPath: src.path) {
+                // Stage the restored db first, then swap it in atomically. Only
+                // after the swap succeeds do we clear the stale WAL/SHM — a
+                // failed copy must never leave a deleted-but-not-replaced db.
+                try Self.atomicallyReplace(itemAt: dst, withCopyOf: src)
                 try? fm.removeItem(at: URL(fileURLWithPath: dst.path + "-wal"))
                 try? fm.removeItem(at: URL(fileURLWithPath: dst.path + "-shm"))
-                try? fm.removeItem(at: dst)
-                try fm.copyItem(at: src, to: dst)
             }
         }
 
         let srcSkills = dataURL.appendingPathComponent("skills")
         let dstSkills = sourceDir.appendingPathComponent("skills")
         if fm.fileExists(atPath: srcSkills.path) {
-            try? fm.removeItem(at: dstSkills)
-            try fm.copyItem(at: srcSkills, to: dstSkills)
+            try Self.atomicallyReplace(itemAt: dstSkills, withCopyOf: srcSkills)
         }
 
         // Restore personal LoRA adapters.
         let srcAdapters = dataURL.appendingPathComponent("adapters")
         let dstAdapters = sourceDir.appendingPathComponent("adapters")
         if fm.fileExists(atPath: srcAdapters.path) {
-            try? fm.removeItem(at: dstAdapters)
-            try fm.copyItem(at: srcAdapters, to: dstAdapters)
+            try Self.atomicallyReplace(itemAt: dstAdapters, withCopyOf: srcAdapters)
         }
 
         try runGit("checkout", "HEAD", "--", "data/")
@@ -237,11 +247,51 @@ actor GitVaultManager {
         NSLog("GitVaultManager: restored from %@", ref)
     }
 
+    /// Copy-then-swap a restored file/directory into place without data loss.
+    ///
+    /// The prior implementation deleted the live file (`removeItem`) *before*
+    /// copying the restored one, so a copy failure (disk full, permissions)
+    /// left the user with a deleted-but-not-replaced `fae.db`. Here we copy the
+    /// source into a sibling temp path first — the live file stays untouched
+    /// until that copy succeeds — then atomically replace/move it into place.
+    private static func atomicallyReplace(itemAt dst: URL, withCopyOf src: URL) throws {
+        let fm = FileManager.default
+        let staging = dst.deletingLastPathComponent()
+            .appendingPathComponent(".\(dst.lastPathComponent).restore-\(UUID().uuidString)")
+
+        // Stage the copy first; the live destination is not touched yet.
+        try? fm.removeItem(at: staging)
+        do {
+            try fm.copyItem(at: src, to: staging)
+        } catch {
+            try? fm.removeItem(at: staging)
+            throw error
+        }
+
+        do {
+            if fm.fileExists(atPath: dst.path) {
+                // Atomic swap: replaceItemAt only removes the original once the
+                // replacement is in place.
+                _ = try fm.replaceItemAt(dst, withItemAt: staging)
+            } else {
+                // No existing file to swap — move the staged copy into place.
+                try fm.moveItem(at: staging, to: dst)
+            }
+        } catch {
+            try? fm.removeItem(at: staging)
+            throw error
+        }
+    }
+
     // MARK: - Private Helpers
 
-    private func copySourceFiles(configOnly: Bool) throws {
+    /// Copies source files into the vault's data directory. Returns the names of any WAL SQLite
+    /// databases that could not be safely snapshotted (VACUUM INTO failed) and were therefore left
+    /// at their previous backed-up state — the caller must treat these as a partial-backup failure.
+    private func copySourceFiles(configOnly: Bool) throws -> [String] {
         let fm = FileManager.default
         setDataPermissions(readOnly: false)
+        var skippedDatabases: [String] = []
 
         let configFiles = ["config.toml", "directive.md", "SOUL.md", "heartbeat.md", "speakers.json", "owner_photo.jpg", "personal_lexicon.json"]
         for file in configFiles {
@@ -257,11 +307,23 @@ actor GitVaultManager {
             for dbFile in ["fae.db", "scheduler.db", "receipts.db", "improvement.db"] {
                 let src = sourceDir.appendingPathComponent(dbFile)
                 let dst = dataURL.appendingPathComponent(dbFile)
-                if fm.fileExists(atPath: src.path) {
+                guard fm.fileExists(atPath: src.path) else { continue }
+                // VACUUM INTO is the only WAL-safe snapshot; a raw copy of the main .db file while
+                // writers hold the WAL yields a torn/stale backup, so we never fall back to that.
+                // Vacuum into a temp file and only swap it in on success, keeping the previous good
+                // snapshot in place if it fails.
+                let tmp = dst.appendingPathExtension("vacuum-tmp")
+                try? fm.removeItem(at: tmp)
+                if vacuumInto(source: src.path, destination: tmp.path) {
                     try? fm.removeItem(at: dst)
-                    if !vacuumInto(source: src.path, destination: dst.path) {
-                        try fm.copyItem(at: src, to: dst)
-                    }
+                    try fm.moveItem(at: tmp, to: dst)
+                } else {
+                    try? fm.removeItem(at: tmp)
+                    skippedDatabases.append(dbFile)
+                    NSLog(
+                        "GitVaultManager: VACUUM INTO failed for %@ — skipping (previous snapshot retained)",
+                        dbFile
+                    )
                 }
             }
 
@@ -280,6 +342,8 @@ actor GitVaultManager {
                 try fm.copyItem(at: srcAdapters, to: dstAdapters)
             }
         }
+
+        return skippedDatabases
     }
 
     private func vacuumInto(source: String, destination: String) -> Bool {

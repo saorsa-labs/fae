@@ -735,16 +735,23 @@ final class FaeCore: ObservableObject, HostCommandSender {
             NSLog(
                 "FaeCore: daemon endpoints (re)published — socket %@",
                 endpoints.socketPath)
-            // Reconnect daemon TTS if configured (it may have dropped with the
-            // daemon and needs a fresh socket to the revived process).
-            if config.tts.useDaemonEngine, ttsEngine == nil {
-                let daemonTTS = DaemonTTSEngine(
-                    socketPath: endpoints.socketPath,
-                    tokenPath: endpoints.tokenPath,
-                    configuredVoice: config.tts.voice)
+            // Reconnect daemon TTS if configured: it dropped with the dead
+            // daemon and needs a fresh socket to the revived process. The
+            // pipeline holds THIS exact `ttsEngine` instance, so reconnecting it
+            // in place revives the pipeline's voice lane (a previous version
+            // built a NEW DaemonTTSEngine and assigned it to `ttsEngine`, which
+            // the pipeline never saw, behind a dead `== nil` guard — voice
+            // stayed silent for the rest of the session).
+            if config.tts.useDaemonEngine, let daemonTTS = ttsEngine as? DaemonTTSEngine {
                 do {
-                    try await daemonTTS.load(modelID: config.tts.modelId)
-                    ttsEngine = daemonTTS
+                    try await daemonTTS.reconnect(
+                        socketPath: endpoints.socketPath,
+                        tokenPath: endpoints.tokenPath,
+                        modelID: config.tts.modelId)
+                    // Restart the pipeline's event subscriber against the new
+                    // endpoints so daemon-owned playback levels / end events flow
+                    // again (orb motion + playback completion).
+                    await pipelineCoordinator?.restartDaemonEventSubscriber()
                     NSLog("FaeCore: daemon TTS lane reconnected after supervised restart")
                 } catch {
                     NSLog(

@@ -119,8 +119,21 @@ def install_runtime(rt: dict, install_dir: Path, force: bool) -> Path:
     """Download + verify the Piper tarball; return the verified `piper` binary."""
     binary = install_dir / rt["binary"]
     if binary.exists() and not force:
-        print(f"✓ Piper runtime already installed: {binary}")
-        return binary
+        # A cached binary must still be verified against the lock before we trust
+        # it — skipping verification would let a tampered/corrupt binary be
+        # trusted forever. Only the DOWNLOAD is skipped, never the SHA check.
+        expected_binary_sha = rt.get("binary_sha256")
+        if expected_binary_sha is None:
+            print(f"✓ Piper runtime already installed: {binary}")
+            return binary
+        binary_digest = sha256_file(binary)
+        if binary_digest == expected_binary_sha:
+            print(f"✓ Piper runtime already installed (sha256 verified): {binary}")
+            return binary
+        print(
+            f"⚠ cached binary sha256 mismatch: expected {expected_binary_sha}, "
+            f"got {binary_digest} — re-downloading"
+        )
 
     install_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fae-piper-") as td:

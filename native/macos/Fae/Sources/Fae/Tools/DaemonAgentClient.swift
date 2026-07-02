@@ -360,34 +360,65 @@ enum DaemonAgentClient {
         return "A delegated agent wants to \(action). Allow it?"
     }
 
+    /// Confirm-timeout for the governance approval wait. Comfortably exceeds the
+    /// daemon's own 60s `CONFIRM_TIMEOUT_SECS` (`crates/fae-daemon/src/toolhost/
+    /// confirm.rs`) so on a genuine no-answer the daemon denies and unwinds its
+    /// own ToolHost lock FIRST; this Swift timeout is the backstop that
+    /// guarantees the shared `DaemonToolHostSession` operation lock and the
+    /// conversation turn can never wedge forever if nobody is present to answer
+    /// (overnight / proactive routed mutation), the card is dismissed, or the
+    /// response notification is lost.
+    private static let approvalTimeoutSeconds: Double = 75
+
     /// Present Fae's governance approval card and await the user's yes/no. Reuses
     /// the existing `.faeGovernanceConfirmation*` round-trip (the same card tool
     /// approvals use).
+    ///
+    /// Three racers can settle the wait — the user's response notification, the
+    /// backstop timeout, and Task cancellation (a cancelled turn) — and each
+    /// routes through `ApprovalWaiter`, which resumes the continuation
+    /// EXACTLY ONCE (double-resuming a continuation traps). Whichever fires first
+    /// removes the observer, dismisses a still-open card, and resumes; the losers
+    /// no-op. Timeout and cancellation both DENY (fail-closed). This mirrors the
+    /// cancellation-aware one-shot pattern in `DaemonToolHostSession`.
     @MainActor
     private static func requestApproval(title: String, message: String) async -> Bool {
         let requestID = UUID().uuidString
-        return await withCheckedContinuation { continuation in
-            var observer: NSObjectProtocol?
-            observer = NotificationCenter.default.addObserver(
-                forName: .faeGovernanceConfirmationRespond,
-                object: nil,
-                queue: .main
-            ) { note in
-                guard let info = note.userInfo,
-                      (info["request_id"] as? String) == requestID
-                else { return }
-                if let observer { NotificationCenter.default.removeObserver(observer) }
-                continuation.resume(returning: (info["approved"] as? Bool) ?? false)
+        let waiter = ApprovalWaiter(requestID: requestID)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                let observer = NotificationCenter.default.addObserver(
+                    forName: .faeGovernanceConfirmationRespond,
+                    object: nil,
+                    queue: .main
+                ) { note in
+                    guard let info = note.userInfo,
+                          (info["request_id"] as? String) == requestID
+                    else { return }
+                    // This Respond already dismissed the card (user tap / pipeline
+                    // resolve) — don't re-post the dismissal.
+                    waiter.resolve((info["approved"] as? Bool) ?? false, postDismissal: false)
+                }
+                waiter.arm(continuation, observer: observer)
+                NotificationCenter.default.post(
+                    name: .faeGovernanceConfirmationRequested,
+                    object: nil,
+                    userInfo: [
+                        "request_id": requestID,
+                        "title": title,
+                        "message": message,
+                        "confirm_label": "Allow",
+                    ])
+                // Backstop timeout — deny if nobody answers before the daemon's
+                // own confirm window has comfortably closed.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(approvalTimeoutSeconds))
+                    waiter.resolve(false, postDismissal: true)
+                }
             }
-            NotificationCenter.default.post(
-                name: .faeGovernanceConfirmationRequested,
-                object: nil,
-                userInfo: [
-                    "request_id": requestID,
-                    "title": title,
-                    "message": message,
-                    "confirm_label": "Allow",
-                ])
+        } onCancel: {
+            // SYNC, off-actor: touch ONLY the Sendable waiter (never actor state).
+            waiter.resolve(false, postDismissal: true)
         }
     }
 
@@ -537,5 +568,79 @@ enum DaemonAgentClient {
             ])
         let raw = try await connection.roundTrip(frame: authFrame, expectRequestID: "a0")
         _ = try DaemonWire.unwrapResponse(raw)
+    }
+}
+
+// MARK: - Approval-wait guard (resume-exactly-once)
+
+/// A parked `requestApproval` continuation, made safe against its three racers:
+/// the user's response notification, the backstop timeout, and Task cancellation.
+///
+/// `withCheckedContinuation` traps on a second resume, so exactly one of those
+/// racers may resume it. This class is a **one-shot** guard: whichever calls
+/// `resolve(_:postDismissal:)` first wins, tears down the response observer,
+/// optionally dismisses a still-open card, and resumes; the others no-op. The
+/// `resolved` flag also closes the (defensive) resolve-before-`arm(_:observer:)`
+/// ordering hazard.
+///
+/// All state is `NSLock`-guarded so the sync, off-actor cancellation handler can
+/// safely settle it without reaching actor-isolated state.
+private final class ApprovalWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var observer: NSObjectProtocol?
+    private var resolved = false
+    private var resolvedValue = false
+    private let requestID: String
+
+    init(requestID: String) { self.requestID = requestID }
+
+    /// Bind the continuation + the Respond observer to tear down on resolution.
+    /// If a racer already resolved before arming, resume immediately with the
+    /// settled value and drop the observer (closes the resolve-before-arm race).
+    func arm(_ continuation: CheckedContinuation<Bool, Never>, observer: NSObjectProtocol) {
+        lock.lock()
+        if resolved {
+            let value = resolvedValue
+            lock.unlock()
+            NotificationCenter.default.removeObserver(observer)
+            continuation.resume(returning: value)
+            return
+        }
+        self.continuation = continuation
+        self.observer = observer
+        lock.unlock()
+    }
+
+    /// Settle the wait exactly once. The first caller (response / timeout /
+    /// cancellation) wins: it removes the observer, optionally dismisses a still-
+    /// open card, and resumes the continuation. Later callers no-op.
+    ///
+    /// `postDismissal` is true only for the timeout / cancellation paths (the card
+    /// may still be open). The observer is removed BEFORE the dismissal post, so
+    /// the post cannot re-enter `resolve`; it is a no-op for `HostCommandBridge`
+    /// (this `request_id` is never in its pending map) and only dismisses our card
+    /// via `InputOverlayController`.
+    func resolve(_ approved: Bool, postDismissal: Bool) {
+        lock.lock()
+        if resolved {
+            lock.unlock()
+            return
+        }
+        resolved = true
+        resolvedValue = approved
+        let cont = continuation
+        continuation = nil
+        let obs = observer
+        observer = nil
+        lock.unlock()
+        if let obs { NotificationCenter.default.removeObserver(obs) }
+        if postDismissal {
+            NotificationCenter.default.post(
+                name: .faeGovernanceConfirmationRespond,
+                object: nil,
+                userInfo: ["request_id": requestID, "approved": false])
+        }
+        cont?.resume(returning: approved)
     }
 }

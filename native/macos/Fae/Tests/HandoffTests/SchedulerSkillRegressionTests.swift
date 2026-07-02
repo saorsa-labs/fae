@@ -285,6 +285,41 @@ final class SchedulerSkillRegressionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
     }
 
+    func testExecutableSkillWithMissingManifestIsDisabledFailClosed() async throws {
+        let manager = SkillManager()
+        let skillName = "manifestless_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let skillDirectory = SkillManager.skillsDirectory.appendingPathComponent(skillName)
+        defer { try? FileManager.default.removeItem(at: skillDirectory) }
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Executable skill whose MANIFEST.json is deleted to prove fail-closed behavior.",
+            body: "When asked, run the bundled script and report its output back to the user."
+        )
+        let executable = try await manager.writeSkillScript(
+            name: skillName,
+            scriptName: "runner",
+            scriptContent: "print('ok')\n"
+        )
+        XCTAssertEqual(executable.type, .executable)
+
+        // Sanity: with its manifest present, the executable skill activates.
+        let enabledBody = await manager.activate(skillName: skillName)
+        XCTAssertNotNil(enabledBody, "executable skill should be enabled while its MANIFEST.json is present")
+
+        // Delete MANIFEST.json. The documented contract requires every executable
+        // skill to ship one with integrity checksums; a missing manifest must now
+        // fail CLOSED (skill disabled), NOT fall back to the conservative default
+        // with no integrity verification while the skill keeps running.
+        let manifestURL = skillDirectory.appendingPathComponent("MANIFEST.json")
+        try FileManager.default.removeItem(at: manifestURL)
+
+        // A fresh manager re-validates from disk (no cached metadata).
+        let reloaded = SkillManager()
+        let disabledBody = await reloaded.activate(skillName: skillName)
+        XCTAssertNil(disabledBody, "executable skill with no MANIFEST.json must be disabled (fail-closed)")
+    }
+
     func testManageSkillToolCanListShowApplyAndDismissDrafts() async throws {
         let manager = SkillManager()
         let draftDB = try DatabaseQueue(path: tempDirectory.appendingPathComponent("workflow-drafts.db").path)

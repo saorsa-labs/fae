@@ -51,7 +51,12 @@ const MAX_WS_MESSAGE_BYTES: usize = 256 * 1024;
 
 /// Shared state for the diagnostic listener.
 pub struct DiagnosticState {
-    pub registry: Arc<ClientRegistry>,
+    /// The rotatable registry handle shared with the Unix accept loop. The
+    /// rotation task republishes a fresh registry here at token half-life, so
+    /// the diagnostic surface must snapshot the CURRENT registry per request
+    /// (via [`DiagnosticState::registry`]) rather than caching the startup Arc —
+    /// otherwise a rotation would 401 diagnostic clients using the new token.
+    pub registry: crate::transport::SharedRegistry,
     pub engine: Arc<dyn ProviderAdapter>,
     pub tts: Arc<dyn TtsAdapter>,
     pub audio: Arc<AudioManager>,
@@ -62,6 +67,21 @@ pub struct DiagnosticState {
     pub agents: crate::agents::AgentSessionRegistry,
     pub conductor: Arc<crate::conductor::ConductorRuntime>,
     pub port: u16,
+}
+
+impl DiagnosticState {
+    /// Snapshot the CURRENT registry. The rotation task swaps a fresh registry
+    /// into the shared cell at token half-life; reading per request (rather than
+    /// caching a startup Arc) keeps the diagnostic surface's auth in lock-step
+    /// with the Unix accept loop across rotations. Mirrors
+    /// `transport::serve_unix`'s per-connection snapshot.
+    fn registry(&self) -> Arc<ClientRegistry> {
+        let guard = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(&guard)
+    }
 }
 
 /// Bind both loopback families and serve until killed. IPv4 is required; IPv6 is
@@ -140,7 +160,7 @@ async fn handle_status(
     state: &DiagnosticState,
 ) -> std::io::Result<()> {
     let now = now_ms();
-    match authenticate_http(head, &state.registry, now) {
+    match authenticate_http(head, &state.registry(), now) {
         Ok(record) if record.scopes.contains(&Scope::StatusRead) => {
             let body = serde_json::to_vec(&serde_json::json!({
                 "status": "ok",
@@ -186,7 +206,7 @@ async fn handle_ticket(
     state: &DiagnosticState,
 ) -> std::io::Result<()> {
     let now = now_ms();
-    let record = match authenticate_http(head, &state.registry, now) {
+    let record = match authenticate_http(head, &state.registry(), now) {
         Ok(record) => record,
         Err(err) => {
             audit(
@@ -376,7 +396,7 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
         return Ok(());
     };
     let client_id = consumed.client_id.clone();
-    let Some(session) = session_from_ticket(&state.registry, &consumed, now) else {
+    let Some(session) = session_from_ticket(&state.registry(), &consumed, now) else {
         audit(
             &state,
             event(
@@ -399,10 +419,14 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
             "allow",
         ),
     );
+    // Snapshot the current registry for this WS session, matching the Unix
+    // accept loop's per-connection snapshot; the ticket already bounds the
+    // session lifetime, so re-reading per frame isn't needed.
+    let registry = state.registry();
     ws_message_loop(
         ws,
         session,
-        &state.registry,
+        &registry,
         state.engine.as_ref(),
         state.tts.as_ref(),
         state.audio.as_ref(),

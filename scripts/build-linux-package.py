@@ -107,6 +107,16 @@ def assemble_payload(staging: Path, arch: str, version: str,
          "--platform", info["runtime_platform"],
          "--install-dir", str(runtime_dir), "--force"])
 
+    # SHA-pinned Piper TTS sidecar (binary + espeak-ng-data + voice model) →
+    # /usr/lib/fae/piper (matches resolve_piper_install_dir: <bin>/../piper
+    # resolves because <bin> is /usr/lib/fae/bin, so ../ is /usr/lib/fae). The
+    # daemon's build_tts_engine() runs unconditionally on Linux and fail-fatals
+    # without this, so it must be in the payload — there is no PATH/apt fallback.
+    piper_dir = fae_root / "piper"
+    run([sys.executable, str(ROOT / "scripts" / "install-piper-runtime.py"),
+         "--platform", info["runtime_platform"],
+         "--install-dir", str(piper_dir), "--force"])
+
     # Shipped models.lock so the daemon's fail-closed gate has its lock at the
     # FHS data path it looks up (XDG / ~/.local/share is per-user; the packaged
     # lock is the reference copy installed under the app dir).
@@ -235,9 +245,17 @@ def build_appimage(payload: Path, out_dir: Path, arch: str, version: str) -> Pat
     shutil.copytree(payload, appdir, ignore=shutil.ignore_patterns("DEBIAN"))
 
     apprun = appdir / "AppRun"
+    # fae-ui-shell is only the orb host; it never spawns fae-daemon (its sole
+    # Command::new sites are xdg-open). The daemon is bundled in the squashfs but
+    # nothing starts it, so a double-clicked AppImage would show an orb whose
+    # bridge polls a socket that never appears. Start fae-daemon in the
+    # background first (its parent-watch tears it down when the shell exits),
+    # then exec the orb host. Matches the .deb, where both are on PATH via
+    # /usr/bin symlinks.
     apprun.write_text(
         "#!/bin/sh\n"
         'HERE="$(dirname "$(readlink -f "$0")")"\n'
+        '"$HERE/usr/lib/fae/bin/fae-daemon" &\n'
         'exec "$HERE/usr/lib/fae/bin/fae-ui-shell" "$@"\n'
     )
     make_executable(apprun)

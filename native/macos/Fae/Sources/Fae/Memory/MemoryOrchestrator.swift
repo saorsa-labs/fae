@@ -617,8 +617,16 @@ actor MemoryOrchestrator {
         let sanitizedUserText = SensitiveContentPolicy.redactForStorage(userText)
         let sanitizedAssistantText = SensitiveContentPolicy.redactForStorage(assistantText)
 
+        // Each step below is isolated in its own do/catch so a failure in one
+        // (e.g. the episode insert throwing on SQLITE_BUSY / disk full) does
+        // NOT skip the durable-fact steps that follow. Previously all nine
+        // steps shared one do/catch, so an early throw silently dropped an
+        // explicit "remember"/name/preference/commitment while Fae still said
+        // "I'll remember that". Explicit-command failures (forget/remember)
+        // set report.failedExplicitCommand so callers can degrade honestly.
+
+        // 1. Always insert episode record.
         do {
-            // 1. Always insert episode record.
             if !Self.shouldSkipEpisodeCapture(userText: sanitizedUserText) {
                 let episodeText: String
                 if sanitizedAssistantText.isEmpty {
@@ -652,26 +660,35 @@ actor MemoryOrchestrator {
             } else {
                 NSLog("MemoryOrchestrator: skipping episode capture for ephemeral arithmetic turn")
             }
+        } catch {
+            NSLog("MemoryOrchestrator: episode capture failed (continuing with durable steps): %@", error.localizedDescription)
+        }
 
-            let lower = sanitizedUserText.lowercased()
-            let shouldSuppressStructuredExtraction = userSensitivity.shouldSuppressStructuredExtraction
-                || assistantSensitivity.shouldSuppressStructuredExtraction
-            if shouldSuppressStructuredExtraction {
-                NSLog("MemoryOrchestrator: suppressing structured extraction for sensitive turn")
-            }
+        let lower = sanitizedUserText.lowercased()
+        let shouldSuppressStructuredExtraction = userSensitivity.shouldSuppressStructuredExtraction
+            || assistantSensitivity.shouldSuppressStructuredExtraction
+        if shouldSuppressStructuredExtraction {
+            NSLog("MemoryOrchestrator: suppressing structured extraction for sensitive turn")
+        }
 
-            // 2. Parse forget commands.
-            if !shouldSuppressStructuredExtraction,
-               let query = Self.extractForgetQuery(from: sanitizedUserText)
-            {
+        // 2. Parse forget commands.
+        if !shouldSuppressStructuredExtraction,
+           let query = Self.extractForgetQuery(from: sanitizedUserText)
+        {
+            do {
                 let forgotCount = try await forgetMatching(query: query)
                 report.forgottenCount += forgotCount
+            } catch {
+                report.failedExplicitCommand = true
+                NSLog("MemoryOrchestrator: forget command failed to persist: %@", error.localizedDescription)
             }
+        }
 
-            // 3. Parse "remember ..." commands.
-            if !shouldSuppressStructuredExtraction,
-               let fact = Self.extractRememberFact(from: sanitizedUserText)
-            {
+        // 3. Parse "remember ..." commands.
+        if !shouldSuppressStructuredExtraction,
+           let fact = Self.extractRememberFact(from: sanitizedUserText)
+        {
+            do {
                 // Check for contradictions with existing remembered facts.
                 // Without this, "remember my cat is Whiskers" + "remember my cat is Luna"
                 // both persist, causing confusion on recall.
@@ -693,12 +710,17 @@ actor MemoryOrchestrator {
                     metadata: timestampMetadata
                 )
                 report.extractedCount += 1
+            } catch {
+                report.failedExplicitCommand = true
+                NSLog("MemoryOrchestrator: remember command failed to persist: %@", error.localizedDescription)
             }
+        }
 
-            // 4. Parse name statements.
-            if !shouldSuppressStructuredExtraction,
-               let name = extractName(from: lower, fullText: sanitizedUserText)
-            {
+        // 4. Parse name statements.
+        if !shouldSuppressStructuredExtraction,
+           let name = extractName(from: lower, fullText: sanitizedUserText)
+        {
+            do {
                 try await upsertProfile(
                     tag: "name",
                     text: "Primary user name is \(name).",
@@ -709,12 +731,16 @@ actor MemoryOrchestrator {
                     speakerId: speakerId,
                     metadata: timestampMetadata
                 )
+            } catch {
+                NSLog("MemoryOrchestrator: name capture failed: %@", error.localizedDescription)
             }
+        }
 
-            // 5. Parse preference statements.
-            if !shouldSuppressStructuredExtraction,
-               let pref = extractPreference(from: lower, fullText: sanitizedUserText)
-            {
+        // 5. Parse preference statements.
+        if !shouldSuppressStructuredExtraction,
+           let pref = extractPreference(from: lower, fullText: sanitizedUserText)
+        {
+            do {
                 // Check for contradiction with existing preferences.
                 try await supersedeContradiction(
                     tag: "preference",
@@ -734,12 +760,16 @@ actor MemoryOrchestrator {
                     metadata: timestampMetadata
                 )
                 report.extractedCount += 1
+            } catch {
+                NSLog("MemoryOrchestrator: preference capture failed: %@", error.localizedDescription)
             }
+        }
 
-            // 6. Parse interest statements.
-            if !shouldSuppressStructuredExtraction,
-               let interest = extractInterest(from: lower, fullText: sanitizedUserText)
-            {
+        // 6. Parse interest statements.
+        if !shouldSuppressStructuredExtraction,
+           let interest = extractInterest(from: lower, fullText: sanitizedUserText)
+        {
+            do {
                 _ = try await store.insertRecord(
                     kind: .interest,
                     text: interest,
@@ -751,12 +781,16 @@ actor MemoryOrchestrator {
                     metadata: timestampMetadata
                 )
                 report.extractedCount += 1
+            } catch {
+                NSLog("MemoryOrchestrator: interest capture failed: %@", error.localizedDescription)
             }
+        }
 
-            // 7. Parse commitment statements (deadlines, promises).
-            if !shouldSuppressStructuredExtraction,
-               let commitment = extractCommitment(from: lower, fullText: sanitizedUserText)
-            {
+        // 7. Parse commitment statements (deadlines, promises).
+        if !shouldSuppressStructuredExtraction,
+           let commitment = extractCommitment(from: lower, fullText: sanitizedUserText)
+        {
+            do {
                 _ = try await store.insertRecord(
                     kind: .commitment,
                     text: commitment,
@@ -769,12 +803,16 @@ actor MemoryOrchestrator {
                     metadata: timestampMetadata
                 )
                 report.extractedCount += 1
+            } catch {
+                NSLog("MemoryOrchestrator: commitment capture failed: %@", error.localizedDescription)
             }
+        }
 
-            // 8. Parse event mentions (birthdays, anniversaries, dates).
-            if !shouldSuppressStructuredExtraction,
-               let event = extractEvent(from: lower, fullText: sanitizedUserText)
-            {
+        // 8. Parse event mentions (birthdays, anniversaries, dates).
+        if !shouldSuppressStructuredExtraction,
+           let event = extractEvent(from: lower, fullText: sanitizedUserText)
+        {
+            do {
                 _ = try await store.insertRecord(
                     kind: .event,
                     text: event,
@@ -787,12 +825,16 @@ actor MemoryOrchestrator {
                     metadata: timestampMetadata
                 )
                 report.extractedCount += 1
+            } catch {
+                NSLog("MemoryOrchestrator: event capture failed: %@", error.localizedDescription)
             }
+        }
 
-            // 9. Parse person mentions (relationships, people).
-            if !shouldSuppressStructuredExtraction,
-               let person = extractPerson(from: lower, fullText: sanitizedUserText)
-            {
+        // 9. Parse person mentions (relationships, people).
+        if !shouldSuppressStructuredExtraction,
+           let person = extractPerson(from: lower, fullText: sanitizedUserText)
+        {
+            do {
                 let personRecord = try await store.insertRecord(
                     kind: .person,
                     text: person,
@@ -816,10 +858,9 @@ actor MemoryOrchestrator {
                         )
                     }
                 }
+            } catch {
+                NSLog("MemoryOrchestrator: person capture failed: %@", error.localizedDescription)
             }
-
-        } catch {
-            NSLog("MemoryOrchestrator: capture error: %@", error.localizedDescription)
         }
 
         return report

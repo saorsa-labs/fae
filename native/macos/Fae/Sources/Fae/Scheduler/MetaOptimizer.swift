@@ -111,6 +111,11 @@ actor MetaOptimizer {
     ) async throws -> MetaOptSummary {
         let startTime = Date()
 
+        // F14: before applying any new change, undo any disk-persisting change orphaned by a
+        // crash/kill during a PRIOR phase's benchmark (rows still in the rollback journal).
+        // This is the earliest point where the directive/config writers are guaranteed wired.
+        await replayOrphanedRollbacks()
+
         // Step 1: Check benchmark availability.
         guard let bridge = trainingBridge, await bridge.isBenchmarkAvailable else {
             NSLog("MetaOptimizer: benchmark not available, skipping meta-optimization")
@@ -173,6 +178,9 @@ actor MetaOptimizer {
         var discardedCount = 0
         var consecutiveDiscards = 0
         var results: [MetaOptResult] = []
+        // F14: set when a rollback throws — the phase aborts (the applied change could not be
+        // undone in-process; its journal row survives for next-startup replay).
+        var aborted = false
 
         for hypothesis in hypotheses {
             // Budget checks.
@@ -191,12 +199,19 @@ actor MetaOptimizer {
 
             NSLog("MetaOptimizer: testing hypothesis — %@", hypothesis.description)
 
+            // F14: for the DISK-persisting surfaces (directive, config), journal the prior
+            // value BEFORE applying so a crash mid-benchmark can be rolled back at next
+            // startup. Skills/memory seeds persist to their own stores and are not journaled.
+            let journalId = try? await writeRollbackJournalIfDurable(hypothesis)
+
             // Apply change and capture rollback.
             let rollback: () async throws -> Void
             do {
                 rollback = try await applyChange(hypothesis.change)
             } catch {
                 NSLog("MetaOptimizer: failed to apply change: %@", error.localizedDescription)
+                // The change never applied — clear any journal row we optimistically wrote.
+                if let journalId { try? await store.deleteRollbackJournalEntry(id: journalId) }
                 continue
             }
 
@@ -207,12 +222,27 @@ actor MetaOptimizer {
                 benchmarkRunsUsed += 1
             } catch {
                 NSLog("MetaOptimizer: benchmark failed: %@", error.localizedDescription)
-                try? await rollback()
+                // F14: a rollback FAILURE here leaves an untested change applied. Escalate —
+                // do NOT silently `continue` as if clean. The journal row stays (so the next
+                // startup rolls it back); surface the error and abort the phase.
+                do {
+                    try await rollback()
+                    if let journalId { try? await store.deleteRollbackJournalEntry(id: journalId) }
+                } catch {
+                    await recordAbort(
+                        reason: "rollback_failed_after_benchmark_error: \(hypothesis.description)",
+                        error: error)
+                    break
+                }
                 continue
             }
 
             let afterScore = DimensionScores.from(afterResult)
             let delta = afterScore.improvement(over: baseline)
+            // Capture the pre-decision baseline: the KEEP branch reassigns
+            // `baseline = afterScore` below, so the audit row must use this value
+            // (not the mutated one) or kept rows log identical before/after scores.
+            let beforeScores = baseline
 
             // Decision.
             let decision = decide(
@@ -233,6 +263,10 @@ actor MetaOptimizer {
                 consecutiveDiscards = 0
                 // Update baseline for next iteration — the new state includes this change.
                 baseline = afterScore
+                // F14: the change is CONFIRMED kept (measured improvement) — it should
+                // survive a crash, so clear its rollback-journal row. The in-memory
+                // `lastKeptRollback` still serves the manual "undo the last change" command.
+                if let journalId { try? await store.deleteRollbackJournalEntry(id: journalId) }
                 // Store rollback for "undo the last change" voice command.
                 lastKeptRollback = rollback
                 lastKeptDescription = hypothesis.description
@@ -253,8 +287,17 @@ actor MetaOptimizer {
                 // Rollback the change.
                 do {
                     try await rollback()
+                    if let journalId { try? await store.deleteRollbackJournalEntry(id: journalId) }
                 } catch {
+                    // F14: a rollback FAILURE leaves an untested/regressing change applied.
+                    // Escalate rather than continuing as if clean — surface the error and
+                    // abort the phase. The journal row is intentionally LEFT so the next
+                    // startup rolls the change back.
                     NSLog("MetaOptimizer: rollback failed: %@", error.localizedDescription)
+                    await recordAbort(
+                        reason: "rollback_failed_after_discard: \(hypothesis.description)",
+                        error: error)
+                    aborted = true
                 }
                 NSLog(
                     "MetaOptimizer: DISCARDED (%@) — %@ (Δ: tools=%+.1f%% fae=%+.1f%% fit=%+.1f%% ser=%+.1f%%)",
@@ -271,7 +314,7 @@ actor MetaOptimizer {
                 surface: hypothesis.surface,
                 description: hypothesis.description,
                 targetDimension: hypothesis.targetDimension,
-                beforeScores: baseline,
+                beforeScores: beforeScores,
                 afterScores: afterScore,
                 delta: delta,
                 kept: kept,
@@ -282,6 +325,13 @@ actor MetaOptimizer {
 
             // Persist result to improvement store.
             try? await persistResult(result, cycleNumber: currentCycleNumber())
+
+            // F14: a rollback failure escalated — stop the phase (the change stays applied
+            // in-process but is journaled for next-startup rollback).
+            if aborted {
+                NSLog("MetaOptimizer: aborting phase after rollback failure")
+                break
+            }
         }
 
         // Update meta-opt tracking in improvement state.
@@ -401,13 +451,19 @@ actor MetaOptimizer {
     // MARK: - Change Application
 
     /// Apply a change and return an async rollback closure.
-    private func applyChange(_ change: MetaOptChange) async throws -> (() async throws -> Void) {
+    /// `internal` (not `private`) so the directive-IO fail-closed test can drive the
+    /// amendment apply/rollback path directly.
+    func applyChange(_ change: MetaOptChange) async throws -> (() async throws -> Void) {
         switch change {
         case .directiveAmendment(let amendment):
             guard let reader = directiveReader, let writer = directiveWriter else {
                 throw MetaOptError.directiveIOError("Directive reader/writer not configured")
             }
-            let currentDirective = (try? reader()) ?? ""
+            // A real IO error must PROPAGATE (aborting this directive hypothesis so the
+            // caller skips it with a logged error) — never collapse to "", which would
+            // overwrite the owner's directive on apply and wipe it on the captured
+            // rollback. A `nil` (file-absent) reads legitimately as an empty directive.
+            let currentDirective = try reader() ?? ""
 
             // Guard: check directive size limit.
             guard currentDirective.count + amendment.count <= MetaOptHypothesisGenerator.maxDirectiveSize else {
@@ -479,6 +535,99 @@ actor MetaOptimizer {
             return { [store] in
                 try await store.deleteRecord(id: recordId)
                 NSLog("MetaOptimizer: rolled back memory seed (id=%@)", recordId)
+            }
+        }
+    }
+
+    // MARK: - Crash-durable rollback journal (F14)
+
+    /// Journal the prior value of a DISK-persisting surface (directive / config) BEFORE the
+    /// change is applied, so a crash mid-benchmark can be rolled back at next startup.
+    /// Returns the journal row id (nil for the non-durable surfaces — skill/memory seed —
+    /// which persist to their own stores with their own rollback). Reads the prior value the
+    /// same way `applyChange` does, so the two never disagree.
+    private func writeRollbackJournalIfDurable(_ hypothesis: MetaOptHypothesis) async throws -> Int64? {
+        switch hypothesis.change {
+        case .directiveAmendment:
+            // The prior directive is what a rollback must restore. A nil (file-absent) read
+            // is an empty directive (matches applyChange). A read ERROR ⇒ don't journal
+            // (applyChange will itself throw and skip the hypothesis).
+            guard let reader = directiveReader, let current = try? reader() else { return nil }
+            return try await store.insertRollbackJournalEntry(
+                surface: MetaOptSurface.directive.rawValue,
+                configKey: nil,
+                oldValue: current ?? "",
+                description: hypothesis.description)
+
+        case .configAdjustment(let key, let oldValue, _):
+            return try await store.insertRollbackJournalEntry(
+                surface: MetaOptSurface.configKnob.rawValue,
+                configKey: key,
+                oldValue: oldValue,
+                description: hypothesis.description)
+
+        case .skillCreation, .memorySeedInsertion:
+            return nil
+        }
+    }
+
+    /// Record a phase abort (a rollback threw) into the improvement state's `lastCycleError`
+    /// so health reporting / the morning briefing surface it instead of hiding it (F14).
+    private func recordAbort(reason: String, error: Error) async {
+        let message = "meta_opt_abort: \(reason) (\(error.localizedDescription))"
+        NSLog("MetaOptimizer: %@", message)
+        do {
+            try await store.ensureStateRow()
+            var state = try await store.readState()
+            state.lastCycleError = message
+            try await store.writeState(state)
+        } catch {
+            NSLog("MetaOptimizer: failed to persist abort reason: %@", error.localizedDescription)
+        }
+    }
+
+    /// Replay unresolved rollback-journal rows at startup (F14). Each row is a disk-persisting
+    /// change that was applied but never confirmed kept or rolled back — i.e. the app
+    /// crashed/was killed mid-benchmark. Restoring the stored old value undoes the orphaned
+    /// unvalidated change; the row is deleted only after a successful restore, so a failed
+    /// restore is retried next startup. Must run before any cycle so no stale change persists.
+    func replayOrphanedRollbacks() async {
+        let entries: [ImprovementStore.MetaOptRollbackEntry]
+        do {
+            entries = try await store.pendingRollbackJournalEntries()
+        } catch {
+            NSLog("MetaOptimizer: could not read rollback journal at startup: %@", error.localizedDescription)
+            return
+        }
+        guard !entries.isEmpty else { return }
+        NSLog("MetaOptimizer: replaying %d orphaned rollback(s) from prior crash", entries.count)
+
+        for entry in entries {
+            do {
+                switch entry.surface {
+                case MetaOptSurface.directive.rawValue:
+                    guard let writer = directiveWriter else {
+                        NSLog("MetaOptimizer: cannot replay directive rollback — no writer wired")
+                        continue
+                    }
+                    try writer(entry.oldValue)
+
+                case MetaOptSurface.configKnob.rawValue:
+                    guard let writer = configWriter, let key = entry.configKey else {
+                        NSLog("MetaOptimizer: cannot replay config rollback — no writer/key")
+                        continue
+                    }
+                    try writer(key, entry.oldValue)
+
+                default:
+                    NSLog("MetaOptimizer: unknown journaled surface '%@' — skipping", entry.surface)
+                    continue
+                }
+                try await store.deleteRollbackJournalEntry(id: entry.id)
+                NSLog("MetaOptimizer: rolled back orphaned change — %@", entry.description)
+            } catch {
+                // Leave the row so the next startup retries; surface the failure.
+                NSLog("MetaOptimizer: orphaned rollback replay FAILED (%@): %@", entry.description, error.localizedDescription)
             }
         }
     }

@@ -47,7 +47,13 @@ struct FaeConfig: Codable {
         case "assistant", "full":
             return mode
         default:
-            return "full"
+            // Fail CLOSED, not open: an unrecognized mode (corrupted config.toml, a
+            // bad self-config write, or a newer build's mode string read by an older
+            // one) must resolve to the least-privileged tier, never grant every tool
+            // including bash. Matches the deny-unknown convention used everywhere
+            // else in the governance stack.
+            NSLog("FaeConfig.migrateToolMode: unknown toolMode %@ — failing closed to 'assistant' (read-only)", mode)
+            return "assistant"
         }
     }
 

@@ -128,7 +128,7 @@ enum PathPolicy {
     /// Filenames within the Fae data directory that are never directly writable by tools.
     private static let protectedFaeFiles: Set<String> = [
         "config.toml", "fae.db", "scheduler.db", "soul.md",
-        "speakers.json", "approved_tools.json",
+        "speakers.json", "approved_tools.json", "directive.md",
     ]
 
     // MARK: - Blocklists

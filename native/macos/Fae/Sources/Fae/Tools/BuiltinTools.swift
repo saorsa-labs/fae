@@ -442,7 +442,11 @@ struct SelfConfigTool: Tool {
             if let rejection = Self.validateInstructions(value) {
                 return rejection
             }
-            Self.writeInstructions(value)
+            do {
+                try Self.writeInstructions(value)
+            } catch {
+                return .error("Failed to write directive: \(error.localizedDescription)")
+            }
             return .success("Directive updated. Changes take effect on next response.")
 
         case "append_directive", "append_instructions":
@@ -454,11 +458,19 @@ struct SelfConfigTool: Tool {
             if let rejection = Self.validateInstructions(updated) {
                 return rejection
             }
-            Self.writeInstructions(updated)
+            do {
+                try Self.writeInstructions(updated)
+            } catch {
+                return .error("Failed to write directive: \(error.localizedDescription)")
+            }
             return .success("Appended to directive. Changes take effect on next response.")
 
         case "clear_directive", "clear_instructions":
-            Self.writeInstructions("")
+            do {
+                try Self.writeInstructions("")
+            } catch {
+                return .error("Failed to write directive: \(error.localizedDescription)")
+            }
             return .success("Directive cleared. Reverting to default personality.")
 
         case "rollback_improvement":
@@ -483,10 +495,10 @@ struct SelfConfigTool: Tool {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func writeInstructions(_ text: String) {
+    private static func writeInstructions(_ text: String) throws {
         let dir = filePath.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? text.write(to: filePath, atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try text.write(to: filePath, atomically: true, encoding: .utf8)
     }
 
     /// Format current adjustable settings for the LLM.

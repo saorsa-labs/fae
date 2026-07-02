@@ -20,13 +20,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fae_audio::AudioManager;
 use fae_control_plane::{
-    generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, Scope, TicketStore,
-    PROTOCOL_VERSION,
+    generate_token, hash_token, token_past_half_life, ClientClass, ClientRecord, ClientRegistry,
+    Scope, TicketStore, PROTOCOL_VERSION,
 };
 use fae_engine::{
     kill_all_registered_sidecars, LazyLlamaServerAdapter, LlamaModelSource, LlamaServerAdapter,
@@ -114,6 +114,35 @@ async fn main() -> DaemonResult<()> {
         }
     }
 
+    // Runtime-integrity verification gate (release CI, F21). Runs the SAME
+    // models.lock + llama-server (+ Piper on Linux) digest checks the daemon does
+    // at startup, but WITHOUT opening the socket or loading a model, then exits.
+    // This lets `release.yml` catch a re-signed-bundle CDHash / lock drift on the
+    // build box instead of only on the installed fleet. Optional flags override
+    // the default bundled/installed resolution.
+    {
+        let argv: Vec<String> = std::env::args().skip(1).collect();
+        if argv.first().is_some_and(|s| s == "--verify-runtime") {
+            match verify_runtime_cli(&argv[1..]) {
+                Ok(()) => {
+                    println!("fae-daemon: runtime verification OK");
+                    return Ok(());
+                }
+                Err((component, detail)) => {
+                    // Mirror exit_fatal's JSON + code (78) as a CLEAN exit — no
+                    // sidecars were spawned, so nothing to reap.
+                    let event = serde_json::json!({
+                        "event": "fatal",
+                        "component": component,
+                        "error": detail,
+                    });
+                    eprintln!("fae-daemon: fatal: {event}");
+                    std::process::exit(78);
+                }
+            }
+        }
+    }
+
     init_tracing();
     println!("fae-daemon (Phase 1, chunk 2a) — protocol v{PROTOCOL_VERSION}");
 
@@ -155,6 +184,9 @@ async fn main() -> DaemonResult<()> {
         );
     }
 
+    // Keep the resolved scope set so the rotation task can re-issue an identical
+    // record with a fresh token + expiry (same trust model, new secret).
+    let rotation_scopes = scopes.clone();
     let client = ClientRecord {
         client_id: fae_control_plane::BOOTSTRAP_CLIENT_ID.to_owned(),
         class: ClientClass::SwiftFrontend,
@@ -168,7 +200,35 @@ async fn main() -> DaemonResult<()> {
     let mut registry = ClientRegistry::new();
     registry.insert(client, token_hash);
     let registry = Arc::new(registry);
+    // Hot-swappable handle the Unix accept loop snapshots per connection. The
+    // rotation task (below) republishes a fresh registry at token half-life so an
+    // always-on daemon never loses auth for NEW connections after the 30-day
+    // expiry. The opt-in diagnostic surface shares this same cell and snapshots
+    // the CURRENT registry per request, so it follows rotations in lock-step.
+    let registry_cell: transport::SharedRegistry = Arc::new(Mutex::new(Arc::clone(&registry)));
+    {
+        let cell = Arc::clone(&registry_cell);
+        let token_path = token_path.clone();
+        tokio::spawn(async move {
+            rotation_loop(cell, token_path, rotation_scopes).await;
+        });
+    }
     let tickets = Arc::new(Mutex::new(TicketStore::new()));
+
+    // On Linux the `.deb`/AppImage ship a reference `models.lock` beside the exe
+    // but have no installer step to seed the per-user data dir (macOS does this
+    // from the Swift app). Self-install it on first launch so the fail-closed
+    // integrity gates below (engine, ASR, Piper TTS) have their lock.
+    #[cfg(not(target_os = "macos"))]
+    if let Err(detail) = ensure_models_lock_installed() {
+        if models_lock_disabled_for_dev() {
+            eprintln!(
+                "fae-daemon: WARNING: models.lock self-install failed ({detail}); FAE_MODELS_LOCK=off allows continuing"
+            );
+        } else {
+            exit_fatal("models_lock_install", &detail);
+        }
+    }
 
     let engine = build_engine().await;
     let info = engine.describe();
@@ -271,7 +331,10 @@ async fn main() -> DaemonResult<()> {
     // Optional TCP-loopback HTTP/WS diagnostic surface (opt-in, never default).
     if let Some(port) = diagnostic_port() {
         let state = Arc::new(diagnostic::DiagnosticState {
-            registry: Arc::clone(&registry),
+            // Share the rotatable registry cell (not the startup snapshot) so the
+            // diagnostic surface follows bootstrap-token rotation in lock-step
+            // with the Unix accept loop.
+            registry: Arc::clone(&registry_cell),
             engine: Arc::clone(&engine),
             tts: Arc::clone(&tts),
             audio: Arc::clone(&audio),
@@ -295,7 +358,7 @@ async fn main() -> DaemonResult<()> {
     // Serves until the process is killed. Fails closed on bind/permission error.
     transport::serve_unix(
         socket_path,
-        registry,
+        registry_cell,
         engine,
         asr_fallback,
         tts,
@@ -753,9 +816,15 @@ fn qwen3_asr_locked_artifacts(
 }
 
 fn load_installed_models_lock() -> Result<ModelsLock, String> {
-    let path = data_directory()
-        .map_err(|error| error.to_string())?
-        .join("models.lock");
+    // `FAE_MODELS_LOCK_PATH` lets the release-CI `--verify-runtime` gate point the
+    // SAME verification at a specific lock (e.g. the re-signed bundle's copy)
+    // without a separate code path; unset in normal operation → installed lock.
+    let path = match std::env::var_os("FAE_MODELS_LOCK_PATH") {
+        Some(override_path) => PathBuf::from(override_path),
+        None => data_directory()
+            .map_err(|error| error.to_string())?
+            .join("models.lock"),
+    };
     ModelsLock::load(&path).map_err(|error| error.to_string())
 }
 
@@ -857,6 +926,63 @@ fn executable_path(path: PathBuf, label: &str) -> Result<PathBuf, String> {
         }
     }
     Ok(path)
+}
+
+/// `--verify-runtime` entrypoint (F21). Runs the SAME integrity checks the daemon
+/// does at startup — llama-server digest (+ Piper artifacts on Linux) against the
+/// installed/bundled `models.lock` — WITHOUT opening the socket or loading a
+/// model. Returns `Err((component, detail))` on any drift so the caller can print
+/// the `exit_fatal`-shaped JSON and exit 78. Optional flags:
+/// - `--llama-server <path>`: verify this binary (else the resolved default).
+/// - `--models-lock <path>`: verify against this lock (else the installed one).
+///
+/// `FAE_MODELS_LOCK=off` under `FAE_DEV` short-circuits the digest checks (same as
+/// startup), which is intentional — a dev escape hatch, never a release path.
+fn verify_runtime_cli(flags: &[String]) -> Result<(), (&'static str, String)> {
+    let mut iter = flags.iter();
+    while let Some(flag) = iter.next() {
+        match flag.as_str() {
+            "--llama-server" => {
+                let value = iter.next().ok_or((
+                    "verify_runtime",
+                    "--llama-server requires a path".to_owned(),
+                ))?;
+                std::env::set_var("FAE_LLAMA_BIN", value);
+            }
+            "--models-lock" => {
+                let value = iter
+                    .next()
+                    .ok_or(("verify_runtime", "--models-lock requires a path".to_owned()))?;
+                std::env::set_var("FAE_MODELS_LOCK_PATH", value);
+            }
+            other => {
+                return Err((
+                    "verify_runtime",
+                    format!("unknown --verify-runtime flag: {other}"),
+                ));
+            }
+        }
+    }
+
+    let binary = resolve_llama_server_binary().map_err(|detail| ("llamacpp_runtime", detail))?;
+    verify_llama_server_binary(&binary).map_err(|detail| ("llamacpp_runtime_digest", detail))?;
+    println!("fae-daemon: llama-server verified: {}", binary.display());
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let install_dir = resolve_piper_install_dir().map_err(|detail| ("piper_tts", detail))?;
+        let binary = install_dir.join("piper");
+        let binary =
+            executable_path(binary, "Piper runtime").map_err(|detail| ("piper_tts", detail))?;
+        let voices_dir = install_dir.join("voices");
+        let model_onnx = voices_dir.join(format!("{PIPER_VOICE_NAME}.onnx"));
+        let model_config = voices_dir.join(format!("{PIPER_VOICE_NAME}.onnx.json"));
+        verify_piper_artifacts(&binary, &model_onnx, &model_config)
+            .map_err(|detail| ("piper_tts", detail))?;
+        println!("fae-daemon: piper sidecar verified: {}", binary.display());
+    }
+
+    Ok(())
 }
 
 fn verify_llama_server_binary(path: &Path) -> Result<(), String> {
@@ -1022,6 +1148,95 @@ fn bundled_llama_server_path() -> Option<PathBuf> {
     }
 }
 
+/// Probe for the packaged reference `models.lock` shipped beside the daemon exe
+/// by the Linux installer, mirroring [`bundled_llama_server_path`]. The `.deb`
+/// lays the lock at `/usr/lib/fae/models.lock`; the daemon exe is reached either
+/// as `/usr/lib/fae/bin/fae-daemon` (FHS, via the `/usr/bin` symlink
+/// `current_exe` resolves through) → `../models.lock`, or as a direct
+/// `/usr/bin/fae-daemon` copy → `../lib/fae/models.lock`. The AppImage mirrors
+/// the FHS payload, so `../models.lock` covers it too. Returns `None` when no
+/// packaged copy exists (pre-install / dev tree).
+#[cfg(not(target_os = "macos"))]
+fn resolve_bundled_models_lock(exe_dir: &Path) -> Option<PathBuf> {
+    for rel in ["../models.lock", "../lib/fae/models.lock"] {
+        let candidate = exe_dir.join(rel);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bundled_models_lock_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    resolve_bundled_models_lock(exe.parent()?)
+}
+
+/// Seed or refresh `dest` from the `packaged` reference copy. Returns `Ok(true)`
+/// when a copy was written, `Ok(false)` when nothing was done. The lock is
+/// Fae-owned (never user-edited), so this mirrors the macOS Swift installer
+/// (`DaemonLLMEngine.installBundledModelsLock`): on first install it seeds the
+/// per-user lock, and on a package UPGRADE that bumps the runtime pins it
+/// REPLACES the stale per-user lock whenever the packaged bytes differ — without
+/// this, an upgraded runtime binary would fail the fail-closed digest gate on
+/// every launch. A missing packaged copy is a no-op left for the downstream gate
+/// to report (dev tree / pre-install). Writes go through a sibling temp file +
+/// rename so a partial write can't leave a half-written lock the integrity gate
+/// would then reject.
+#[cfg(not(target_os = "macos"))]
+fn install_bundled_models_lock(dest: &Path, packaged: Option<&Path>) -> Result<bool, String> {
+    let Some(src) = packaged else {
+        return Ok(false); // no packaged copy — downstream gate reports the miss
+    };
+    let packaged_bytes = std::fs::read(src)
+        .map_err(|e| format!("read packaged models.lock {}: {e}", src.display()))?;
+    if dest.is_file() {
+        // Fae-owned lock: refresh only when the packaged reference has changed
+        // (e.g. a runtime-bumping upgrade); byte-identical means nothing to do.
+        match std::fs::read(dest) {
+            Ok(installed) if installed == packaged_bytes => return Ok(false),
+            Ok(_) => {}
+            Err(e) => {
+                return Err(format!(
+                    "read installed models.lock {}: {e}",
+                    dest.display()
+                ))
+            }
+        }
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create data dir {}: {e}", parent.display()))?;
+    }
+    let tmp = dest.with_extension("lock.tmp");
+    std::fs::write(&tmp, &packaged_bytes)
+        .map_err(|e| format!("write packaged models.lock {}: {e}", src.display()))?;
+    std::fs::rename(&tmp, dest)
+        .map_err(|e| format!("install packaged models.lock → {}: {e}", dest.display()))?;
+    Ok(true)
+}
+
+/// On Linux, self-install the packaged reference `models.lock` into the per-user
+/// data dir. macOS ships this from the Swift app; the Linux `.deb`/AppImage have
+/// no postinst/installer step, so the daemon seeds it itself before the
+/// fail-closed integrity gate reads it. Seeds on first launch AND refreshes the
+/// stale per-user lock after a package upgrade that bumps the runtime pins
+/// (replace-on-diff — the lock is Fae-owned, never user-edited).
+#[cfg(not(target_os = "macos"))]
+fn ensure_models_lock_installed() -> Result<(), String> {
+    let dest = data_directory()
+        .map_err(|e| e.to_string())?
+        .join("models.lock");
+    if install_bundled_models_lock(&dest, bundled_models_lock_path().as_deref())? {
+        println!(
+            "models  : installed packaged models.lock → {}",
+            dest.display()
+        );
+    }
+    Ok(())
+}
+
 fn default_llama_cache_dir() -> Result<PathBuf, String> {
     Ok(data_directory()
         .map_err(|e| e.to_string())?
@@ -1107,10 +1322,24 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
     } else {
         Some(env_parsed("FAE_LLAMA_MTP_DRAFT_TOKENS", 4_u32))
     };
+    // `FAE_LLAMA_LORA_GGUF` is a dev-only override (like `FAE_LLAMA_MODEL_GGUF`):
+    // an un-gated, un-hashed adapter path here would bypass the Fae-owned
+    // pinned/verified adapter loading. Production LoRA adapters arrive via the
+    // governed `runtime.reload` path (validated + SHA'd), never this env knob.
+    let lora_gguf = env_path("FAE_LLAMA_LORA_GGUF");
+    if lora_gguf.is_some()
+        && !std::env::var("FAE_DEV").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        exit_fatal(
+            "llamacpp_lora",
+            "FAE_LLAMA_LORA_GGUF is dev-only; production loads personal adapters via the \
+             governed runtime.reload path (validated + hashed)",
+        );
+    }
     let config = LlamaServerConfig {
         binary: binary.to_string_lossy().to_string(),
         model,
-        lora_gguf: env_path("FAE_LLAMA_LORA_GGUF"),
+        lora_gguf,
         alias: alias.clone(),
         enable_thinking,
         mtp_draft_tokens,
@@ -1314,6 +1543,77 @@ fn write_secret_file(path: &Path, contents: &str) -> DaemonResult<()> {
     Ok(())
 }
 
+/// How often the rotation task re-checks the bootstrap token's age. Far finer
+/// than the ~15-day half-life at which rotation actually fires, so the token is
+/// always refreshed with a full half-lifetime of slack.
+const ROTATION_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Background task that keeps the always-on bootstrap token from expiring out from
+/// under new connections. An always-on daemon has no restart to re-issue its
+/// token; once the token passes half its lifetime this rotates it — rewriting the
+/// `bootstrap.token` file the Swift frontend + orb bridge read and publishing a
+/// fresh registry to `cell` — so reconnects, the TTS lane, and the orb bridge keep
+/// authenticating past day 30. The trust model is unchanged: same client id, same
+/// scopes, same owner-only file perms; only the secret + expiry roll forward.
+async fn rotation_loop(
+    cell: transport::SharedRegistry,
+    token_path: PathBuf,
+    scopes: HashSet<Scope>,
+) {
+    let mut interval = tokio::time::interval(ROTATION_CHECK_INTERVAL);
+    loop {
+        interval.tick().await;
+        let due = {
+            let guard = cell.lock().unwrap_or_else(PoisonError::into_inner);
+            guard
+                .record(fae_control_plane::BOOTSTRAP_CLIENT_ID)
+                .map(|record| {
+                    token_past_half_life(record.issued_at_ms, record.expires_at_ms, now_ms())
+                })
+                .unwrap_or(false)
+        };
+        if !due {
+            continue;
+        }
+        match rotate_bootstrap(&cell, &token_path, &scopes) {
+            Ok(()) => {
+                println!("token   : rotated bootstrap token at half-life (new 30-day expiry)")
+            }
+            Err(error) => eprintln!("fae-daemon: bootstrap token rotation failed: {error}"),
+        }
+    }
+}
+
+/// Re-issue the bootstrap client with a fresh CSPRNG token + 30-day expiry: rewrite
+/// the owner-only `bootstrap.token` file, then publish a registry that accepts the
+/// new token. File-first so a client that reads the new token retries into a
+/// registry that (a beat later) honours it; existing authenticated connections are
+/// unaffected (they hold the registry snapshot they authenticated with).
+fn rotate_bootstrap(
+    cell: &transport::SharedRegistry,
+    token_path: &Path,
+    scopes: &HashSet<Scope>,
+) -> DaemonResult<()> {
+    let token = generate_token()?;
+    let token_hash = hash_token(&token);
+    let now = now_ms();
+    let record = ClientRecord {
+        client_id: fae_control_plane::BOOTSTRAP_CLIENT_ID.to_owned(),
+        class: ClientClass::SwiftFrontend,
+        scopes: scopes.clone(),
+        issued_at_ms: now,
+        expires_at_ms: now.saturating_add(THIRTY_DAYS_MS),
+        revoked_at_ms: None,
+        display_name: "Fae (this Mac)".to_owned(),
+    };
+    let mut registry = ClientRegistry::new();
+    registry.insert(record, token_hash);
+    write_secret_file(token_path, &token)?;
+    let mut guard = cell.lock().unwrap_or_else(PoisonError::into_inner);
+    *guard = Arc::new(registry);
+    Ok(())
+}
+
 /// Current wall clock in epoch-ms. Infallible: a pre-1970 clock yields 0 and an
 /// impossibly-far-future clock saturates — never panics.
 pub(crate) fn now_ms() -> u64 {
@@ -1464,6 +1764,67 @@ created_at = "test"
             "unexpected error: {err}"
         );
         assert!(err.contains("mistral.rs"), "unexpected error: {err}");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn resolve_bundled_models_lock_finds_fhs_and_direct_layouts() {
+        // FHS .deb: exe resolves to /usr/lib/fae/bin/fae-daemon (via the
+        // /usr/bin symlink), lock at /usr/lib/fae/models.lock → ../models.lock.
+        let root = tempfile::tempdir().unwrap();
+        let fae = root.path().join("usr/lib/fae");
+        std::fs::create_dir_all(fae.join("bin")).unwrap();
+        std::fs::write(fae.join("models.lock"), b"schema_version = 1\n").unwrap();
+        assert_eq!(
+            resolve_bundled_models_lock(&fae.join("bin")).unwrap(),
+            fae.join("bin/../models.lock")
+        );
+        // Direct copy: exe at /usr/bin/fae-daemon, lock still under
+        // /usr/lib/fae → ../lib/fae/models.lock.
+        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+        assert_eq!(
+            resolve_bundled_models_lock(&root.path().join("usr/bin")).unwrap(),
+            root.path().join("usr/bin/../lib/fae/models.lock")
+        );
+        // No packaged copy on either probe path → None.
+        assert!(resolve_bundled_models_lock(root.path()).is_none());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn install_bundled_models_lock_seeds_and_refreshes_on_diff() {
+        let root = tempfile::tempdir().unwrap();
+        let packaged = root.path().join("packaged-models.lock");
+        std::fs::write(&packaged, b"schema_version = 1\npackaged\n").unwrap();
+        let dest = root.path().join("data/fae/models.lock");
+
+        // First launch: seeds the per-user lock from the packaged copy.
+        assert!(install_bundled_models_lock(&dest, Some(packaged.as_path())).unwrap());
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"schema_version = 1\npackaged\n"
+        );
+
+        // Re-launch, packaged bytes unchanged: byte-identical → no-op.
+        assert!(!install_bundled_models_lock(&dest, Some(packaged.as_path())).unwrap());
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"schema_version = 1\npackaged\n"
+        );
+
+        // Package UPGRADE bumps the runtime pins → packaged bytes differ →
+        // the Fae-owned per-user lock is refreshed so the digest gate passes.
+        std::fs::write(&packaged, b"schema_version = 1\nupgraded\n").unwrap();
+        assert!(install_bundled_models_lock(&dest, Some(packaged.as_path())).unwrap());
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"schema_version = 1\nupgraded\n"
+        );
+
+        // No packaged copy and no per-user lock → no-op (downstream gate fatals).
+        let missing = root.path().join("data2/fae/models.lock");
+        assert!(!install_bundled_models_lock(&missing, None).unwrap());
+        assert!(!missing.exists());
     }
 
     #[test]

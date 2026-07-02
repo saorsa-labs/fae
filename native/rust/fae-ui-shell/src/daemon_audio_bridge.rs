@@ -78,30 +78,39 @@ fn resolve_token_path() -> PathBuf {
 }
 
 /// Resolve the daemon run dir: explicit override first, else the platform data
-/// dir + "run" (mirrors the daemon's own `run_directory()`).
+/// dir + "run". MUST stay byte-identical to the daemon's `data_directory()` +
+/// `run_directory()` (crates/fae-daemon/src/main.rs) or the bridge polls the
+/// wrong socket and the orb never sees events:
+/// - macOS: `$HOME/Library/Application Support/fae` (no XDG check — the daemon
+///   does not consult `XDG_DATA_HOME` on macOS);
+/// - Linux/other: `$XDG_DATA_HOME/fae` else `$HOME/.local/share/fae`.
 fn run_dir() -> PathBuf {
     if let Some(override_dir) = std::env::var_os("FAE_DAEMON_RUN_DIR") {
         return PathBuf::from(override_dir);
     }
-    let base = match std::env::var_os("XDG_DATA_HOME") {
-        Some(xdg) => PathBuf::from(xdg).join("fae"),
-        None => home_data_dir().join("fae"),
-    };
-    base.join("run")
+    data_dir().join("run")
 }
 
+/// Platform data dir, mirroring the daemon's `data_directory()`. The daemon errors
+/// when `HOME` is unset; the bridge has no error channel here, so it falls back to
+/// the current dir (an unresolvable socket then just keeps the reconnect loop
+/// retrying, which is the correct failure mode).
 #[cfg(target_os = "macos")]
-fn home_data_dir() -> PathBuf {
+fn data_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
-        .map(|home| home.join("Library/Application Support"))
+        .map(|home| home.join("Library/Application Support/fae"))
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn home_data_dir() -> PathBuf {
+fn data_dir() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+        return PathBuf::from(xdg).join("fae");
+    }
     std::env::var_os("HOME")
         .map(PathBuf::from)
+        .map(|home| home.join(".local/share/fae"))
         .unwrap_or_else(|| PathBuf::from("."))
 }
 

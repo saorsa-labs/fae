@@ -183,8 +183,21 @@ def main() -> int:
     install_dir = (args.install_dir or default_install_dir(platform_key)).expanduser().resolve()
     binary = install_dir / rt["binary"]
     if binary.exists() and not args.force:
-        print(f"✓ llama.cpp runtime already installed: {binary}")
-        return 0
+        # A cached binary must still be verified against the lock before we trust
+        # it — skipping verification would let a tampered/corrupt binary be
+        # trusted forever. Only the DOWNLOAD is skipped, never the SHA check.
+        expected_binary_sha = rt.get("binary_sha256")
+        if expected_binary_sha is None:
+            print(f"✓ llama.cpp runtime already installed: {binary}")
+            return 0
+        binary_digest = sha256_file(binary)
+        if binary_digest == expected_binary_sha:
+            print(f"✓ llama.cpp runtime already installed (sha256 verified): {binary}")
+            return 0
+        print(
+            f"⚠ cached binary sha256 mismatch: expected {expected_binary_sha}, "
+            f"got {binary_digest} — re-downloading"
+        )
 
     install_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fae-llamacpp-") as td:

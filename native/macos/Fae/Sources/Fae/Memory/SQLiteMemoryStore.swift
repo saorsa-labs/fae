@@ -208,9 +208,9 @@ actor SQLiteMemoryStore {
                 try db.execute(sql: "ALTER TABLE entity_facts ADD COLUMN embedding BLOB")
             }
 
-            // Remove the unique constraint on (entity_id, fact_key) so temporal history is allowed.
-            // SQLite doesn't support DROP INDEX while keeping the rest, so we rely on INSERT OR IGNORE
-            // not being used in the temporal path. The unique index remains for non-temporal upsert.
+            // The full unique index on (entity_id, fact_key) is replaced by a partial unique index
+            // (active facts only) in the v9 → v10 migration below — once ended_at exists, temporal
+            // history rows (ended_at NOT NULL) can share a (entity_id, fact_key) with the active row.
 
             // Create entity_relationships table.
             try db.execute(sql: """
@@ -348,20 +348,49 @@ actor SQLiteMemoryStore {
             )
         }
 
+        // Migration: v9 -> v10 - replace the full unique index on entity_facts(entity_id, fact_key)
+        // with a partial unique index over active facts only. The full index made every temporal
+        // fact update throw (upsertTemporalFact closes the old row then inserts a new row with the
+        // same entity_id/fact_key), silently freezing the entity graph after the first write.
+        let entityFactsTables = try Row.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type='table'")
+            .compactMap { $0["name"] as? String }
+        if entityFactsTables.contains("entity_facts") {
+            let entityFactIndexes = try Row.fetchAll(db, sql: "PRAGMA index_list(entity_facts)")
+                .compactMap { $0["name"] as? String }
+            if !entityFactIndexes.contains("idx_entity_facts_active_unique") {
+                try db.execute(sql: "DROP INDEX IF EXISTS idx_entity_facts_unique")
+                try db.execute(
+                    sql: """
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_facts_active_unique
+                        ON entity_facts(entity_id, fact_key) WHERE ended_at IS NULL
+                        """
+                )
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '10')"
+                )
+            }
+        }
+
         // vec0 virtual tables are created lazily by VectorStore after embedding dimension is known.
     }
 
     // MARK: - Integrity
 
-    func integrityCheck() throws {
+    /// Runs `PRAGMA quick_check`. Returns `true` only when SQLite reports the single "ok" row;
+    /// any other row means corruption and the caller must treat the check as failed, not passed.
+    @discardableResult
+    func integrityCheck() throws -> Bool {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: "PRAGMA quick_check")
+            var healthy = true
             for row in rows {
                 let result: String = row[0]
                 if result != "ok" {
+                    healthy = false
                     NSLog("SQLiteMemoryStore: integrity issue: %@", result)
                 }
             }
+            return healthy
         }
     }
 
@@ -903,11 +932,12 @@ actor SQLiteMemoryStore {
 
     func recordCount() throws -> Int {
         try dbQueue.read { db in
-            let row = try Row.fetchOne(
+            // COUNT(*) is SQLite INTEGER (Int64); `as? Int` would always fail and
+            // silently return 0. Read it via GRDB's typed fetch.
+            try Int.fetchOne(
                 db,
                 sql: "SELECT COUNT(*) FROM memory_records WHERE status = 'active'"
-            )
-            return row?[0] as? Int ?? 0
+            ) ?? 0
         }
     }
 

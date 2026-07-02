@@ -1029,12 +1029,25 @@ actor DaemonLLMEngine: LLMEngine {
         options: GenerationOptions,
         continuation: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation
     ) async throws {
+        // Clip duration drives both the pass-1 token budget and the runaway
+        // char gate — a long PTT capture must not be truncated or rejected for
+        // being legitimately long. nil (unparseable header) keeps the short-clip
+        // defaults.
+        let clipDurationSeconds: Double? = Data(base64Encoded: audio)
+            .flatMap { WAVParser.parseDurationSeconds($0) }
+
         // Pass 1 — transcription only.
         var transcribeOptions = options
         transcribeOptions.tools = nil
         transcribeOptions.turnContextPrefix = nil
         transcribeOptions.suppressThinking = true
-        transcribeOptions.maxTokens = min(options.maxTokens, 256)
+        // Scale the pass-1 cap with duration (~12 tokens/sec ≈ the
+        // duration*25-char gate with headroom) so a 30s clip isn't truncated
+        // before the char gate can accept it; 256-token floor for short clips.
+        let transcribeCap = max(
+            min(options.maxTokens, 256),
+            min(options.maxTokens, Int((clipDurationSeconds ?? 0) * 12)))
+        transcribeOptions.maxTokens = transcribeCap
         let transcriptTurn = try await runTurn(
             messages: [LLMMessage(role: .user, content: "")],
             systemPrompt: Self.transcribeSystemPrompt,
@@ -1044,16 +1057,19 @@ actor DaemonLLMEngine: LLMEngine {
             return
         }
         let transcript = Self.flattenTranscript(transcriptTurn.text)
+        // Privacy: log metadata only — the transcript is user speech and must
+        // not be persisted to the unified system log.
         NSLog(
-            "DaemonLLMEngine: audio two-pass — pass1 transcript=%@",
-            transcript.isEmpty ? "<empty>" : transcript)
+            "DaemonLLMEngine: audio two-pass — pass1 transcript (%d chars)",
+            transcript.count)
 
-        let quality = Self.assessAudioTranscript(transcript)
+        let quality = Self.assessAudioTranscript(transcript, durationSeconds: clipDurationSeconds)
         let finalTranscript = await resolveAudioTranscript(
             primaryTranscript: transcript,
             primaryQuality: quality,
-            audioWAVBase64: audio)
-        let finalQuality = Self.assessAudioTranscript(finalTranscript)
+            audioWAVBase64: audio,
+            durationSeconds: clipDurationSeconds)
+        let finalQuality = Self.assessAudioTranscript(finalTranscript, durationSeconds: clipDurationSeconds)
         guard finalQuality.isUsable else {
             NSLog(
                 "DaemonLLMEngine: audio two-pass — rejecting transcript (%@)",
@@ -1266,14 +1282,22 @@ actor DaemonLLMEngine: LLMEngine {
     /// tool/thinking markup, and obvious repeated garbage must stop the turn
     /// before pass 2 can confidently answer a mis-heard request. Legitimate
     /// short commands ("yes", "no", "stop") stay usable.
-    static func assessAudioTranscript(_ transcript: String) -> AudioTranscriptQuality {
+    static func assessAudioTranscript(
+        _ transcript: String,
+        durationSeconds: Double? = nil
+    ) -> AudioTranscriptQuality {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             return AudioTranscriptQuality(isUsable: false, reason: "empty")
         }
 
         let lower = text.lowercased()
-        if lower.count > 300 {
+        // The runaway gate scales with clip duration — a 30s PTT capture
+        // transcribes to ~390-480 chars, which a fixed 300-char cap would
+        // always reject. ~25 chars/sec of speech, 300-char floor for short
+        // clips and when the duration is unknown.
+        let maxChars = max(300, Int((durationSeconds ?? 0) * 25))
+        if lower.count > maxChars {
             return AudioTranscriptQuality(isUsable: false, reason: "runaway_transcript")
         }
 
@@ -1352,7 +1376,8 @@ actor DaemonLLMEngine: LLMEngine {
     func resolveAudioTranscript(
         primaryTranscript: String,
         primaryQuality: AudioTranscriptQuality,
-        audioWAVBase64: String
+        audioWAVBase64: String,
+        durationSeconds: Double? = nil
     ) async -> String {
         guard Self.shouldAttemptAudioFallback(
             transcript: primaryTranscript,
@@ -1372,14 +1397,16 @@ actor DaemonLLMEngine: LLMEngine {
             return primaryTranscript
         }
         let flattened = Self.flattenTranscript(fallback)
-        let fallbackQuality = Self.assessAudioTranscript(flattened)
+        let fallbackQuality = Self.assessAudioTranscript(flattened, durationSeconds: durationSeconds)
         guard fallbackQuality.isUsable else {
             NSLog(
                 "DaemonLLMEngine: audio fallback rejected (%@); keeping primary",
                 fallbackQuality.reason ?? "unknown")
             return primaryTranscript
         }
-        NSLog("DaemonLLMEngine: audio fallback accepted transcript=%@", flattened)
+        // Privacy: log metadata only — never the transcript content (it is
+        // user speech and would persist in the unified system log).
+        NSLog("DaemonLLMEngine: audio fallback accepted (%d chars)", flattened.count)
         return flattened
     }
 
@@ -1927,7 +1954,7 @@ actor DaemonLLMEngine: LLMEngine {
                 // Fix #2: clean up the partially-launched process / PID /
                 // endpoints so the next attempt doesn't leak. Do NOT call
                 // internalShutdown (it would cancel the restart chain).
-                await self.clearFailedLaunchState()
+                self.clearFailedLaunchState()
                 NSLog(
                     "DaemonLLMEngine: supervised restart FAILED — %@",
                     error.localizedDescription)

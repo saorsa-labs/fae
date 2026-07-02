@@ -880,6 +880,10 @@ actor PipelineCoordinator {
         // Voice spine V3b: close the daemon event stream on teardown (flag-ON).
         eventSubscriber?.stop()
         eventSubscriber = nil
+        // The subscriber is gone, so no `audio.playback_ended` can arrive to
+        // clear a live playback id — clear it here so a future turn isn't
+        // stranded waiting the full drain timeout.
+        currentDaemonPlaybackID = nil
         await llmEngine.shutdown()
         currentTurnID = nil
         eventBus.send(.pipelineStateChanged(.stopped))
@@ -2366,13 +2370,20 @@ actor PipelineCoordinator {
             speakerRole: speakerGate.currentSpeakerRole
         ) {
             let turnId = newMemoryId(prefix: "turn")
-            _ = await memoryOrchestrator?.capture(
+            let captureReport = await memoryOrchestrator?.capture(
                 turnId: turnId,
                 userText: originalUserText,
                 assistantText: responseText,
                 speakerId: speakerGate.currentSpeakerLabel,
                 utteranceTimestamp: speakerGate.currentUtteranceTimestamp
             )
+            if captureReport?.failedExplicitCommand == true {
+                debugLog(
+                    debugConsole,
+                    .memory,
+                    "WARNING: explicit remember/forget command failed to persist for turn \(turnId) — the user was told it was remembered but it was not"
+                )
+            }
             await capturePendingCorrection()
         }
 
@@ -2849,6 +2860,18 @@ actor PipelineCoordinator {
             pttHeardTranscriptForTurn = nil
         } else {
             pttAudioForTurn = nil
+            // Clear any stale [heard] transcript from a PRIOR turn at the start
+            // of a fresh non-tool-follow-up turn that carries no PTT audio (e.g.
+            // a typed turn). Otherwise turn-final paths that skip the capture
+            // block (LLM-failure fallback, tool-repair early returns, non-
+            // conversational skip, suppressed output) leave it set, and this
+            // typed turn's memory capture would store the previous turn's
+            // spoken transcript as this turn's user text. Tool follow-ups MUST
+            // preserve it — the [heard] must survive the tool round-trip within
+            // the same turn — so only clear when !isToolFollowUp.
+            if !isToolFollowUp {
+                pttHeardTranscriptForTurn = nil
+            }
         }
 
         let generationContext: GenerationContext
@@ -3213,6 +3236,12 @@ actor PipelineCoordinator {
         } else if let currentTurnGenerationContext {
             generationContext = currentTurnGenerationContext
         } else {
+            // No generation context available (should not happen on a tool
+            // follow-up). End the generation so it does not leak in
+            // AssistantGenerationTracker and the orb can leave Thinking.
+            NSLog("PipelineCoordinator: no generation context — ending generation id=%@", generationID.uuidString)
+            endAssistantGeneration(for: generationID)
+            engage()
             return
         }
 
@@ -3521,6 +3550,24 @@ actor PipelineCoordinator {
         guard await activeLLMEngine.isLoaded else {
             NSLog("PipelineCoordinator: LLM not loaded — cannot generate")
             debugLog(debugConsole, .pipeline, "⚠️ LLM not loaded — cannot generate")
+            // Emit the deterministic LLM-failure fallback so the user hears a
+            // response instead of silence, and end the generation so it does
+            // not leak in AssistantGenerationTracker (orb stuck Thinking).
+            if let fallback = Self.llmFailureFallbackMessage(
+                firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+                proactiveContextPresent: proactiveContext != nil
+            ) {
+                sendAssistantText(fallback, isFinal: true)
+                if generationContext.allowsAudibleOutput {
+                    recordSpokenText(fallback)
+                    enqueueTTS(fallback, isFinal: true, generationID: generationID)
+                }
+                await awaitPendingTTS()
+                await conversationState.addAssistantMessage(fallback, tag: proactiveContext?.conversationTag)
+                await persistFinalAssistantTurnIfNeeded(fallback)
+            }
+            endAssistantGeneration(for: generationID)
+            engage()
             return
         }
 
@@ -4350,13 +4397,23 @@ actor PipelineCoordinator {
                     let turnId = newMemoryId(prefix: "turn")
                     // S18 audio turns: memory records what the user actually
                     // said (the [heard] transcription), not the placeholder.
-                    _ = await memoryOrchestrator?.capture(
+                    let captureReport = await memoryOrchestrator?.capture(
                         turnId: turnId,
                         userText: pttHeardTranscriptForTurn ?? userText,
                         assistantText: assistantTextForStorage,
                         speakerId: speakerGate.currentSpeakerLabel,
                         utteranceTimestamp: speakerGate.currentUtteranceTimestamp
                     )
+                    // Degraded signal: an explicit "remember"/"forget" command
+                    // failed to persist even though Fae may have confirmed it.
+                    // Surface it loudly rather than swallowing the failure.
+                    if captureReport?.failedExplicitCommand == true {
+                        debugLog(
+                            debugConsole,
+                            .memory,
+                            "WARNING: explicit remember/forget command failed to persist for turn \(turnId) — the user was told it was remembered but it was not"
+                        )
+                    }
                     pttHeardTranscriptForTurn = nil
                     await capturePendingCorrection()
                 } else {
@@ -5521,6 +5578,21 @@ actor PipelineCoordinator {
             reason)
     }
 
+    /// Tear down the current daemon event subscriber (its read loop is bound to
+    /// the dead daemon's socket) and reopen it against the revived daemon's new
+    /// endpoints. Called by `FaeCore` after a supervised daemon restart —
+    /// `startDaemonEventSubscriberIfNeeded` alone would no-op because
+    /// `eventSubscriber` is still non-nil. Reads the ttsEngine's (just-updated)
+    /// endpoints, so the reconnected engine must be retargeted first.
+    func restartDaemonEventSubscriber() async {
+        eventSubscriber?.stop()
+        eventSubscriber = nil
+        // No `audio.playback_ended` can arrive across the reconnect gap; clear
+        // any live id so the next segment doesn't eat the full drain timeout.
+        currentDaemonPlaybackID = nil
+        await startDaemonEventSubscriberIfNeeded()
+    }
+
     /// Open the daemon event-subscribe connection (once) and route
     /// `audio.level` / `audio.playback_ended` into the existing playback-event
     /// path. No-op if already started or if the daemon endpoints are missing.
@@ -5610,6 +5682,18 @@ actor PipelineCoordinator {
         while currentDaemonPlaybackID != nil, Date() < deadline {
             await Task.yield()
             try? await Task.sleep(nanoseconds: 20_000_000)  // 20 ms poll
+        }
+        // If the loop exited on the deadline with the id still set, the
+        // `audio.playback_ended` event was lost (subscriber read-loop death,
+        // dropped event, or a missing ended-event after a barge-in audio.stop).
+        // Clear the stranded id so the NEXT segment isn't forced to eat the full
+        // drain timeout before it can speak.
+        if let stranded = currentDaemonPlaybackID {
+            NSLog(
+                "PipelineCoordinator: daemon playback drain timed out (playback_id=%@) — " +
+                    "clearing stranded id so subsequent segments recover",
+                stranded)
+            currentDaemonPlaybackID = nil
         }
     }
 

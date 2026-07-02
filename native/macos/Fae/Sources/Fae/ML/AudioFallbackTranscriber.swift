@@ -272,7 +272,8 @@ struct ExternalProcessAudioFallbackTranscriber: AudioFallbackTranscribing {
         }
         let transcript = Self.extractTranscript(from: out)
         if transcript.isEmpty {
-            NSLog("AudioFallbackTranscriber: empty transcript stdout=%@", out.prefix(300) as NSString)
+            // Privacy: log metadata only — stdout can contain user speech.
+            NSLog("AudioFallbackTranscriber: empty transcript (stdout %d chars)", out.count)
             return nil
         }
         return transcript

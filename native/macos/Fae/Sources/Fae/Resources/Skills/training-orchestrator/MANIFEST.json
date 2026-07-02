@@ -25,7 +25,11 @@
       "scripts/rollback.py": "6ad108be4e6d7a63d3d7c9ffc81437546e5fd1d906e2a6e0ebeb9c1402a0d5d8",
       "scripts/train.py": "9b5770a0c0c9f557b43d40c20f690d696da20b8efdca1ce4172fbbb9af80ca9a",
       "scripts/train_peft.py": "c9e73aba145ccb09def176c685b6be7fc63b9b3f55920b2a50a16c35b289655e",
-      "scripts/convert_to_gguf.py": "18695ba35b5fedfbf1faae32c20ff983ee4d8aaca2cd9aabe6ae838f225fdf44"
+      "scripts/convert_to_gguf.py": "18695ba35b5fedfbf1faae32c20ff983ee4d8aaca2cd9aabe6ae838f225fdf44",
+      "scripts/train_dpo.py": "008af3a0580f4f3acef24fb92c2380956d52ebd37ebd61f45362646a7df693b5",
+      "scripts/train_keyword.py": "077cd3365be6f8e5b74399040b23f9646406c0c2ec42ed11d8cdee2d8c4884fe",
+      "scripts/train_speech_verifier.py": "0e8f623b12b665c241ba2e53365306c77097825ac66b60dfc6de5c0f29aa2abd",
+      "scripts/train_stt.py": "7d905469c43b9308bfaf5212aa923499ae1579a816ff45b160a945e2e152c536"
     },
     "signature": null
   }

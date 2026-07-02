@@ -238,6 +238,41 @@ actor ToolExecutor: ToolExecutorProtocol {
         callbacks: ToolExecutorCallbacks
     ) async -> ToolExecutorResult {
 
+        // ── 0. Guest / relay origin — text-only, no tool execution ──────
+        // Voice identity is the security model: only the verified owner may
+        // run tools. Owner-authorized automated turns (scheduler / proactive)
+        // run with `isOwner == true`, so they pass. Remote channel senders and
+        // local guests are text-only. Hiding tool schemas at prompt assembly is
+        // NOT sufficient — a prompt-injected guest turn (a channel / x0x /
+        // collaborate message body) can still elicit a tool call, so we deny at
+        // the execution boundary, independent of `toolMode`, for both the
+        // `<tool_call>` and `<tool_program>` paths (both build this context and
+        // route through here). The `.relay` check is defense-in-depth: a relay
+        // turn is always non-owner today, but this keeps the invariant explicit
+        // if that ever drifts. Pre-enrollment exposes no tool schemas, so this
+        // never blocks the voice-enrollment path.
+        if !context.isOwner || context.actionSource == .relay {
+            await securityLogger.log(
+                event: "guest_tool_denied",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: "guestOrRelayOrigin",
+                approved: nil,
+                success: nil,
+                error: nil,
+                arguments: call.arguments
+            )
+            debugLog(
+                debugConsole, .toolResult,
+                "Blocked guest/relay tool call: \(call.name) isOwner=\(context.isOwner) source=\(context.actionSource.rawValue)")
+            return ToolExecutorResult(
+                result: .error("Tool '\(call.name)' is not available. Messages from remote channels and guests are text-only — only the primary user can run tools."),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: nil
+            )
+        }
+
         // ── 1. Tool mode / privacy enforcement ──────────────────────────
         debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(context.toolMode) privacy=\(context.privacyMode)")
         guard registry.isToolAllowed(call.name, mode: context.toolMode, privacyMode: context.privacyMode) else {
@@ -1184,7 +1219,7 @@ actor ToolExecutor: ToolExecutorProtocol {
                 result: ToolResult(output: conversationOutput, isError: raw.isError),
                 approvedByUser: nil,
                 damageControlIntervened: false,
-                latencyMs: Int(Date().timeIntervalSince(startTime) * 1000)
+                latencyMs: latencyMs
             )
         }
 

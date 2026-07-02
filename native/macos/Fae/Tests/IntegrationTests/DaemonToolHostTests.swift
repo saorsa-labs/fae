@@ -288,6 +288,34 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertNil(reply["call_id"])
     }
 
+    func testToolConfirmDeniesAndUnblocksOnCancellation() async {
+        // The approval-wedge fix: with a VALID call_id the confirm reaches
+        // `requestApproval`, which suspends on the governance card. With no UI
+        // observer present here, only the backstop timeout (75s) or Task
+        // cancellation can settle it — a cancelled turn MUST resume false
+        // PROMPTLY (fail-closed), otherwise the shared ToolHost operation lock
+        // and the conversation turn wedge forever. This exercises the resume-
+        // exactly-once guard's cancellation racer.
+        let confirm = Task { () -> [String: Any] in
+            await DaemonAgentClient.handleToolConfirm(
+                params: ["tool": "bash", "risk_class": "Shell", "call_id": "c9"])
+        }
+
+        // Let it reach the suspended approval wait (post + suspend need a beat).
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        let cancelStart = Date()
+        confirm.cancel()
+        let reply = await confirm.value
+
+        XCTAssertEqual(reply["approved"] as? Bool, false, "cancellation must DENY (fail-closed)")
+        XCTAssertEqual(reply["call_id"] as? String, "c9", "deny must still echo the bound call_id")
+        let elapsed = Date().timeIntervalSince(cancelStart)
+        XCTAssertLessThan(
+            elapsed, 3.0,
+            "cancel must resume the approval wait immediately, not wait for the 75s timeout; took \(elapsed)s")
+    }
+
     func testToolConfirmMessageNeverEchoesContents() {
         // The message is composed ONLY from bounded fields; a sentinel planted
         // in hypothetical content must never appear (there is no content field).

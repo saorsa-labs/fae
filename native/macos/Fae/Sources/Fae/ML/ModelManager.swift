@@ -290,6 +290,9 @@ actor ModelManager {
             eventBus.send(.runtimeProgress(stage: "llm", progress: 1.0))
 
             // Load personal LoRA adapter if configured and auto-load is enabled.
+            // NOTE: this is the OWNER MANUAL-OVERRIDE key (`training.personalAdapterPath`),
+            // MLX-lane only, out of the autonomous gate by design. The GATED deploy pointer
+            // is `ImprovementState.currentAdapterPath`, re-applied below (F6).
             if let mlxLLM = llm as? MLXLLMEngine,
                config.training.adapterAutoLoadEnabled,
                let adapterPath = config.training.personalAdapterPath,
@@ -302,6 +305,17 @@ actor ModelManager {
                     NSLog("ModelManager: personal adapter load failed (continuing with base model): %@", error.localizedDescription)
                 }
             }
+
+            // Re-apply the gated, deployed personal adapter on startup (P9/C4 F6).
+            // `performDeploy` promotes a receipt-gated candidate ONLY into
+            // `ImprovementState.currentAdapterPath` + hot-swaps the running engine, but
+            // nothing re-applied that pointer on the next launch — so the approved
+            // personalization silently vanished (engine served base) AND later evals used
+            // the pointer as the "deployed baseline" while the engine served base (a delta
+            // vs a phantom). This re-verifies the consumed GateReceipt against the on-disk
+            // artifact and re-applies it on BOTH lanes via `swapAdapter`; a failed verify
+            // clears the pointer (fail-closed) so eval baselines cannot diverge.
+            await applyDeployedGatedAdapterOnStartup(llm: llm)
 
             // Setup wired memory policy for GPU memory management.
             // This helps prevent OOM by coordinating memory limits across tasks.
@@ -571,6 +585,96 @@ actor ModelManager {
     /// Retry an async throwing operation with exponential backoff.
     ///
     /// Used for STT/TTS model loading where transient network failures during
+    /// Re-apply the gated, deployed personal adapter at engine startup (P9/C4 F6).
+    ///
+    /// Reads the DEPLOYED pointer (`ImprovementState.currentAdapterPath`) — the ONLY
+    /// place `performDeploy` writes a receipt-gated candidate — and re-applies it on
+    /// the LIVE engine via `swapAdapter`, which routes polymorphically (daemon lane
+    /// reloads the GGUF + scale 1.0; MLX lane hot-swaps the adapter directory). Without
+    /// this the approved personalization silently disappeared on every restart, and
+    /// later evals treated the pointer as the "deployed baseline" while the engine
+    /// actually served base — a delta against a phantom.
+    ///
+    /// Fail-closed: the pointer MUST carry a consumed `GateReceipt` that re-verifies
+    /// (HMAC + on-disk artifact digest) against the artifact NOW. A missing receipt, a
+    /// failed verify, or a moved/edited artifact ⇒ log LOUDLY, audit, CLEAR the pointer
+    /// so eval baselines cannot diverge, and leave the engine on base.
+    private func applyDeployedGatedAdapterOnStartup(llm: any LLMEngine) async {
+        let store = ImprovementStore()
+        do {
+            try await store.open()
+        } catch {
+            NSLog("ModelManager: startup adapter replay — could not open improvement store: %@", error.localizedDescription)
+            return
+        }
+
+        let deployed: String?
+        do {
+            deployed = try await store.readState().currentAdapterPath
+        } catch {
+            // No state row yet (fresh install) or a read error ⇒ nothing to replay.
+            return
+        }
+        guard let deployed else { return }
+
+        // The deployed pointer must have a consumed, verifying receipt for THIS path.
+        guard let receipt = try? await store.consumedGateReceipt(forCandidatePath: deployed) else {
+            await Self.clearDivergedDeployedPointer(
+                store: store, llm: llm, deployed: deployed, reason: "no_consumed_receipt")
+            return
+        }
+        do {
+            try GateReceiptVerifier.verify(receipt, expectedCandidatePath: deployed)
+        } catch {
+            await Self.clearDivergedDeployedPointer(
+                store: store, llm: llm, deployed: deployed, reason: "receipt_verify_failed: \(error)")
+            return
+        }
+
+        // Verified: re-apply on the live engine (both lanes via swapAdapter).
+        do {
+            try await llm.swapAdapter(to: URL(fileURLWithPath: deployed).standardizedFileURL)
+            NSLog("ModelManager: startup adapter replay — re-applied verified deployed adapter %@", deployed)
+            eventBus.send(.runtimeProgress(stage: "adapter_changed", progress: 1.0))
+        } catch {
+            // The artifact verified but the engine could not load it — do NOT clear the
+            // pointer (the artifact is intact); surface the failure. The engine stays on
+            // base until a working replay or a fresh deploy.
+            NSLog("ModelManager: startup adapter replay — verified %@ but engine swap failed: %@", deployed, error.localizedDescription)
+        }
+    }
+
+    /// Fail-closed teardown for a deployed pointer with no verifying receipt (F6): audit
+    /// LOUDLY, drop the running adapter (base model), and clear `currentAdapterPath` so
+    /// eval baselines track what the engine actually serves.
+    private static func clearDivergedDeployedPointer(
+        store: ImprovementStore, llm: any LLMEngine, deployed: String, reason: String
+    ) async {
+        NSLog(
+            "ModelManager: startup adapter replay FAILED for deployed %@ (%@) — clearing pointer (fail-closed)",
+            deployed, reason)
+        await SecurityEventLogger.shared.log(
+            event: "adapter_startup_replay_rejected",
+            toolName: "ModelManager",
+            decision: "clear",
+            reasonCode: reason,
+            success: false,
+            error: "deployed adapter \(deployed) has no verifying gate receipt",
+            arguments: ["deployed_path": deployed])
+        // Ensure the engine is on base, then clear the pointer.
+        try? await llm.swapAdapter(to: nil)
+        do {
+            try await store.ensureStateRow()
+            var state = try await store.readState()
+            if state.currentAdapterPath == deployed {
+                state.currentAdapterPath = nil
+                try await store.writeState(state)
+            }
+        } catch {
+            NSLog("ModelManager: startup adapter replay — failed to clear diverged pointer: %@", error.localizedDescription)
+        }
+    }
+
     /// HuggingFace downloads are common on first launch.
     ///
     /// - Parameters:

@@ -31,6 +31,55 @@ jobs:
       - name: "Guard: (stale under ADR-011) removed — headless Rust core is canonical"
         run: echo 'guard-no-rust retired by ADR-011 (2026-06-22); headless Rust core is the canonical runtime'
 
+      - name: "Guard: skill manifest integrity checksums"
+        run: |
+          python3 - <<'PY'
+          import json, hashlib, os, glob, sys
+          root = "native/macos/Fae/Sources/Fae/Resources/Skills"
+          bad = 0
+          for manifest in sorted(glob.glob(os.path.join(root, "*/MANIFEST.json"))):
+              d = os.path.dirname(manifest)
+              try:
+                  m = json.load(open(manifest))
+              except Exception as e:
+                  print(f"::error file={manifest}::MANIFEST.json is not valid JSON: {e}")
+                  bad += 1
+                  continue
+              checks = ((m.get("integrity") or {}).get("checksums")) or {}
+              for rel, expected in checks.items():
+                  p = os.path.join(d, rel)
+                  if not os.path.exists(p):
+                      print(f"::error file={manifest}::listed file missing: {rel}")
+                      bad += 1
+                      continue
+                  actual = hashlib.sha256(open(p, "rb").read()).hexdigest()
+                  if actual != expected:
+                      print(f"::error file={p}::checksum mismatch in {manifest} for {rel}: expected {expected}, actual {actual} — run `shasum -a 256 {rel}` in {d} and update integrity.checksums")
+                      bad += 1
+              # For executable skills, every SKILL.md and scripts/*.py that ships
+              # in the skill dir MUST be listed in integrity.checksums. An
+              # unlisted script would ship UNVERIFIED — the checksum loop above
+              # only guards files that are already listed, so a missing entry is
+              # a silent hole. Assert coverage here.
+              caps = m.get("capabilities") or []
+              if "execute" in caps:
+                  covered = set(checks.keys())
+                  required = []
+                  skill_md = os.path.join(d, "SKILL.md")
+                  if os.path.exists(skill_md):
+                      required.append("SKILL.md")
+                  for script in sorted(glob.glob(os.path.join(d, "scripts", "*.py"))):
+                      required.append(os.path.relpath(script, d))
+                  for rel in required:
+                      if rel not in covered:
+                          print(f"::error file={manifest}::executable skill file not listed in integrity.checksums: {rel} — run `shasum -a 256 {rel}` in {d} and add it")
+                          bad += 1
+          if bad:
+              print(f"skill manifest integrity check failed: {bad} mismatch(es)")
+              sys.exit(1)
+          print("skill manifest integrity check passed")
+          PY
+
   # ── Build (debug) ────────────────────────────────────────────────
   build:
     name: Build (macOS arm64)
@@ -79,3 +128,30 @@ jobs:
         run: swift test
         working-directory: native/macos/Fae
         timeout-minutes: 20
+
+  rust-macos:
+    # C32: the Rust crates' macOS cfg branches (Kokoro/voice-tts lane, codesign
+    # gate, Metal feature graph, fae-ui-shell macOS paths) were previously only
+    # compiled at release-tag time — ci-linux.yml builds Linux-only and the jobs
+    # above are Swift-only. Catch macOS-only Rust breakage on every PR instead.
+    name: Rust (macOS arm64)
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates
+            native/rust/fae-ui-shell
+
+      - name: cargo check (daemon workspace, all targets)
+        run: env -u RUSTFLAGS cargo check --workspace --all-targets
+        working-directory: crates
+
+      - name: cargo check (orb host)
+        run: env -u RUSTFLAGS cargo check --all-targets
+        working-directory: native/rust/fae-ui-shell

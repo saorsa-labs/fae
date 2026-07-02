@@ -339,6 +339,22 @@ actor ImprovementStore {
                 consumed_at         TEXT
             )
         """)
+        // F14: crash-durable rollback journal for the DISK-persisting meta-opt surfaces
+        // (directive file, live config). A row is written BEFORE the change is applied and
+        // deleted after a confirmed rollback OR a confirmed keep. Any row still present at
+        // startup is an orphaned unvalidated change (the app crashed/was killed mid-benchmark)
+        // and is rolled back by replaying its stored old value. Skills/memory seeds are NOT
+        // journaled here (they persist to their own stores with their own rollback).
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS meta_opt_rollback_journal (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                surface     TEXT    NOT NULL,
+                config_key  TEXT,
+                old_value   TEXT    NOT NULL,
+                description TEXT    NOT NULL,
+                applied_at  TEXT    NOT NULL
+            )
+        """)
     }
 
     // MARK: - Singleton State Row
@@ -940,6 +956,27 @@ actor ImprovementStore {
         }
     }
 
+    /// Fetch the most-recently-minted CONSUMED gate receipt for a candidate/adapter path
+    /// (P9/C4 F6). A genuinely-deployed `currentAdapterPath` always has a consumed receipt
+    /// from its deploy; startup adapter-replay re-verifies THAT receipt against the on-disk
+    /// artifact before re-applying it, so an edited/moved artifact is caught and the pointer
+    /// is cleared rather than served un-gated.
+    func consumedGateReceipt(forCandidatePath path: String) throws -> GateReceipt? {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT * FROM gate_receipts
+                    WHERE candidate_path = ? AND consumed_at IS NOT NULL
+                    ORDER BY minted_at DESC LIMIT 1
+                """,
+                arguments: [path]
+            ) else { return nil }
+            return Self.gateReceipt(from: row)
+        }
+    }
+
     /// Whether the receipt for a cycle has already been consumed (single-use gate).
     func isGateReceiptConsumed(cycleId: String) throws -> Bool {
         guard let db else { throw ImprovementStoreError.notOpen }
@@ -996,5 +1033,73 @@ actor ImprovementStore {
             mintedAt: row["minted_at"] ?? "",
             hmac: row["hmac"] ?? ""
         )
+    }
+
+    // MARK: - Meta-Opt Rollback Journal (F14)
+
+    /// One pending rollback-journal entry for a DISK-persisting meta-opt surface.
+    struct MetaOptRollbackEntry: Sendable, Equatable {
+        let id: Int64
+        /// `MetaOptSurface.rawValue` — only `directive` or `configKnob` are journaled.
+        let surface: String
+        /// The config key (for `configKnob`); `nil` for `directive`.
+        let configKey: String?
+        /// The value to restore on rollback (prior directive text, or prior config value).
+        let oldValue: String
+        let description: String
+        let appliedAt: String
+    }
+
+    /// Write a rollback-journal row BEFORE a disk-persisting change is applied. Returns the
+    /// row id so the caller can delete it after a confirmed rollback or keep.
+    func insertRollbackJournalEntry(
+        surface: String, configKey: String?, oldValue: String, description: String
+    ) throws -> Int64 {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO meta_opt_rollback_journal
+                        (surface, config_key, old_value, description, applied_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    surface, configKey, oldValue, description,
+                    ISO8601DateFormatter().string(from: Date()),
+                ]
+            )
+            return db.lastInsertedRowID
+        }
+    }
+
+    /// Delete a journal row after its change was confirmed rolled back OR confirmed kept.
+    func deleteRollbackJournalEntry(id: Int64) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        try db.write { db in
+            try db.execute(
+                sql: "DELETE FROM meta_opt_rollback_journal WHERE id = ?", arguments: [id])
+        }
+    }
+
+    /// All unresolved journal rows (oldest first) — replayed as rollbacks at startup to
+    /// undo changes orphaned by a crash mid-benchmark.
+    func pendingRollbackJournalEntries() throws -> [MetaOptRollbackEntry] {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM meta_opt_rollback_journal ORDER BY id ASC"
+            ).compactMap { row in
+                guard let id = row["id"] as? Int64,
+                      let surface: String = row["surface"],
+                      let oldValue: String = row["old_value"],
+                      let description: String = row["description"],
+                      let appliedAt: String = row["applied_at"]
+                else { return nil }
+                return MetaOptRollbackEntry(
+                    id: id, surface: surface, configKey: row["config_key"],
+                    oldValue: oldValue, description: description, appliedAt: appliedAt)
+            }
+        }
     }
 }

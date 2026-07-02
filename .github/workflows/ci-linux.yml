@@ -17,6 +17,7 @@ on:
       - "scripts/build-linux-package.py"
       - "scripts/llamacpp-runtime.lock.json"
       - "scripts/piper-runtime.lock.json"
+      - "native/macos/Fae/Sources/Fae/Resources/Models/models.lock"
       - ".github/workflows/ci-linux.yml"
   pull_request:
     branches: [main]
@@ -28,6 +29,7 @@ on:
       - "scripts/build-linux-package.py"
       - "scripts/llamacpp-runtime.lock.json"
       - "scripts/piper-runtime.lock.json"
+      - "native/macos/Fae/Sources/Fae/Resources/Models/models.lock"
       - ".github/workflows/ci-linux.yml"
 
 concurrency:

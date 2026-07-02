@@ -8,14 +8,14 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use fae_audio::AudioManager;
 use fae_control_plane::{append_audit_jsonl, ClientRegistry, Command, Response, Scope};
 use fae_engine::{ProviderAdapter, TtsAdapter};
 use fluers_runtime::Limits;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -45,13 +45,21 @@ const MAX_FRAME_BYTES_UNAUTHENTICATED: usize = 64 * 1024;
 /// on the tight control-frame bound.
 const MAX_FRAME_BYTES_AUTHENTICATED: usize = 8 * 1024 * 1024;
 
+/// A hot-swappable [`ClientRegistry`]. The bootstrap-token rotation task
+/// (`main::rotation_loop`) publishes a fresh registry here at token half-life; the
+/// accept loop snapshots the current one per connection, so new connections after
+/// rotation authenticate against the new token while in-flight ones keep the
+/// registry they authenticated with. Held behind a `std::sync::Mutex` — every
+/// critical section is a single `Arc` clone/store with no `.await` in between.
+pub type SharedRegistry = Arc<Mutex<Arc<ClientRegistry>>>;
+
 /// Bind the Unix socket (owner-only) and serve connections until the process is
 /// killed. Fails closed: if a stale socket cannot be cleared, the bind fails, or
 /// owner-only permissions cannot be set, the daemon refuses to serve.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_unix(
     socket_path: PathBuf,
-    registry: Arc<ClientRegistry>,
+    registry: SharedRegistry,
     engine: Arc<dyn ProviderAdapter>,
     asr_fallback: Option<Arc<dyn ProviderAdapter>>,
     tts: Arc<dyn TtsAdapter>,
@@ -79,7 +87,12 @@ pub async fn serve_unix(
 
     loop {
         let (stream, _addr) = listener.accept().await?;
-        let registry = Arc::clone(&registry);
+        // Snapshot the live registry for this connection; a later rotation swaps
+        // in a new one for subsequent connections without disturbing this task.
+        let registry_snapshot = {
+            let guard = registry.lock().unwrap_or_else(PoisonError::into_inner);
+            Arc::clone(&guard)
+        };
         let engine = Arc::clone(&engine);
         let asr_fallback = asr_fallback.as_ref().map(Arc::clone);
         let tts = Arc::clone(&tts);
@@ -93,7 +106,7 @@ pub async fn serve_unix(
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
-                &registry,
+                &registry_snapshot,
                 engine.as_ref(),
                 asr_fallback.as_deref(),
                 tts.as_ref(),
@@ -140,7 +153,7 @@ async fn handle_connection(
     // client's `{server_request_id, result}` replies, which `resolve` routes.
     let requester = ServerRequester::new(Arc::clone(&sink));
     let mut state = SessionState::Unauthenticated;
-    let mut line = String::new();
+    let mut line: Vec<u8> = Vec::new();
 
     // A3: per-session ephemeral tool sandbox (owner Q2 — created post-auth on
     // the first `toolhost.execute`, torn down on close). `tool_root` is the
@@ -170,19 +183,41 @@ async fn handle_connection(
 
     let result: std::io::Result<()> = async {
         loop {
-            line.clear();
-            let bytes = reader.read_line(&mut line).await?;
-            if bytes == 0 {
-                return Ok(()); // peer closed
-            }
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
+            // The per-frame byte cap depends on auth state, which is known
+            // before the read — so bound the read to it. A runaway client that
+            // never sends a newline cannot grow this buffer without limit
+            // (enforced at the read layer via `take`, not after `read_line` has
+            // already buffered the entire line).
             let max_frame_bytes = match state {
                 SessionState::Unauthenticated => MAX_FRAME_BYTES_UNAUTHENTICATED,
                 SessionState::Authenticated(_) => MAX_FRAME_BYTES_AUTHENTICATED,
             };
+            line.clear();
+            let bytes = (&mut reader)
+                .take(max_frame_bytes as u64 + 1)
+                .read_until(b'\n', &mut line)
+                .await?;
+            if bytes == 0 {
+                return Ok(()); // peer closed
+            }
+            // Reading `cap + 1` bytes with no terminating newline means the
+            // frame exceeds the cap (or the client is streaming an unbounded
+            // frame): reject and close. A shorter final frame at EOF that lacks
+            // a newline stays legal (bytes ≤ cap), preserving prior behavior.
+            if bytes > max_frame_bytes && line.last() != Some(&b'\n') {
+                let response =
+                    Response::error("unknown", "frame_too_large", "command frame exceeds limit");
+                sink.send_line(response_line(&response)?);
+                return Ok(());
+            }
+            let line_str = String::from_utf8_lossy(&line);
+            let trimmed = line_str.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Defensive: the read-layer cap already bounds the frame; this
+            // logical guard stays as a belt-and-braces check on the exact
+            // boundary frame.
             if trimmed.len() > max_frame_bytes {
                 let response =
                     Response::error("unknown", "frame_too_large", "command frame exceeds limit");

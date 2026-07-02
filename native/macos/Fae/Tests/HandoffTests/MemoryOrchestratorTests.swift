@@ -132,6 +132,33 @@ final class MemoryOrchestratorTests: XCTestCase {
         XCTAssertFalse(active.contains(where: { $0.id == old.id }))
     }
 
+    func testRecordCountReflectsActiveRecords() async throws {
+        // Regression guard: COUNT(*) is Int64; the previous `as? Int` cast always
+        // failed and returned 0 regardless of how many records existed.
+        let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
+        let store = try SQLiteMemoryStore(path: dbPath)
+
+        let initialCount = try await store.recordCount()
+        XCTAssertEqual(initialCount, 0)
+
+        for i in 0..<3 {
+            _ = try await store.insertRecord(
+                kind: .fact,
+                text: "fact number \(i)",
+                confidence: 0.8,
+                sourceTurnId: UUID().uuidString,
+                tags: ["preference"],
+                importanceScore: 0.5,
+                staleAfterSecs: nil,
+                speakerId: "owner",
+                metadata: nil
+            )
+        }
+
+        let finalCount = try await store.recordCount()
+        XCTAssertEqual(finalCount, 3)
+    }
+
     func testProfileCaptureScopesNameRecordsBySpeaker() async throws {
         let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
         let store = try makeStore(path: dbPath)
@@ -496,5 +523,114 @@ final class MemoryOrchestratorTests: XCTestCase {
         let context = try XCTUnwrap(recall)
         XCTAssertTrue(context.contains("No matching stored memory found"))
         XCTAssertFalse(context.contains("blue"))
+    }
+
+    // Regression: before the v10 partial-unique-index migration, a full UNIQUE index on
+    // (entity_id, fact_key) made the SECOND temporal-fact upsert throw a constraint violation,
+    // the error was swallowed, and the entity graph stayed frozen at the first value forever.
+    // Updating a temporal fact must succeed and surface the new value as the active fact.
+    func testTemporalFactUpsertUpdatesActiveValueWithoutConstraintError() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/entity-temporal-fact-test-\(UUID().uuidString).sqlite"
+        let store = try makeStore(path: dbPath)
+        let entityStore = EntityStore(dbQueue: await store.sharedDatabaseQueue)
+
+        let entity = try await entityStore.findOrCreateEntity(
+            canonicalName: "Ada",
+            relationType: nil,
+            relationLabel: nil
+        )
+
+        try await entityStore.upsertTemporalFact(
+            entityId: entity.id,
+            key: "employer",
+            value: "Analytical Engine Co",
+            sourceRecordId: nil
+        )
+        // This second call is exactly what used to throw on the UNIQUE constraint.
+        try await entityStore.upsertTemporalFact(
+            entityId: entity.id,
+            key: "employer",
+            value: "Difference Engine Ltd",
+            sourceRecordId: nil
+        )
+
+        let now = UInt64(Date().timeIntervalSince1970)
+        let active = try await entityStore.temporalFact(entityId: entity.id, key: "employer", at: now)
+        XCTAssertEqual(active?.factValue, "Difference Engine Ltd")
+
+        // The old value is retained as closed history, not overwritten.
+        let history = try await entityStore.factHistory(entityId: entity.id, key: "employer")
+        XCTAssertEqual(history.count, 2)
+        XCTAssertTrue(history.contains { $0.factValue == "Analytical Engine Co" && $0.endedAt != nil })
+    }
+
+    // Regression: integrityCheck() used to return Void, so callers logged "passed" even when
+    // PRAGMA quick_check reported corruption. It now returns a Bool that is true on a healthy db.
+    func testIntegrityCheckReturnsTrueOnHealthyDatabase() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/memory-integrity-test-\(UUID().uuidString).sqlite"
+        let store = try makeStore(path: dbPath)
+        let healthy = try await store.integrityCheck()
+        XCTAssertTrue(healthy)
+    }
+
+    // The meaningful half of the contract: a corrupt database must NOT report
+    // healthy. A regression to `return true` unconditionally passes the healthy
+    // test above, so this negative case is what actually protects the invariant.
+    // We grow the file past its header/first page, close the connection so WAL
+    // is checkpointed into the main file, then overwrite a mid-file b-tree page
+    // with garbage. PRAGMA quick_check must then report not-ok — surfaced either
+    // as `false` or a thrown error; both mean "not healthy".
+    func testIntegrityCheckDetectsCorruptDatabase() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/memory-integrity-corrupt-\(UUID().uuidString).sqlite"
+
+        // Populate enough records that the main db file grows to several pages,
+        // guaranteeing there is b-tree content to corrupt past the first page.
+        do {
+            let store = try makeStore(path: dbPath)
+            for index in 0..<400 {
+                _ = try await store.insertRecord(
+                    kind: .fact,
+                    text: "integrity corruption fixture record number \(index) — padding text to fill several database pages so quick_check has structure to validate",
+                    confidence: 0.5,
+                    sourceTurnId: "turn-\(index)",
+                    tags: ["integrity-fixture"]
+                )
+            }
+            // Closing the connection checkpoints the WAL into the main db file so
+            // the corruption below lands on committed b-tree pages, not the WAL.
+            let healthyBeforeClose = try await store.integrityCheck()
+            XCTAssertTrue(healthyBeforeClose, "fixture db should be healthy before corruption")
+        }
+        // Give the actor's DatabaseQueue a moment to finish closing/checkpointing.
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Corrupt a full page-aligned data page in the MIDDLE of the file. Page 1
+        // (the header + sqlite_master schema page, offset 0–4095) is left intact so
+        // the db still OPENS; a trashed interior table b-tree page is what
+        // `PRAGMA quick_check` actually reads and reports as corrupt. Writing into
+        // page 1's free space (the earlier approach) is invisible to quick_check.
+        let pageSize: UInt64 = 4096
+        let handle = try FileHandle(forUpdating: URL(fileURLWithPath: dbPath))
+        defer { try? handle.close() }
+        let fileSize = try handle.seekToEnd()
+        XCTAssertGreaterThan(fileSize, pageSize * 3, "fixture db must span several pages")
+        // Middle page index (>= page 2 / offset 4096 so page 1 stays intact).
+        let pageCount = fileSize / pageSize
+        let targetPage = max(1, pageCount / 2)          // 0-based; page 0 is the header page
+        try handle.seek(toOffset: targetPage * pageSize)
+        handle.write(Data(repeating: 0xEE, count: Int(pageSize)))
+        try handle.synchronize()
+        try handle.close()
+
+        // Reopen on the corrupted file and confirm the check does NOT report healthy.
+        var reportedHealthy = true
+        do {
+            let reopened = try makeStore(path: dbPath)
+            reportedHealthy = try await reopened.integrityCheck()
+        } catch {
+            // Opening or checking a corrupted db may throw — that is also "not healthy".
+            reportedHealthy = false
+        }
+        XCTAssertFalse(reportedHealthy, "integrityCheck must report a corrupt database as unhealthy")
     }
 }

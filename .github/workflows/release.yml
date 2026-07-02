@@ -557,6 +557,31 @@ jobs:
           "$DAEMON" --version
           "$LLAMA_SERVER" --version
 
+      - name: Verify bundled runtime against models.lock (fae-daemon)
+        run: |
+          # F21: re-signing llama-server above changes its CDHash, so its on-disk
+          # bytes no longer match whatever the daemon's fail-closed runtime gate
+          # was pinned to at build time. If the daemon's own verification of the
+          # BUNDLED (re-signed) llama-server + models.lock drifts, that must fail
+          # THIS release job — not the installed fleet on first launch.
+          #
+          # TODO(fae-daemon): fae-daemon has NO --verify-runtime entrypoint yet
+          # (only --version, --offline-turn, and the `conductor metaopt-run` CLI).
+          # It needs a mode that runs the same ModelsLock/LlamaServerAdapter
+          # integrity check the server does at startup, against the bundled
+          # llama-server + models.lock, WITHOUT opening the socket or loading a
+          # model, and exits non-zero on drift. Once that exists, wire it here:
+          #
+          #   DAEMON="$APP_BUNDLE/Contents/MacOS/fae-daemon"
+          #   LLAMA_SERVER="$APP_BUNDLE/Contents/Resources/LlamaCpp/llama-server"
+          #   "$DAEMON" --verify-runtime \
+          #     --llama-server "$LLAMA_SERVER" \
+          #     --models-lock native/macos/Fae/Sources/Fae/Resources/Models/models.lock
+          #
+          # Until then this step is a no-op placeholder so a CDHash/lock drift is
+          # NOT silently shipped — the wiring lands with the daemon flag.
+          echo "::warning::fae-daemon --verify-runtime not yet implemented — bundled-runtime integrity is NOT re-verified after re-signing (F21). See TODO above."
+
       - name: Free disk space before DMG creation
         run: |
           # Remove notarization zip and build intermediates to reclaim space
@@ -646,8 +671,20 @@ jobs:
         env:
           SPARKLE_KEY: ${{ secrets.SPARKLE_KEY }}
         run: |
+          # A tag push publishes a real release; installed apps' auto-updater
+          # depends on a signed appcast, so a missing key or empty signature must
+          # HARD-FAIL here rather than silently ship a stale/404 appcast.
+          # workflow_dispatch dry-runs stay lenient.
+          IS_TAG_PUSH=false
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            IS_TAG_PUSH=true
+          fi
           if [ -z "$SPARKLE_KEY" ]; then
-            echo "::warning::SPARKLE_KEY not set — skipping Sparkle signature"
+            if [ "$IS_TAG_PUSH" = "true" ]; then
+              echo "::error::SPARKLE_KEY is required to sign the Sparkle appcast for tag pushes — installed apps' auto-updater would be stranded"
+              exit 1
+            fi
+            echo "::warning::SPARKLE_KEY not set — skipping Sparkle signature (dry-run/dispatch only)"
             echo "SPARKLE_SIGNATURE=" >> "$GITHUB_ENV"
           else
             # Sparkle's sign_update is bundled in the SPM checkout.
@@ -661,7 +698,12 @@ jobs:
             fi
 
             DMG_SIZE=$(stat -f%z "$INSTALLER_DMG" 2>/dev/null || stat --format=%s "$INSTALLER_DMG")
-            RAW_SIG=$("$SIGN_UPDATE" "$INSTALLER_DMG" --ed-key-file <(echo "$SPARKLE_KEY") 2>/dev/null || echo "")
+            # Do NOT swallow sign_update's stderr/exit — a failed signer must
+            # surface instead of producing an empty signature.
+            if ! RAW_SIG=$("$SIGN_UPDATE" "$INSTALLER_DMG" --ed-key-file <(echo "$SPARKLE_KEY")); then
+              echo "::error::sign_update failed to sign $INSTALLER_DMG"
+              exit 1
+            fi
             # sign_update outputs the full attribute string:
             #   sparkle:edSignature="BASE64==" sparkle:version="2"
             # or in older builds just the base64 value.
@@ -670,6 +712,13 @@ jobs:
             if [ -z "$SIGNATURE" ]; then
               # Fallback: assume raw output is already the bare base64 value.
               SIGNATURE="$RAW_SIG"
+            fi
+            if [ -z "$SIGNATURE" ]; then
+              if [ "$IS_TAG_PUSH" = "true" ]; then
+                echo "::error::Sparkle signature is empty after sign_update — refusing to publish a release with a broken appcast"
+                exit 1
+              fi
+              echo "::warning::Sparkle signature empty (dry-run/dispatch only)"
             fi
             echo "SPARKLE_SIGNATURE=$SIGNATURE" >> "$GITHUB_ENV"
             echo "DMG_SIZE=$DMG_SIZE" >> "$GITHUB_ENV"
@@ -852,7 +901,15 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          # Flatten artifacts into artifacts/ (no per-artifact subdir). Without
+          # this, files land at artifacts/fae-macos-arm64/… and the checksum
+          # pipeline below records paths like ./fae-macos-arm64/fae-…dmg that
+          # never match the flat published-asset basenames, so
+          # `sha256sum -c SHA256SUMS.txt` fails for every line. release-linux.yml
+          # already uses merge-multiple: true for the same reason.
+          pattern: fae-macos-*
           path: artifacts
+          merge-multiple: true
 
       - name: List artifacts
         run: find artifacts -type f
@@ -910,10 +967,10 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.dmg
-            artifacts/**/fae-darwin-aarch64
-            artifacts/**/appcast.xml
+            artifacts/*.tar.gz
+            artifacts/*.dmg
+            artifacts/fae-darwin-aarch64
+            artifacts/appcast.xml
             artifacts/SHA256SUMS.txt
             artifacts/SHA256SUMS.txt.asc
             artifacts/FAE_UPDATE_SIGNING_KEY.asc

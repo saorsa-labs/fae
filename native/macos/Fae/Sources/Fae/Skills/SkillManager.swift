@@ -578,7 +578,6 @@ actor SkillManager {
         guard !fm.fileExists(atPath: skillDir.path) else {
             throw SkillError.alreadyExists(name)
         }
-
         try fm.createDirectory(at: skillDir, withIntermediateDirectories: true)
 
         // Write SKILL.md.
@@ -1137,7 +1136,13 @@ actor SkillManager {
         do {
             _ = try loadManifest(for: metadata)
         } catch SkillError.missingManifest {
-            return adjusted
+            // Fail closed: an executable skill (this path is only reached when
+            // type == .executable) with no MANIFEST.json has NO integrity
+            // guarantees and must not keep running — the documented contract
+            // requires a manifest with checksums. Same isEnabled=false path a
+            // policyViolation takes.
+            adjusted.isEnabled = false
+            NSLog("SkillManager: disabling executable skill '%@' — missing MANIFEST.json", metadata.name)
         } catch {
             adjusted.isEnabled = false
             NSLog("SkillManager: disabling executable skill '%@' — invalid/missing manifest", metadata.name)
@@ -1149,6 +1154,16 @@ actor SkillManager {
         let manifestURL = SkillManifestPolicy.manifestURL(for: metadata.directoryURL)
 
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            // Executable skills MUST ship a manifest with integrity checksums
+            // (documented contract). Fail CLOSED: returning conservativeDefault
+            // here would strip ALL integrity verification while the skill keeps
+            // running (fail-open) — e.g. deleting a skill's MANIFEST.json. This
+            // also fails the run path (`executeSkill` calls `loadManifest`).
+            // Instruction-only skills carry no scripts, so the conservative
+            // default remains safe for them.
+            if metadata.type == .executable {
+                throw SkillError.missingManifest(metadata.name)
+            }
             return SkillCapabilityManifest.conservativeDefault(for: metadata.type)
         }
 
@@ -1270,15 +1285,34 @@ actor SkillManager {
         else { return nil }
         let fm = FileManager.default
 
+        // Defence in depth: even if the integrity gate is bypassed, refuse to
+        // run any script whose relative path is not a declared+verified
+        // checksum key. Executable skills MUST carry a manifest with
+        // checksums (validateManifest enforces this), so a missing manifest
+        // or an undeclared script here means "don't run it".
+        let declaredScripts: Set<String>? = {
+            guard metadata.type == .executable else { return nil }
+            guard let manifest = try? loadManifest(for: metadata),
+                  let integrity = manifest.integrity
+            else { return [] }
+            return Set(integrity.checksums.keys)
+        }()
+
+        func isDeclared(_ fileURL: URL) -> Bool {
+            guard let declaredScripts else { return true }
+            return declaredScripts.contains("scripts/\(fileURL.lastPathComponent)")
+        }
+
         func findIn(scriptsDir: URL) -> String? {
             if let specific = scriptName {
                 let target = scriptsDir.appendingPathComponent("\(specific).py")
-                return fm.fileExists(atPath: target.path) ? target.path : nil
+                guard fm.fileExists(atPath: target.path), isDeclared(target) else { return nil }
+                return target.path
             }
             guard let scripts = try? fm.contentsOfDirectory(
                 at: scriptsDir, includingPropertiesForKeys: nil
             ) else { return nil }
-            return scripts.first(where: { $0.pathExtension == "py" })?.path
+            return scripts.first(where: { $0.pathExtension == "py" && isDeclared($0) })?.path
         }
 
         let skillScripts = metadata.directoryURL

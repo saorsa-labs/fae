@@ -554,13 +554,47 @@ struct DaemonABEvaluator: AdapterEvaluator {
     /// Best-effort restore for the failure path — we already have a failure to
     /// surface; a restore error here is logged, not thrown (it must not mask the
     /// original cause), but a daemon left on the candidate is logged LOUDLY.
+    ///
+    /// If the full reload-restore fails (artifact moved/deleted mid-eval, a
+    /// transient reload error), the daemon would otherwise keep serving the
+    /// never-gated CANDIDATE for every subsequent user turn. So we fall back to
+    /// `setScale(0.0)` — the documented instant rollback that neutralizes the
+    /// candidate LoRA (0.0 == base model) and is far more likely to succeed than
+    /// a full reload. Both outcomes are logged to `SecurityEventLogger`.
     private func restoreDeployedBestEffort(_ deployed: String?) async {
         do {
             try await restoreDeployed(deployed)
+            return
         } catch {
             NSLog(
-                "DaemonABEvaluator: best-effort restore after eval failure also failed (%@) — daemon may be on the un-gated candidate",
+                "DaemonABEvaluator: best-effort restore after eval failure also failed (%@) — attempting scale-0 rollback",
                 String(describing: error))
+        }
+
+        // Restore failed: neutralize the un-gated candidate with the instant
+        // scale-0 rollback so the daemon does not keep serving it.
+        do {
+            try await client.setScale(0.0)
+            NSLog(
+                "DaemonABEvaluator: scale-0 rollback succeeded — candidate LoRA neutralized (daemon on base model)")
+            await SecurityEventLogger.shared.log(
+                event: "adapter_eval_restore_scale0",
+                toolName: evaluatorId,
+                decision: "rollback",
+                reasonCode: "restore_failed_scale0_ok",
+                success: true,
+                error: nil)
+        } catch {
+            NSLog(
+                "DaemonABEvaluator: scale-0 rollback ALSO failed (%@) — daemon may be on the un-gated candidate",
+                String(describing: error))
+            await SecurityEventLogger.shared.log(
+                event: "adapter_eval_restore_failed",
+                toolName: evaluatorId,
+                decision: "rollback",
+                reasonCode: "restore_and_scale0_failed",
+                success: false,
+                error: String(describing: error))
         }
     }
 

@@ -219,15 +219,19 @@ final class DamageControlPolicyTests: XCTestCase {
     }
 
     func testNoDeleteFaeVault() async {
+        // ~/.fae-vault is documented zero-access; a bash rm/mv touching it is now
+        // hard-BLOCKED (stronger than the old confirm-manual tier) — the vault is
+        // the survival backup and Fae's tools must never delete it. Real backups
+        // use /usr/bin/git directly, not the bash tool, so they are unaffected.
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let vault = "\(home)/.fae-vault"
-        assertConfirmManual(
+        assertBlock(
             await bash("rm -rf \(vault)"),
-            "rm on .fae-vault must require manual confirmation"
+            "rm on .fae-vault must be blocked (zero-access)"
         )
-        assertConfirmManual(
+        assertBlock(
             await bash("mv \(vault) /tmp/fae-vault-backup"),
-            "mv of .fae-vault must require manual confirmation"
+            "mv of .fae-vault must be blocked (zero-access)"
         )
     }
 
@@ -250,15 +254,17 @@ final class DamageControlPolicyTests: XCTestCase {
     }
 
     func testNoDeleteDevVault() async {
+        // ~/.fae-vault-dev is also zero-access — a bash rm/mv is hard-BLOCKED
+        // (matches the ~/.fae-vault rule + its own entry).
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let devVault = "\(home)/.fae-vault-dev"
-        assertConfirmManual(
+        assertBlock(
             await bash("rm -rf \(devVault)"),
-            "rm on .fae-vault-dev must require manual confirmation"
+            "rm on .fae-vault-dev must be blocked (zero-access)"
         )
-        assertConfirmManual(
+        assertBlock(
             await bash("mv \(devVault) /tmp/fae-vault-dev-backup"),
-            "mv of .fae-vault-dev must require manual confirmation"
+            "mv of .fae-vault-dev must be blocked (zero-access)"
         )
     }
 
@@ -305,9 +311,13 @@ final class DamageControlPolicyTests: XCTestCase {
         assertBlock(await writeTool("\(home)/.fae-vault/test.db", locality: .nonLocal), "writing ~/.fae-vault must be blocked for non-local model")
     }
 
-    func testZeroAccessFaeVaultAllowedForLocal() async {
+    func testZeroAccessFaeVaultBlockedForLocal() async {
+        // CLAUDE.md documents ~/.fae-vault as unconditionally zero-access. Because
+        // ModelLocality is permanently .local in production, a non-local-only rule
+        // never fired and the documented protection was dead — so it is now blocked
+        // for the local model too (P9 review F4).
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        assertAllow(await readTool("\(home)/.fae-vault/fae.db", locality: .local), "reading ~/.fae-vault must be allowed for local model")
+        assertBlock(await readTool("\(home)/.fae-vault/fae.db", locality: .local), "reading ~/.fae-vault must be blocked (zero-access, all models)")
     }
 
     func testZeroAccessSpeakersJsonBlockedForNonLocal() async {
@@ -317,10 +327,12 @@ final class DamageControlPolicyTests: XCTestCase {
         assertBlock(await editTool(path, locality: .nonLocal), "editing speakers.json must be blocked for non-local model")
     }
 
-    func testZeroAccessSpeakersJsonAllowedForLocal() async {
+    func testZeroAccessSpeakersJsonBlockedForLocal() async {
+        // CLAUDE.md documents speakers.json (voice identity) as zero-access. Now
+        // enforced for the local model too (P9 review F4).
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let path = "\(home)/Library/Application Support/fae/speakers.json"
-        assertAllow(await readTool(path, locality: .local), "reading speakers.json must be allowed for local model")
+        assertBlock(await readTool(path, locality: .local), "reading speakers.json must be blocked (zero-access, all models)")
     }
 
     func testZeroAccessDirectiveMdBlockedForNonLocal() async {
@@ -330,10 +342,14 @@ final class DamageControlPolicyTests: XCTestCase {
         assertBlock(await writeTool(path, locality: .nonLocal), "writing directive.md must be blocked for non-local model")
     }
 
-    func testZeroAccessDirectiveMdAllowedForLocal() async {
+    func testZeroAccessDirectiveMdBlockedForLocal() async {
+        // CLAUDE.md documents directive.md (system directive) as zero-access. Now
+        // enforced for the local model too — the directive is mutated via
+        // SelfConfigTool, never the generic write/edit tools (P9 review F4).
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let path = "\(home)/Library/Application Support/fae/directive.md"
-        assertAllow(await readTool(path, locality: .local), "reading directive.md must be allowed for local model")
+        assertBlock(await readTool(path, locality: .local), "reading directive.md must be blocked (zero-access, all models)")
+        assertBlock(await writeTool(path, locality: .local), "writing directive.md must be blocked (zero-access, all models)")
     }
 
     func testZeroAccessConfigTomlBlockedForNonLocal() async {

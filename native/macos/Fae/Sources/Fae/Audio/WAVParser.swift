@@ -29,6 +29,27 @@ enum WAVParser {
         return nil
     }
 
+    /// Duration in seconds from a PCM 16-bit mono WAV's data chunk and sample
+    /// rate. Returns nil if the header or data chunk can't be parsed. Reads only
+    /// the headers — never allocates the sample buffer.
+    static func parseDurationSeconds(_ data: Data) -> Double? {
+        guard let sampleRate = parseSampleRate(data), sampleRate > 0 else { return nil }
+        var offset = 12
+        while offset + 8 < data.count {
+            let chunkID = String(data: data[offset..<(offset + 4)], encoding: .ascii)
+            let chunkSize = readU32(data, at: offset + 4)
+            if chunkID == "data" {
+                let dataStart = offset + 8
+                let dataEnd = min(dataStart + Int(chunkSize), data.count)
+                let sampleCount = max(0, (dataEnd - dataStart) / 2)
+                return Double(sampleCount) / Double(sampleRate)
+            }
+            offset += 8 + Int(chunkSize)
+            if chunkSize % 2 != 0 { offset += 1 }
+        }
+        return nil
+    }
+
     /// Parse a WAV file's raw bytes into Float32 samples normalized to [-1, 1].
     ///
     /// Expects PCM 16-bit mono WAV format. Returns an empty array if the format

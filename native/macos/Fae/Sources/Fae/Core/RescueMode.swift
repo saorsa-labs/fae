@@ -30,4 +30,24 @@ final class RescueMode: ObservableObject {
             availableSnapshots = []
         }
     }
+
+    /// Restore Fae's data from a vault snapshot (or HEAD when `commit` is nil).
+    ///
+    /// Drives `isRestoring` around the call so the restore UI can show progress
+    /// and disable interaction. Returns `true` on success. The underlying
+    /// `GitVaultManager.restore` copies each file into place atomically, so a
+    /// mid-restore failure never leaves a deleted-but-not-replaced database.
+    @discardableResult
+    func restore(commit: String? = nil, from vault: GitVaultManager) async -> Bool {
+        isRestoring = true
+        defer { isRestoring = false }
+        do {
+            try await vault.restore(commitHash: commit)
+            NSLog("RescueMode: restored from vault snapshot %@", commit ?? "HEAD")
+            return true
+        } catch {
+            NSLog("RescueMode: restore failed: %@", error.localizedDescription)
+            return false
+        }
+    }
 }

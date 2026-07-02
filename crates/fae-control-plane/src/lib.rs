@@ -411,6 +411,18 @@ impl ClientRecord {
     }
 }
 
+/// Rotation decision for the always-on bootstrap token: true once `now_ms` reaches
+/// the halfway point of the lifetime `[issued_at_ms, expires_at_ms)`. An always-on
+/// daemon has no restart to re-issue its token, so it must proactively rotate well
+/// before expiry — rotating at half-life leaves a full half-lifetime of slack for
+/// clients to pick up the new token before the old one would have lapsed.
+/// Saturating throughout: a zero/negative lifetime is treated as already due.
+#[must_use]
+pub fn token_past_half_life(issued_at_ms: u64, expires_at_ms: u64, now_ms: u64) -> bool {
+    let half = expires_at_ms.saturating_sub(issued_at_ms) / 2;
+    now_ms >= issued_at_ms.saturating_add(half)
+}
+
 // ──────────────────────────────── Authorization ──────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -626,12 +638,16 @@ pub fn append_audit_jsonl(
         .append(true)
         .open(path)
         .map_err(ControlPlaneError::Audit)?;
-    let line = serde_json::to_string(event).map_err(|error| {
+    let mut line = serde_json::to_string(event).map_err(|error| {
         ControlPlaneError::Audit(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
     })?;
+    // Emit the JSON body + trailing newline in a single `write_all` so concurrent
+    // writers (per-connection read loop, spawned agent/tool tasks) cannot
+    // interleave mid-record and corrupt the audit trail. Mirrors
+    // `conductor::store::append_jsonl`.
+    line.push('\n');
     file.write_all(line.as_bytes())
         .map_err(ControlPlaneError::Audit)?;
-    file.write_all(b"\n").map_err(ControlPlaneError::Audit)?;
     Ok(())
 }
 
@@ -1246,6 +1262,24 @@ mod tests {
     }
 
     #[test]
+    fn token_past_half_life_triggers_at_midpoint() {
+        // 30-day lifetime issued at t=1000: half-life at t=1000 + 15 days.
+        let issued = 1_000;
+        let expires = issued + 30 * 24 * 60 * 60 * 1000;
+        let half = issued + 15 * 24 * 60 * 60 * 1000;
+        assert!(!token_past_half_life(issued, expires, issued)); // fresh
+        assert!(!token_past_half_life(issued, expires, half - 1)); // just before
+        assert!(token_past_half_life(issued, expires, half)); // exactly at half
+        assert!(token_past_half_life(issued, expires, expires)); // past expiry
+
+        // Degenerate lifetimes (expiry at/behind issuance) are due as soon as
+        // `now` reaches issuance; a `now` before issuance is never due.
+        assert!(token_past_half_life(1_000, 1_000, 1_000));
+        assert!(token_past_half_life(2_000, 1_000, 2_000));
+        assert!(!token_past_half_life(2_000, 1_000, 1_999));
+    }
+
+    #[test]
     fn revoke_blocks_subsequent_auth() {
         let mut registry = registry_with_bootstrap("s3cret-token", 1000, None);
         assert!(registry.authenticate("c1", "s3cret-token", 10).is_ok());
@@ -1374,5 +1408,53 @@ mod tests {
             required_scopes("agent.run"),
             Some(&[Scope::AgentExecute][..])
         );
+    }
+
+    fn audit_event(reason: &str) -> AuditEvent {
+        AuditEvent {
+            event_id: "e1".to_owned(),
+            ts_ms: 42,
+            client_id: Some("c1".to_owned()),
+            command: "conversation.inject_text".to_owned(),
+            decision: AuditDecision::Allow,
+            reason: reason.to_owned(),
+            scopes: vec!["conversation_write".to_owned()],
+            arg_hash: String::new(),
+        }
+    }
+
+    // Regression guard for the interleave fix: each audit row must be emitted as
+    // exactly one newline-terminated line so concurrent writers (multiple
+    // spawned agent/tool tasks) cannot split a record across two `write_all`
+    // calls and corrupt the trail. A single writer already produced correct
+    // bytes; this pins the one-line-per-record shape the concurrency fix relies
+    // on (drop the trailing newline or re-split the write and this fails).
+    #[test]
+    fn append_audit_jsonl_writes_one_terminated_line_per_record() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "fae-audit-test-{}-{nanos}.jsonl",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        append_audit_jsonl(&path, &audit_event("first")).unwrap();
+        append_audit_jsonl(&path, &audit_event("second")).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(content.ends_with('\n'), "trail must end with a newline");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "one line per record, no split/merge");
+        for line in lines {
+            // Each line is independently valid JSON — proof no record straddles
+            // a newline (which would leave two invalid half-lines).
+            let value: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(value["command"], "conversation.inject_text");
+        }
     }
 }

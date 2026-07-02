@@ -18,7 +18,9 @@
     "checksums": {
       "SKILL.md": "5c63fda38858a1bef671be2e14d9c98cea9cb8840458a4c9dab57fc2ddc376ce",
       "scripts/build_dataset.py": "50ef2dbeee9a8ec48d4fd0b9b393b6f813766b3de6c9628cad7702afc6c2180d",
-      "scripts/extract_corrections.py": "f69a2f4ec506bc64d628c505509ea2e8fb38f447df87d1305f944930f15bd802"
+      "scripts/extract_corrections.py": "f69a2f4ec506bc64d628c505509ea2e8fb38f447df87d1305f944930f15bd802",
+      "scripts/prepare_keyword_data.py": "9cf2c9c3e3939a5cb57ac3d3db001a19afcc5afddeb01d111f87a5dddda016c8",
+      "scripts/prepare_speech_verifier_data.py": "5dab609f128f859a51df63655c130debe1455fb2dc3bc0b4c81cd83d628e416c"
     },
     "signature": null
   }

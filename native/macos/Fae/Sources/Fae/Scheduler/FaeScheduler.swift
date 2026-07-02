@@ -464,8 +464,14 @@ actor FaeScheduler {
     private func runMemoryReindex() async {
         NSLog("FaeScheduler: memory_reindex — running")
         do {
-            try await memoryStore?.integrityCheck()
-            NSLog("FaeScheduler: memory_reindex — integrity check passed")
+            // A nil store means memory is not configured — nothing to check, don't claim a pass.
+            if let healthy = try await memoryStore?.integrityCheck() {
+                if healthy {
+                    NSLog("FaeScheduler: memory_reindex — integrity check passed")
+                } else {
+                    NSLog("FaeScheduler: memory_reindex — INTEGRITY CHECK FAILED (database corruption; see SQLiteMemoryStore log)")
+                }
+            }
         } catch {
             NSLog("FaeScheduler: memory_reindex — integrity error: %@", error.localizedDescription)
         }
@@ -1744,7 +1750,12 @@ actor FaeScheduler {
             // Directive reader/writer: read/write ~/Library/Application Support/fae/directive.md.
             let directiveURL = FaeDirectories.directiveFile
             await optimizer.setDirectiveReader {
-                try? String(contentsOf: directiveURL, encoding: .utf8)
+                // Distinguish file-absent from read-failed: an absent directive is
+                // legitimately "no directive" (nil → treated as ""), but a real IO error
+                // MUST throw so the directive hypothesis aborts instead of collapsing to
+                // "" and overwriting (or, on rollback, wiping) the owner's directive.
+                guard FileManager.default.fileExists(atPath: directiveURL.path) else { return nil }
+                return try String(contentsOf: directiveURL, encoding: .utf8)
             }
             await optimizer.setDirectiveWriter { text in
                 try text.write(to: directiveURL, atomically: true, encoding: .utf8)

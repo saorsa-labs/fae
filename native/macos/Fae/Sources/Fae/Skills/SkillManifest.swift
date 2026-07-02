@@ -251,6 +251,24 @@ enum SkillManifestPolicy {
             }
         }
 
+        // Fail closed on UNDECLARED executable content. Verifying only the
+        // declared checksums lets a skill ship an extra `scripts/*.py` that
+        // `findExecutableScript` will happily run (by name, or as the first
+        // .py when none is given). Enumerate the on-disk executable surface
+        // (SKILL.md + scripts/*.py) and reject anything not covered by a
+        // checksum key.
+        let scriptsDir = skillDirectory.appendingPathComponent("scripts")
+        if let files = try? FileManager.default.contentsOfDirectory(
+            at: scriptsDir, includingPropertiesForKeys: nil
+        ) {
+            for file in files where file.pathExtension == "py" {
+                let relative = "scripts/\(file.lastPathComponent)"
+                if integrity.checksums[relative] == nil {
+                    return "Integrity check failed: undeclared script \(relative)"
+                }
+            }
+        }
+
         return nil
     }
 

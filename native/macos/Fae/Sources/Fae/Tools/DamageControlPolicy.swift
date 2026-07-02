@@ -193,10 +193,27 @@ actor DamageControlPolicy {
             PathRule(path: "~/.netrc",                nonLocalOnly: true),
             PathRule(path: "~/.npmrc",                nonLocalOnly: true),
             PathRule(path: "~/.pypirc",               nonLocalOnly: true),
-            // Fae workspace secrets — zero-access for non-local models
-            PathRule(path: "~/.fae-vault",                                        nonLocalOnly: true),
-            PathRule(path: "~/Library/Application Support/fae/speakers.json",     nonLocalOnly: true),
-            PathRule(path: "~/Library/Application Support/fae/directive.md",       nonLocalOnly: true),
+            // Fae identity — ALWAYS zero-access (nonLocalOnly:false). These are the
+            // three paths CLAUDE.md documents as unconditionally "zero-access via
+            // DamageControlPolicy": the Git Vault, voice identity, and the system
+            // directive. They were previously nonLocalOnly:true, but `ModelLocality`
+            // is permanently `.local` in production (setModelLocality has no caller),
+            // so a non-local-only rule NEVER fired — the documented protection was
+            // dead. The LLM has no legitimate reason to read/raw-write these via the
+            // generic read/write/edit/bash tools (the directive is mutated through
+            // SelfConfigTool, which is not gated here; speaker identity + the vault
+            // are managed by dedicated file-IO paths, not the `read` tool). So block
+            // them for every model, including local (prompt injection can steer the
+            // local model too).
+            PathRule(path: "~/.fae-vault",                                        nonLocalOnly: false),
+            PathRule(path: "~/.fae-vault-dev",                                    nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae/speakers.json",     nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae/directive.md",       nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae-dev/speakers.json", nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae-dev/directive.md",  nonLocalOnly: false),
+            // config.toml + soul.md are NOT in the documented zero-access set: they
+            // stay non-local-only (the pre-existing behavior — the local model may
+            // read its own config/soul; only an external model is denied).
             PathRule(path: "~/Library/Application Support/fae/config.toml",        nonLocalOnly: true),
             PathRule(path: "~/Library/Application Support/fae/soul.md",            nonLocalOnly: true),
         ]
@@ -227,15 +244,30 @@ actor DamageControlPolicy {
         locality: ModelLocality
     ) -> DCVerdict {
         // Zero-access path check: applies to read, write, edit, and bash.
+        //
+        // read/write/edit compare the (home/$HOME-normalized, symlink-resolved)
+        // argument path — a raw "~/.secrets" is normalized to an absolute path so
+        // the prefix compare is not defeated by the tilde form the tool examples
+        // teach the model. bash has no single path field, so we scan the command
+        // text for any protected path in its absolute, ~ , or $HOME spelling
+        // (quotes/backslash-escapes tolerated) — otherwise `bash: cat ~/.secrets`
+        // would sail past this gate entirely.
         if ["read", "write", "edit", "bash"].contains(toolName) {
-            let path = Self.extractPath(toolName: toolName, arguments: arguments)
+            let argForms = Self.normalizedArgumentForms(
+                Self.extractPath(toolName: toolName, arguments: arguments))
+            let bashCommand = toolName == "bash" ? (arguments["command"] as? String ?? "") : nil
             for rule in zeroAccessPaths {
                 guard !rule.nonLocalOnly || locality == .nonLocal else { continue }
                 let expanded = Self.expandPath(rule.path)
-                if let path, path.hasPrefix(expanded) || path == expanded.trimmingCharacters(in: CharacterSet(charactersIn: "/")) {
-                    return .block(
-                        reason: "Access to '\(rule.path)' is blocked when a non-local model is active. Credential files are zero-access."
-                    )
+                let hitByArg = argForms.contains { $0 == expanded || $0.hasPrefix(expanded + "/") }
+                let hitByBash = bashCommand.map {
+                    Self.commandReferencesPath(command: $0, expandedPath: expanded)
+                } ?? false
+                if hitByArg || hitByBash {
+                    let why = rule.nonLocalOnly
+                        ? "Access to '\(rule.path)' is blocked when a non-local model is active. Credential files are zero-access."
+                        : "Access to '\(rule.path)' is blocked — this is a protected zero-access path."
+                    return .block(reason: why)
                 }
             }
         }
@@ -273,6 +305,13 @@ actor DamageControlPolicy {
         // Bash pattern check (most expensive — done last).
         if toolName == "bash" {
             let command = arguments["command"] as? String ?? ""
+            // Token-based catastrophe check FIRST — robust to trailing slashes,
+            // quotes, backslash-escapes, $HOME/${HOME}/~ spellings, and extra
+            // arguments that the anchored regex rules below miss (e.g.
+            // `rm -rf "$HOME"`, `rm -rf ~/Documents/`, `rm -rf ~/Desktop ~/Movies`).
+            if let rmVerdict = Self.destructiveRmVerdict(command: command) {
+                return rmVerdict
+            }
             for rule in bashRules {
                 guard !rule.nonLocalOnly || locality == .nonLocal else { continue }
                 if Self.matches(pattern: rule.pattern, in: command) {
@@ -310,17 +349,117 @@ actor DamageControlPolicy {
         }
     }
 
-    /// Returns true if the shell command looks like it targets the given expanded path.
-    static func commandTargetsPath(command: String, expandedPath: String) -> Bool {
-        // Match against both the full expanded path and the tilde form.
+    /// Normalize a raw tool-argument path into absolute, standardized forms so a
+    /// prefix compare against an expanded rule path is not defeated by `~`,
+    /// `$HOME`, `..`, or a symlink into a protected directory. Returns the empty
+    /// set for a nil/empty input. Includes both the standardized path and its
+    /// symlink-resolved form (the latter catches a symlink whose target is a
+    /// protected path).
+    static func normalizedArgumentForms(_ raw: String?) -> [String] {
+        guard let raw, !raw.isEmpty else { return [] }
+        let expanded = expandHomeForms(raw)
+        let standardized = (expanded as NSString).standardizingPath
+        let resolved = (standardized as NSString).resolvingSymlinksInPath
+        return standardized == resolved ? [standardized] : [standardized, resolved]
+    }
+
+    /// Expand the shell home spellings (`~`, `~/…`, `$HOME`, `${HOME}`) at the
+    /// start of a path to the current user's home directory.
+    static func expandHomeForms(_ path: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let tildePath: String
-        if expandedPath.hasPrefix(home) {
-            tildePath = "~" + expandedPath.dropFirst(home.count)
-        } else {
-            tildePath = expandedPath
+        if path == "~" || path == "$HOME" || path == "${HOME}" { return home }
+        if path.hasPrefix("~/") { return home + path.dropFirst(1) }
+        if path.hasPrefix("$HOME/") { return home + path.dropFirst("$HOME".count) }
+        if path.hasPrefix("${HOME}/") { return home + path.dropFirst("${HOME}".count) }
+        return path
+    }
+
+    /// Strip shell quoting and backslash-escapes so a path containing a space
+    /// (e.g. the fae data dir "Application Support") or a quoted `"$HOME"`
+    /// normalizes to a literal form the protected-path needles can match. Not a
+    /// full shell parser — it only removes `'`, `"`, and backslash-escapes, which
+    /// is enough to defeat the trivial quoting a model emits to write a path.
+    static func normalizeCommandForPathMatch(_ command: String) -> String {
+        var out = ""
+        out.reserveCapacity(command.count)
+        var i = command.startIndex
+        while i < command.endIndex {
+            let c = command[i]
+            if c == "\\" {
+                let next = command.index(after: i)
+                if next < command.endIndex {
+                    out.append(command[next])
+                    i = command.index(after: next)
+                    continue
+                }
+            } else if c != "\"" && c != "'" {
+                out.append(c)
+            }
+            i = command.index(after: i)
         }
-        return command.contains(expandedPath) || command.contains(tildePath)
+        return out
+    }
+
+    /// True if a bash command references the given expanded path in its absolute,
+    /// `~`, or `$HOME`/`${HOME}` spelling (quotes/backslash-escapes tolerated).
+    /// Used for the zero-access gate, where any read/write/pipe of a protected
+    /// path — not just a delete — must be blocked.
+    static func commandReferencesPath(command: String, expandedPath: String) -> Bool {
+        let normalized = normalizeCommandForPathMatch(command)
+        return protectedNeedles(for: expandedPath).contains { normalized.contains($0) }
+    }
+
+    /// The absolute / `~` / `$HOME` / `${HOME}` spellings of an expanded path.
+    /// A trailing slash on a directory rule (e.g. the fae data dir) is stripped so
+    /// the needle matches a command targeting the dir with OR without the slash
+    /// (`rm -rf …/fae` and `rm -rf …/fae/` both hit). Over-matching a sibling that
+    /// shares the prefix is fail-safe for these protect/deny rules.
+    private static func protectedNeedles(for expandedPath: String) -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var base = expandedPath
+        while base.count > 1 && base.hasSuffix("/") { base.removeLast() }
+        guard base.hasPrefix(home) else { return [base] }
+        let suffix = String(base.dropFirst(home.count))  // e.g. "/.secrets"
+        return [base, "~" + suffix, "$HOME" + suffix, "${HOME}" + suffix]
+    }
+
+    /// Returns true if the shell command looks like it targets the given expanded
+    /// path (absolute, `~`, or `$HOME` form; quotes/backslash-escapes tolerated).
+    static func commandTargetsPath(command: String, expandedPath: String) -> Bool {
+        commandReferencesPath(command: command, expandedPath: expandedPath)
+    }
+
+    /// Token-based catastrophe check for `rm` targeting the filesystem root, the
+    /// home directory, or a whole major user folder. Robust to trailing slashes,
+    /// quotes, backslash-escapes, `~`/`$HOME`/`${HOME}` spellings, and additional
+    /// arguments — the forms the anchored regex rules miss. Returns the strongest
+    /// applicable verdict, or nil when the command is not a catastrophic `rm`.
+    static func destructiveRmVerdict(command: String) -> DCVerdict? {
+        let normalized = normalizeCommandForPathMatch(command)
+        let lower = normalized.lowercased()
+        // Must be an `rm` invocation with a recursive flag.
+        guard lower.range(of: #"(^|[;&|(]\s*|\s)rm\s"#, options: .regularExpression) != nil,
+              lower.range(of: #"\brm\s+(-[a-z]*r[a-z]*|--recursive)\b"#, options: .regularExpression) != nil
+        else { return nil }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let majorFolders = ["Documents", "Desktop", "Library", "Movies", "Music", "Pictures", "Downloads"]
+        for rawToken in normalized.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init) {
+            if rawToken.hasPrefix("-") { continue }  // skip flags
+            let expanded = expandHomeForms(rawToken)
+            var target = (expanded as NSString).standardizingPath
+            if target.count > 1 && target.hasSuffix("/") { target = String(target.dropLast()) }
+            if target == "/" {
+                return .block(reason: "Recursive deletion from filesystem root would destroy the entire system.")
+            }
+            if target == home {
+                return .disaster(reason: "Entire home directory deletion — all your files, configs, and data would be permanently lost.")
+            }
+            for folder in majorFolders where target == home + "/" + folder {
+                return .disaster(reason: "Deletion of a major user folder (\(folder)) — irreversible data loss.")
+            }
+        }
+        return nil
     }
 
     /// Returns true if the command includes a destructive shell verb (rm, mv).
@@ -332,7 +471,12 @@ actor DamageControlPolicy {
 
     static func matches(pattern: String, in text: String) -> Bool {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            return false
+            // Fail closed: an invalid pattern is a programming error in a
+            // catastrophic-command rule. Silently returning false would disable
+            // the protection the rule exists to provide, so treat the command as
+            // matching (deny) and log loudly so the broken rule is caught.
+            NSLog("DamageControlPolicy: invalid regex pattern %@ — failing closed (treating as match)", pattern)
+            return true
         }
         let range = NSRange(text.startIndex..., in: text)
         return regex.firstMatch(in: text, options: [], range: range) != nil

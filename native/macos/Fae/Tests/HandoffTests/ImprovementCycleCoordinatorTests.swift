@@ -1118,6 +1118,82 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertFalse(reviewWasConsulted, "External review must NOT be consulted for a no-receipt pass")
     }
 
+    /// P9/C4 (F1 gate-decision fix): a candidate whose MEASURED deltas carry a > 5%
+    /// regression (`AdapterGate.decide == .fail`) is blocked BEFORE minting/review — it
+    /// must never mint a receipt, never consult external review, never reach
+    /// `.proposing`/`.deploying`, and must leave the deployed adapter untouched. Why: the
+    /// review chain's (future) external reviewers can PASS anything, so the gate's own
+    /// decision — not the reviewer — is the barrier against deploying a regression.
+    func testRunCycleBlocksRegressedFailDeltaBeforeReview() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var seed = try await store.readState()
+        seed.currentAdapterPath = "/tmp/live_adapter"
+        try await store.writeState(seed)
+
+        // A reviewer that would PASS if it were ever consulted — it must NOT be.
+        let gate = ExternalReviewGate()
+        var reviewWasConsulted = false
+        await gate.setDelegateAgentRunner { _ in
+            reviewWasConsulted = true
+            return "PASS: looks great."
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // A measured regression > 5% on one dimension ⇒ AdapterGate .fail.
+        await armInjectedPass(coordinator, store: store, delta: EvalDelta(
+            toolCallingDelta: -10.0, faeCapabilityDelta: 5.0,
+            assistantFitDelta: 5.0, serializationDelta: 5.0, throughputDelta: 1.0
+        ))
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle, "A .fail-delta candidate must end fail-closed at idle")
+        let persisted = try await store.readState()
+        XCTAssertEqual(persisted.lastCycleError, "candidate_blocked: measured_regression")
+        XCTAssertEqual(persisted.currentAdapterPath, "/tmp/live_adapter", "Deployed adapter untouched")
+        XCTAssertNil(persisted.pendingAdapterPath, "Regressed candidate discarded")
+        XCTAssertFalse(reviewWasConsulted, "External review must NOT see a regressed candidate")
+    }
+
+    /// P9/C4 (F1 gate-decision fix): a candidate with a within-threshold regression
+    /// (`AdapterGate.decide == .concern`) is deferred deterministically at the gate — it
+    /// increments the deferral count and ends at idle WITHOUT minting, reviewing, or
+    /// deploying. This replaces trusting the external reviewer to catch the regression.
+    func testRunCycleDefersConcernDeltaBeforeReview() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var seed = try await store.readState()
+        seed.currentAdapterPath = "/tmp/live_adapter"
+        try await store.writeState(seed)
+
+        let gate = ExternalReviewGate()
+        var reviewWasConsulted = false
+        await gate.setDelegateAgentRunner { _ in
+            reviewWasConsulted = true
+            return "PASS: looks great."
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // A within-threshold regression (≤ 5%) on one dimension ⇒ AdapterGate .concern.
+        await armInjectedPass(coordinator, store: store, delta: EvalDelta(
+            toolCallingDelta: -2.0, faeCapabilityDelta: 5.0,
+            assistantFitDelta: 5.0, serializationDelta: 5.0, throughputDelta: 1.0
+        ))
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle, "A .concern-delta candidate defers to idle")
+        let persisted = try await store.readState()
+        XCTAssertEqual(persisted.lastCycleError, "candidate_blocked_concern_deferred")
+        XCTAssertEqual(persisted.deferralCount, 1, "Concern defers deterministically at the gate")
+        XCTAssertEqual(persisted.currentAdapterPath, "/tmp/live_adapter", "Deployed adapter untouched")
+        XCTAssertNil(persisted.pendingAdapterPath, "Concern candidate discarded")
+        XCTAssertFalse(reviewWasConsulted, "External review must NOT see a concern candidate")
+    }
+
     /// Multiple CONCERN deferrals accumulate until max is reached.
     func testDeferralsAccumulateAcrossCycles() async throws {
         let store = try await makeTempStore()

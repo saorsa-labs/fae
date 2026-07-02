@@ -180,6 +180,50 @@ final class GateReceiptTests: XCTestCase {
         }
     }
 
+    func testMintRecordsRealDecisionForRegression() throws {
+        let path = try tempFile("adapter")
+        // A candidate with a > 5% regression must mint a receipt that records the REAL
+        // decision ("fail"), never a hardcoded "pass" — so the deploy-time verifier's
+        // decision guard rejects it.
+        let receipt = try GateMinter.mint(
+            cycleId: "cycle-1", candidatePath: path, kind: .gguf,
+            measured: [.toolCalling: -10.0, .faeCapability: 1.0, .assistantFit: 2.0, .serialization: 0.0],
+            evaluatorId: "DaemonABEvaluator", baseModelId: "gemma-4-e4b",
+            evalSuiteVersion: "suite-v1", mintedAt: "2026-06-21T00:00:00Z", using: testKey
+        )
+        XCTAssertEqual(receipt.decision, "fail", "minter records the true gate decision, not a hardcoded pass")
+        XCTAssertThrowsError(try GateReceiptVerifier.verify(receipt, expectedCandidatePath: path, using: testKey)) { error in
+            guard case GateReceiptError.wrongDecision = error else {
+                return XCTFail("expected wrongDecision, got \(error)")
+            }
+        }
+    }
+
+    func testReceiptWithRegressedMeasuredDeltasFailsVerification() throws {
+        let path = try tempFile("adapter")
+        let digest = try GateArtifactDigest.digest(forPath: path, kind: .gguf)
+        // Model a (hypothetical future) minting bug: a receipt that CLAIMS decision "pass"
+        // while its measured deltas carry a > 5% regression. The verifier re-runs
+        // AdapterGate over the receipt's own measured deltas and rejects it BEFORE the HMAC
+        // check — so it can never verify, even though the decision field lies. The HMAC is
+        // deliberately garbage to prove the recompute guard fires first.
+        let regressed = GateReceipt(
+            cycleId: "cycle-1", candidatePath: path, kind: .gguf,
+            artifactDigest: digest,
+            measured: ["toolCalling": -10.0, "faeCapability": 1.0, "assistantFit": 2.0, "serialization": 0.0],
+            decision: "pass",
+            evaluatorId: "DaemonABEvaluator", baseModelId: "gemma-4-e4b",
+            evalSuiteVersion: "suite-v1", gatePolicyVersion: GatePolicy.policyVersion,
+            receiptVersion: GatePolicy.receiptVersion, mintedAt: "2026-06-21T00:00:00Z",
+            hmac: "00000000000000000000000000000000"
+        )
+        XCTAssertThrowsError(try GateReceiptVerifier.verify(regressed, expectedCandidatePath: path, using: testKey)) { error in
+            guard case GateReceiptError.measuredDeltasRejected = error else {
+                return XCTFail("expected measuredDeltasRejected, got \(error)")
+            }
+        }
+    }
+
     // MARK: - Persistence
 
     private func makeTempStore() async throws -> ImprovementStore {

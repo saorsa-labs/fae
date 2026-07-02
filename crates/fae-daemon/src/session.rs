@@ -970,11 +970,24 @@ async fn resolve_permission(
             .map(|opt| serde_json::json!({ "id": opt.id, "name": opt.name, "kind": opt.kind }))
             .collect::<Vec<_>>(),
     });
-    match requester.request("permission.request", params).await {
-        Ok(reply) => permission_decision_from_reply(&reply),
-        Err(_) => fae_acp::AcpPermissionDecision::Cancelled,
+    // Bound the round-trip like toolhost/confirm.rs: agent.prompt runs on a bare
+    // spawn (not tracked in tool_tasks), so a client that disconnects mid-approval
+    // would otherwise leave this awaiting forever, leaking the ConnSink. On
+    // timeout, fail-safe by cancelling.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_APPROVAL_TIMEOUT_SECS),
+        requester.request("permission.request", params),
+    )
+    .await
+    {
+        Ok(Ok(reply)) => permission_decision_from_reply(&reply),
+        Ok(Err(_)) | Err(_) => fae_acp::AcpPermissionDecision::Cancelled,
     }
 }
+
+/// Timeout for agent permission / fs round-trips to the client, matching
+/// `toolhost/confirm.rs`'s `CONFIRM_TIMEOUT_SECS`.
+const AGENT_APPROVAL_TIMEOUT_SECS: u64 = 60;
 
 /// Drive one fs request (`fs.read` / `fs.write`) to the client (gap A3b), which
 /// mediates it through PathPolicy/DamageControl. Returns the reply payload on
@@ -993,12 +1006,20 @@ async fn resolve_fs(
     if let Some(content) = content {
         params["content"] = serde_json::Value::String(content);
     }
-    match requester.request(method, params).await {
-        Ok(reply) => match reply.get("error").and_then(serde_json::Value::as_str) {
+    // Same bounded round-trip as resolve_permission: a mid-request disconnect
+    // must not leak the awaiting task / ConnSink. Timeout fails closed.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_APPROVAL_TIMEOUT_SECS),
+        requester.request(method, params),
+    )
+    .await
+    {
+        Ok(Ok(reply)) => match reply.get("error").and_then(serde_json::Value::as_str) {
             Some(error) => Err(error.to_owned()),
             None => Ok(reply),
         },
-        Err(_) => Err("filesystem request failed".to_owned()),
+        Ok(Err(_)) => Err("filesystem request failed".to_owned()),
+        Err(_) => Err("filesystem request timed out".to_owned()),
     }
 }
 

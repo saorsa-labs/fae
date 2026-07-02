@@ -531,16 +531,34 @@ impl LlamaServerHandle {
         })?;
         let pid = child.id();
         register_sidecar(pid);
-        let handle = LlamaServerHandle { child, base_url };
+        let mut handle = LlamaServerHandle { child, base_url };
         handle.await_ready(timeout).await?;
         Ok(handle)
     }
 
-    async fn await_ready(&self, timeout: std::time::Duration) -> Result<(), EngineError> {
+    async fn await_ready(&mut self, timeout: std::time::Duration) -> Result<(), EngineError> {
         let client = reqwest::Client::new();
         let health = format!("{}/health", self.base_url);
         let deadline = std::time::Instant::now() + timeout;
         loop {
+            // Fail loud if the child exited during startup (bad GGUF, OOM, bind
+            // failure) instead of polling a dead server for the full timeout.
+            // Orphan-identity gap: a stale llama-server already bound to the
+            // port could answer /health as "ready" — verifying server identity
+            // (e.g. GET /props alias match) is a follow-up left unaddressed here.
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    return Err(EngineError::Load(format!(
+                        "llama-server exited during startup: {status}"
+                    )));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(EngineError::Load(format!(
+                        "failed to poll llama-server during startup: {error}"
+                    )));
+                }
+            }
             if let Ok(response) = client.get(&health).send().await {
                 if response.status().is_success() {
                     return Ok(());
@@ -679,12 +697,45 @@ impl LlamaServerAdapter {
             None
         }
     }
+
+    /// True if this adapter owns a spawned sidecar whose child process has exited
+    /// (reaping it via `try_wait`). `false` for an attached (`connect`) server —
+    /// we do not own that process — or when the child is still running or its
+    /// status is unknowable (assume alive rather than thrash a respawn).
+    fn child_exited(&self) -> bool {
+        let mut guard = self.sidecar.lock().unwrap_or_else(PoisonError::into_inner);
+        match guard.handle.as_mut() {
+            Some(handle) => matches!(handle.child.try_wait(), Ok(Some(_))),
+            None => false,
+        }
+    }
+}
+
+/// Cap on consecutive sidecar respawns within [`RESPAWN_WINDOW`]. A `llama-server`
+/// (~5 GB) that dies on every launch — Metal assert, corrupt GGUF, jetsam — must
+/// fail loud, not respawn forever.
+const MAX_CONSECUTIVE_RESPAWNS: u32 = 3;
+
+/// Rolling window for the respawn cap. A death that arrives after the window has
+/// elapsed since the first one resets the counter, so isolated crashes spread
+/// over time never trip the crash-loop guard.
+const RESPAWN_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Respawn accounting for the crash-loop guard: how many sidecar deaths have been
+/// recovered within the current [`RESPAWN_WINDOW`].
+struct RespawnLedger {
+    count: u32,
+    window_start: std::time::Instant,
 }
 
 /// Lazy daemon-owned llama.cpp adapter. Construction is cheap and does not spawn
 /// or download anything; the first `stream_chat` / `reload_adapter` call starts
 /// `llama-server`. This keeps daemon/control-plane startup responsive while
 /// still supporting llama.cpp `-hf` on-demand downloads into `LLAMA_CACHE`.
+///
+/// The spawned sidecar is supervised for crash recovery: a connection-level
+/// failure against a dead child clears the cache so the NEXT turn respawns a
+/// fresh sidecar from the stored config, capped by the crash-loop guard.
 pub struct LazyLlamaServerAdapter {
     config: LlamaServerConfig,
     model_id: String,
@@ -693,6 +744,12 @@ pub struct LazyLlamaServerAdapter {
     spawned: Mutex<Option<Arc<LlamaServerAdapter>>>,
     spawn_lock: tokio::sync::Mutex<()>,
     pending_scale: AtomicU32,
+    respawn_ledger: Mutex<RespawnLedger>,
+    /// Canonical path of the last personal adapter successfully loaded via
+    /// `reload_adapter` (`None` = base model). Replayed on crash-respawn so a
+    /// deployed personalization survives a sidecar crash instead of silently
+    /// reverting to the base model with `pending_scale` re-applied to nothing.
+    last_adapter: Mutex<Option<String>>,
 }
 
 impl LazyLlamaServerAdapter {
@@ -703,6 +760,7 @@ impl LazyLlamaServerAdapter {
         timeout: std::time::Duration,
     ) -> LazyLlamaServerAdapter {
         let model_id = model_id.into();
+        let initial_adapter = config.lora_gguf.clone();
         LazyLlamaServerAdapter {
             config,
             model_id: model_id.clone(),
@@ -714,44 +772,108 @@ impl LazyLlamaServerAdapter {
             spawned: Mutex::new(None),
             spawn_lock: tokio::sync::Mutex::new(()),
             pending_scale: AtomicU32::new(1.0_f32.to_bits()),
+            respawn_ledger: Mutex::new(RespawnLedger {
+                count: 0,
+                window_start: std::time::Instant::now(),
+            }),
+            last_adapter: Mutex::new(initial_adapter),
         }
     }
 
     async fn ensure_spawned(&self) -> Result<Arc<LlamaServerAdapter>, EngineError> {
-        if let Some(adapter) = self
-            .spawned
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        // Fast path: a cached, live sidecar. A cached-but-dead sidecar (the child
+        // crashed since we spawned it) falls through to the respawn path below.
         {
-            return Ok(adapter);
+            let guard = self.spawned.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(adapter) = guard.as_ref() {
+                if !adapter.child_exited() {
+                    return Ok(Arc::clone(adapter));
+                }
+            }
         }
-        // Serialize first-spawn initialization so concurrent first requests do
-        // not race and start two llama-server children on the same port.
+        // Serialize (re)spawn so concurrent first/again requests do not race and
+        // start two llama-server children on the same port.
         let _spawn_guard = self.spawn_lock.lock().await;
-        if let Some(adapter) = self
-            .spawned
+        let mut respawn = false;
+        {
+            let guard = self.spawned.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(adapter) = guard.as_ref() {
+                if adapter.child_exited() {
+                    // The previous sidecar crashed; a fresh spawn is a respawn,
+                    // subject to the crash-loop cap. Leave the dead adapter cached
+                    // so a capped loop keeps failing loud (via `note_respawn`)
+                    // instead of silently spawning again.
+                    respawn = true;
+                } else {
+                    return Ok(Arc::clone(adapter));
+                }
+            }
+        }
+        if respawn {
+            self.note_respawn()?;
+        }
+        // Replay a previously deployed personal adapter across the (re)spawn.
+        // ensure_spawned otherwise spawns from `self.config` (base model,
+        // lora_gguf: None) because reload_adapter only mutates the inner
+        // sidecar's config — after a crash-respawn that would silently revert to
+        // the base model with `pending_scale` re-applied to nothing. Re-validate +
+        // re-hash the recorded path here (it may have been removed/tampered since
+        // deploy); fail loud rather than silently serving base.
+        let last_adapter = self
+            .last_adapter
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-        {
-            return Ok(adapter);
+            .clone();
+        let mut spawn_config = self.config.clone();
+        if let Some(path) = &last_adapter {
+            let canonical = validate_personal_adapter(path)?;
+            // Re-hash so a tampered/replaced adapter fails loud instead of being
+            // served silently. The digest is recorded on the inner adapter below.
+            sha256_file(&canonical).map_err(|error| {
+                EngineError::AdapterPath(format!("hash adapter {}: {error}", canonical.display()))
+            })?;
+            spawn_config.lora_gguf = Some(canonical.to_string_lossy().into_owned());
+        } else {
+            spawn_config.lora_gguf = None;
         }
         let adapter = Arc::new(
             LlamaServerAdapter::spawn_with_timeout(
-                self.config.clone(),
+                spawn_config,
                 self.model_id.clone(),
                 self.timeout,
             )
             .await?,
         );
         adapter.set_adapter_scale(f32::from_bits(self.pending_scale.load(Ordering::Relaxed)))?;
+        // We hold `spawn_lock`, the only writer of `spawned`, so no other task can
+        // have installed a sidecar meanwhile — replace the None/dead entry.
         let mut guard = self.spawned.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(existing) = guard.clone() {
-            return Ok(existing);
-        }
         *guard = Some(Arc::clone(&adapter));
         Ok(adapter)
+    }
+
+    /// Record a respawn and enforce the crash-loop cap. Returns an error (and does
+    /// NOT respawn) once more than [`MAX_CONSECUTIVE_RESPAWNS`] deaths occur inside
+    /// [`RESPAWN_WINDOW`], so a sidecar that dies on every launch fails loudly.
+    fn note_respawn(&self) -> Result<(), EngineError> {
+        let now = std::time::Instant::now();
+        let mut ledger = self
+            .respawn_ledger
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if now.duration_since(ledger.window_start) > RESPAWN_WINDOW {
+            ledger.count = 0;
+            ledger.window_start = now;
+        }
+        ledger.count = ledger.count.saturating_add(1);
+        if ledger.count > MAX_CONSECUTIVE_RESPAWNS {
+            return Err(EngineError::Inference(format!(
+                "llama-server sidecar crash loop: {} deaths within {}s; not respawning",
+                ledger.count,
+                RESPAWN_WINDOW.as_secs()
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -776,10 +898,18 @@ impl ProviderAdapter for LazyLlamaServerAdapter {
     }
 
     async fn reload_adapter(&self, personal_adapter: Option<String>) -> Result<(), EngineError> {
-        self.ensure_spawned()
-            .await?
-            .reload_adapter(personal_adapter)
-            .await
+        let adapter = self.ensure_spawned().await?;
+        adapter.reload_adapter(personal_adapter).await?;
+        // Record the canonical (confinement-checked) path the inner adapter
+        // actually loaded so a later crash-respawn replays THIS adapter, not the
+        // construction-time config. `loaded_adapter()` is `None` for the base
+        // model, which is exactly what we want to persist for a base reload.
+        let loaded = adapter.loaded_adapter().map(|loaded| loaded.path);
+        *self
+            .last_adapter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = loaded;
+        Ok(())
     }
 
     fn loaded_adapter(&self) -> Option<LoadedAdapter> {
@@ -882,25 +1012,39 @@ impl ProviderAdapter for LlamaServerAdapter {
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
         let body = build_chat_body(&request, &self.info.model_id, self.current_scale())?;
         let url = format!("{}/v1/chat/completions", self.base_url);
-        let http = self.http.clone();
 
-        // Drive the HTTP request inside the stream so the returned `ChatStream`
-        // is self-contained ('static), matching the mistral.rs adapter shape.
-        let mapped = async_stream::stream! {
-            let response = match http.post(&url).json(&body).send().await {
-                Ok(response) => response,
-                Err(error) => {
-                    yield Err(EngineError::Inference(format!("llama-server request failed: {error}")));
-                    return;
+        // Send the request eagerly (here, where `&self` is in scope) so a
+        // connection-level failure can consult the child via `try_wait` and
+        // surface a distinct "sidecar died" error — the lazy wrapper then
+        // respawns on the next turn. Only the successful `response` (owned,
+        // 'static) is moved into the stream, so the returned `ChatStream` stays
+        // self-contained, matching the mistral.rs adapter shape.
+        let response = match self.http.post(&url).json(&body).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                // A connect/request-level failure (refused/reset) usually means
+                // the sidecar process died. Distinguish it from HTTP/generation
+                // errors and check the child so the message tells the caller a
+                // respawn is coming; the lazy adapter reaps + respawns next turn.
+                if (error.is_connect() || error.is_request()) && self.child_exited() {
+                    return Err(EngineError::Inference(
+                        "llama-server sidecar died; respawning on next turn".to_owned(),
+                    ));
                 }
-            };
-            if !response.status().is_success() {
-                let status = response.status();
-                let detail = response.text().await.unwrap_or_default();
-                yield Err(EngineError::Inference(format!("llama-server {status}: {detail}")));
-                return;
+                return Err(EngineError::Inference(format!(
+                    "llama-server request failed: {error}"
+                )));
             }
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            return Err(EngineError::Inference(format!(
+                "llama-server {status}: {detail}"
+            )));
+        }
 
+        let mapped = async_stream::stream! {
             // SSE: events are `data: {json}\n\n`, plus `data: [DONE]`. Buffer
             // across chunk boundaries and emit one ChatEvent per delta.
             let mut byte_stream = response.bytes_stream();
@@ -932,7 +1076,17 @@ impl ProviderAdapter for LlamaServerAdapter {
                     }
                 }
             }
-            let _ = saw_done;
+            // A byte stream that ends without `data: [DONE]` is a truncated turn
+            // (mid-turn llama-server crash / dropped connection), not a complete
+            // answer. Fail loud so the caller doesn't speak a partial reply or
+            // capture it to memory as a normal turn — and do NOT flush pending
+            // tool calls from an interrupted stream.
+            if !saw_done {
+                yield Err(EngineError::Inference(
+                    "llama-server stream ended without [DONE]".to_owned(),
+                ));
+                return;
+            }
             for call in finish_pending_tool_calls(&mut pending_tool_calls) {
                 yield Ok(call);
             }
@@ -1407,6 +1561,49 @@ mod tests {
         assert!(matches!(result, Err(EngineError::Inference(_))));
         std::env::remove_var("FAE_PERSONAL_ADAPTERS_DIR");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn crash_loop_test_config() -> LlamaServerConfig {
+        LlamaServerConfig {
+            binary: "/definitely/missing/llama-server".to_owned(),
+            model: LlamaModelSource::Local {
+                model_gguf: "/tmp/model.gguf".to_owned(),
+                mmproj: None,
+                mtp_draft: None,
+            },
+            lora_gguf: None,
+            alias: "gemma-4".to_owned(),
+            enable_thinking: true,
+            mtp_draft_tokens: None,
+            port: 1,
+            ctx_size: 8192,
+            ngl: 999,
+        }
+    }
+
+    #[test]
+    fn respawn_cap_fails_loud_after_consecutive_deaths() {
+        let adapter = LazyLlamaServerAdapter::new(
+            crash_loop_test_config(),
+            "gemma-4",
+            std::time::Duration::from_millis(1),
+        );
+        // Up to the cap, deaths in the window recover silently (a real respawn).
+        for _ in 0..MAX_CONSECUTIVE_RESPAWNS {
+            adapter.note_respawn().expect("within cap recovers");
+        }
+        // One more within the same window is a crash loop → loud, distinct error
+        // instead of respawning forever.
+        let err = adapter.note_respawn().expect_err("over-cap must fail loud");
+        assert!(err.to_string().contains("crash loop"));
+    }
+
+    #[test]
+    fn child_exited_is_false_for_attached_server() {
+        // A connect (attached) adapter owns no child, so it is never reported dead
+        // — the lazy respawn path only supervises sidecars it spawned.
+        let adapter = LlamaServerAdapter::connect("http://127.0.0.1:1", "m");
+        assert!(!adapter.child_exited());
     }
 
     // ── Gap P3/C3 Stage 4: personal-adapter path confinement ─────────────────

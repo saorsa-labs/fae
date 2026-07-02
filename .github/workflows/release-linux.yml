@@ -87,12 +87,36 @@ jobs:
       - name: Install AppImage tooling
         run: |
           set -euo pipefail
+          # appimagetool is fetched, chmod +x'd and executed inside the signing
+          # step below whose env holds GPG_PRIVATE_KEY / GPG_PASSPHRASE. Fetching
+          # from the MUTABLE 'continuous' tag with no checksum would let a
+          # re-uploaded asset run attacker code with the release signing key in
+          # scope. Pin to a FIXED tagged release and SHA-256-verify before exec,
+          # mirroring scripts/install-llamacpp-runtime.py's fail-closed gate.
+          #
+          # Pinned release tag for appimagetool (immutable, NOT 'continuous').
+          AI_TAG="1.9.0"
           case "${{ matrix.arch }}" in
-            amd64) AI_ARCH=x86_64 ;;
-            arm64) AI_ARCH=aarch64 ;;
+            # OWNER ACTION REQUIRED: replace the placeholder sha256 values below
+            # with the real digests of the pinned appimagetool-<arch>.AppImage
+            # assets from the AI_TAG release, e.g.:
+            #   curl -fsSL -o at.AppImage \
+            #     https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+            #   sha256sum at.AppImage
+            # The __REPLACE_ME__ sentinels are non-hex, so the verification below
+            # fail-closes until the real digests are filled in.
+            amd64) AI_ARCH=x86_64 ; AI_SHA256="__REPLACE_ME_APPIMAGETOOL_X86_64_SHA256__" ;;
+            arm64) AI_ARCH=aarch64 ; AI_SHA256="__REPLACE_ME_APPIMAGETOOL_AARCH64_SHA256__" ;;
           esac
           curl -fsSL -o /tmp/appimagetool \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${AI_ARCH}.AppImage"
+            "https://github.com/AppImage/appimagetool/releases/download/${AI_TAG}/appimagetool-${AI_ARCH}.AppImage"
+          # Fail-closed SHA-256 verification BEFORE chmod +x / exec.
+          ACTUAL_SHA256="$(sha256sum /tmp/appimagetool | awk '{print $1}')"
+          if [ "$ACTUAL_SHA256" != "$AI_SHA256" ]; then
+            echo "::error::appimagetool ${AI_ARCH} sha256 mismatch: expected ${AI_SHA256}, got ${ACTUAL_SHA256} — refusing to execute an unverified binary with the release signing key in scope"
+            exit 1
+          fi
+          echo "appimagetool ${AI_ARCH} sha256 verified: ${ACTUAL_SHA256}"
           chmod +x /tmp/appimagetool
           # appimagetool is itself an AppImage; extract it so it runs without FUSE.
           ( cd /tmp && ./appimagetool --appimage-extract >/dev/null )
@@ -144,8 +168,11 @@ jobs:
             gpgconf --kill gpg-agent || true
             GPG_ARG=(--gpg-key "$FPR")
             echo "Signing with imported key $FPR"
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "::error::GPG_PRIVATE_KEY is required to sign Linux release packages for tag pushes"
+            exit 1
           else
-            echo "::warning::GPG_PRIVATE_KEY not set — building UNSIGNED packages"
+            echo "::warning::GPG_PRIVATE_KEY not set — building UNSIGNED packages (workflow_dispatch dry-run only)"
           fi
           DAEMON="crates/target/release/fae-daemon"
           UISHELL="native/rust/fae-ui-shell/target/release/fae-ui-shell"
@@ -183,8 +210,11 @@ jobs:
             echo "$GPG_PRIVATE_KEY" | gpg --batch --import
             gpg --verify "$DEB.asc" "$DEB"
             echo "GPG signature verified"
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "::error::GPG_PRIVATE_KEY is required to verify Linux release packages for tag pushes"
+            exit 1
           else
-            echo "::warning::Unsigned build — skipping GPG verify"
+            echo "::warning::Unsigned build — skipping GPG verify (workflow_dispatch dry-run only)"
           fi
 
       - name: Upload Linux artifacts
@@ -196,3 +226,67 @@ jobs:
             build/linux/dist/fae_*_${{ matrix.arch }}.deb.asc
             build/linux/dist/Fae-*-*.AppImage
           if-no-files-found: error
+
+  # ── Attach Linux artifacts to the GitHub Release for the tag ──────
+  # Only runs on v* tag pushes. release.yml creates the release for the same
+  # tag; softprops/action-gh-release attaches to that same release (matched by
+  # the triggering tag ref), so macOS and Linux artifacts land together.
+  publish:
+    name: Publish Linux artifacts
+    needs: build-linux
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fae-linux-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Generate Linux checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          find . -type f ! -name 'SHA256SUMS-linux.txt' -print0 \
+            | sort -z | xargs -0 sha256sum > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt
+
+      - name: Sign Linux checksums with GPG
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY:-}" ] || [ -z "${GPG_PASSPHRASE:-}" ]; then
+            echo "::error::GPG_PRIVATE_KEY and GPG_PASSPHRASE are required to sign Linux release checksums for tag pushes"
+            exit 1
+          fi
+          cd artifacts
+          export GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          echo "allow-loopback-pinentry" >> "$GNUPGHOME/gpg-agent.conf"
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --local-user "$FPR" --armor --detach-sign \
+            --output SHA256SUMS-linux.txt.asc SHA256SUMS-linux.txt
+          gpg --batch --verify SHA256SUMS-linux.txt.asc SHA256SUMS-linux.txt
+          echo "Signed SHA256SUMS-linux.txt with key $FPR"
+
+      - name: Attach Linux artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/fae_*_amd64.deb
+            artifacts/fae_*_arm64.deb
+            artifacts/fae_*_amd64.deb.asc
+            artifacts/fae_*_arm64.deb.asc
+            artifacts/Fae-*-*.AppImage
+            artifacts/SHA256SUMS-linux.txt
+            artifacts/SHA256SUMS-linux.txt.asc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
