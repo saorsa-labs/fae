@@ -1327,6 +1327,206 @@ fn parse_set_root_payload(payload: &serde_json::Value) -> Result<String, String>
     Ok(parsed.path)
 }
 
+/// The read-only `skillhost.list` handler (ADR-013 Vision A / A2.5). Returns
+/// every discovered skill with its availability (quarantined skills are listed
+/// as `available: false` + a reason, never dropped). Gated by the safe envelope
+/// scope (`ToolExecuteSafe`); no confirmation, no execution.
+pub fn run_authorized_skillhost_list(
+    record: &ClientRecord,
+    cmd: &Command,
+    skillhost: &crate::skillhost::SkillHost,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => Response::ok(
+            &cmd.request_id,
+            serde_json::json!({ "skills": skillhost.list() }),
+        ),
+        AuthzDecision::ConfirmRequired | AuthzDecision::Deny(_) => {
+            Response::error(&cmd.request_id, "forbidden", "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
+/// The `skillhost.activate` handler (ADR-013 Vision A / A2.5). Returns the full
+/// post-frontmatter `SKILL.md` body for prompt injection. Executable skills are
+/// re-verified against disk before their body is released. Safe-scope gated.
+pub fn run_authorized_skillhost_activate(
+    record: &ClientRecord,
+    cmd: &Command,
+    skillhost: &crate::skillhost::SkillHost,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => match parse_skill_name_payload(&cmd.payload) {
+            Ok(name) => match skillhost.activate(&name) {
+                Ok(body) => Response::ok(
+                    &cmd.request_id,
+                    serde_json::json!({ "name": name, "body": body }),
+                ),
+                Err(err) => skillhost_error_response(&cmd.request_id, &err),
+            },
+            Err(msg) => Response::error(&cmd.request_id, "bad_request", &msg),
+        },
+        AuthzDecision::ConfirmRequired | AuthzDecision::Deny(_) => {
+            Response::error(&cmd.request_id, "forbidden", "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
+/// The governed `skillhost.run` handler (ADR-013 Vision A / A2.5). Re-verifies
+/// the skill's integrity, resolves the declared script, and routes a
+/// `uv run --script …` command through the EXISTING governed ToolHost bash path
+/// (`execute_governed`): authorize (dangerous scope) → path → damage → owner
+/// `tool.confirm` → audit. There is NO second execution lane. Spawned by the
+/// transport loop (like `toolhost.execute`) so the confirm round-trip doesn't
+/// block reading the client's replies (BLOCKER-1).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_authorized_skillhost_run(
+    record: &ClientRecord,
+    cmd: &Command,
+    skillhost: &crate::skillhost::SkillHost,
+    toolhost: &crate::toolhost::ToolHost,
+    confirmation: &dyn crate::toolhost::confirm::ToolConfirmation,
+    cancel: tokio_util::sync::CancellationToken,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => match parse_skill_run_payload(&cmd.payload) {
+            Ok((skill, script)) => {
+                match skillhost.prepare_run(&skill, script.as_deref(), &cmd.request_id) {
+                    Ok(plan) => {
+                        // Route the built command through the SAME governed bash
+                        // pipeline as any ToolHost bash call (dangerous scope +
+                        // owner confirm enforced by execute_governed).
+                        let req = crate::toolhost::ToolHostRequest {
+                            client: record.clone(),
+                            tool: "bash".into(),
+                            input: serde_json::json!({ "command": plan.command }),
+                            call_id: cmd.request_id.clone(),
+                            cancel,
+                        };
+                        match toolhost.execute_governed(req, confirmation).await {
+                            Ok(result) => Response::ok(
+                                &cmd.request_id,
+                                serde_json::json!({
+                                    "skill": plan.skill,
+                                    "output": serde_json::to_value(&result.output)
+                                        .unwrap_or(serde_json::Value::Null),
+                                }),
+                            ),
+                            Err(err) => toolhost_error_response(&cmd.request_id, err),
+                        }
+                    }
+                    Err(err) => skillhost_error_response(&cmd.request_id, &err),
+                }
+            }
+            Err(msg) => Response::error(&cmd.request_id, "bad_request", &msg),
+        },
+        AuthzDecision::ConfirmRequired | AuthzDecision::Deny(_) => {
+            Response::error(&cmd.request_id, "forbidden", "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
+/// Parse a `{name}` payload (reject unknown fields). Used by `skillhost.activate`.
+fn parse_skill_name_payload(payload: &serde_json::Value) -> Result<String, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct NamePayload {
+        name: String,
+    }
+    let parsed: NamePayload = serde_json::from_value(payload.clone())
+        .map_err(|e| format!("invalid skillhost payload: {e}"))?;
+    if parsed.name.trim().is_empty() {
+        return Err("name must not be empty".into());
+    }
+    Ok(parsed.name)
+}
+
+/// Parse the `skillhost.run` payload `{skill, script?}` (reject unknown fields).
+/// `script` is the bare script stem (`scripts/<script>.py` is resolved against
+/// the manifest); absent ⇒ the first declared script.
+fn parse_skill_run_payload(
+    payload: &serde_json::Value,
+) -> Result<(String, Option<String>), String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RunPayload {
+        skill: String,
+        #[serde(default)]
+        script: Option<String>,
+    }
+    let parsed: RunPayload = serde_json::from_value(payload.clone())
+        .map_err(|e| format!("invalid skillhost.run payload: {e}"))?;
+    if parsed.skill.trim().is_empty() {
+        return Err("skill must not be empty".into());
+    }
+    Ok((parsed.skill, parsed.script))
+}
+
+/// Map a [`SkillHostError`](crate::skillhost::SkillHostError) to a wire response.
+fn skillhost_error_response(request_id: &str, err: &crate::skillhost::SkillHostError) -> Response {
+    use crate::skillhost::SkillHostError;
+    let (code, message) = match err {
+        SkillHostError::NotFound(name) => ("not_found", format!("skill not found: {name}")),
+        SkillHostError::Quarantined { name, reason } => {
+            ("skill_quarantined", format!("{name}: {reason}"))
+        }
+        SkillHostError::NotExecutable(name) => {
+            ("not_executable", format!("skill is not executable: {name}"))
+        }
+        SkillHostError::ScriptNotFound(name) => (
+            "script_not_found",
+            format!("no declared script for: {name}"),
+        ),
+        SkillHostError::Audit(msg) => ("audit_error", msg.clone()),
+    };
+    Response::error(request_id, code, &message)
+}
+
 /// `agent.cancel` — interrupt the session's in-flight turn (`session/cancel`).
 /// Requires `AgentExecute`.
 fn agent_cancel(
