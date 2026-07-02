@@ -2,6 +2,12 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Production readiness Phase A (green board)
+
+### Fixed
+- **Linux release job unblocked**: replaced the fail-closed placeholder SHA-256 sentinels in `.github/workflows/release-linux.yml` with the real digests of the pinned appimagetool 1.9.0 release assets (x86_64 `46fdd785…`, aarch64 `04f45ea4…`), computed from the canonical GitHub release downloads.
+- **Restore from Vault is now user-reachable**: rescue mode's Recovery tab gains a "Restore from Vault" section (visible only while rescue mode is active) that lists vault snapshots (date · message · short hash), confirms with a destructive dialog, drives the hardened `GitVaultManager.restore()` copy-then-swap path, and ends with an explicit "Quit Fae to load the restored data" step. `FaeCore` hands the vault to `RescueMode` both when rescue mode is registered and when the vault is created in `start()` (registration happens before `start()`, so the `didSet` alone would hand `nil` and the panel would silently show no backups).
+
 ## Unreleased — Connect Account (portable, Python-first)
 
 ### New Features

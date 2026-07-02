@@ -97,16 +97,14 @@ jobs:
           # Pinned release tag for appimagetool (immutable, NOT 'continuous').
           AI_TAG="1.9.0"
           case "${{ matrix.arch }}" in
-            # OWNER ACTION REQUIRED: replace the placeholder sha256 values below
-            # with the real digests of the pinned appimagetool-<arch>.AppImage
-            # assets from the AI_TAG release, e.g.:
+            # SHA-256 digests of the 1.9.0 release assets, computed 2026-07-02
+            # from the canonical GitHub release download URLs. If AI_TAG is ever
+            # bumped, recompute both digests the same way:
             #   curl -fsSL -o at.AppImage \
-            #     https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+            #     https://github.com/AppImage/appimagetool/releases/download/<tag>/appimagetool-<arch>.AppImage
             #   sha256sum at.AppImage
-            # The __REPLACE_ME__ sentinels are non-hex, so the verification below
-            # fail-closes until the real digests are filled in.
-            amd64) AI_ARCH=x86_64 ; AI_SHA256="__REPLACE_ME_APPIMAGETOOL_X86_64_SHA256__" ;;
-            arm64) AI_ARCH=aarch64 ; AI_SHA256="__REPLACE_ME_APPIMAGETOOL_AARCH64_SHA256__" ;;
+            amd64) AI_ARCH=x86_64 ; AI_SHA256="46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1" ;;
+            arm64) AI_ARCH=aarch64 ; AI_SHA256="04f45ea45b5aa07bb2b071aed9dbf7a5185d3953b11b47358c1311f11ea94a96" ;;
           esac
           curl -fsSL -o /tmp/appimagetool \
             "https://github.com/AppImage/appimagetool/releases/download/${AI_TAG}/appimagetool-${AI_ARCH}.AppImage"

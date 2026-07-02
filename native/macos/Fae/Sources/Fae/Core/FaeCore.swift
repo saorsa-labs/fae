@@ -41,7 +41,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     /// Rescue mode reference — set by FaeAppDelegate before start().
-    weak var rescueMode: RescueMode?
+    /// Hands the vault to rescue mode so its restore UI can list/restore snapshots.
+    weak var rescueMode: RescueMode? {
+        didSet { rescueMode?.vault = vaultManager }
+    }
 
     // MARK: - Subsystems
 
@@ -235,6 +238,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Initialize vault (non-blocking — backup failures are logged but not fatal).
         let vault = GitVaultManager()
         self.vaultManager = vault
+        // rescueMode is wired before start() (see didSet above), so hand it the
+        // vault now that one exists — otherwise the restore UI never sees it.
+        rescueMode?.vault = vault
         Task.detached(priority: .utility) {
             do {
                 try await vault.ensureVault()

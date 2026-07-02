@@ -7,6 +7,16 @@ struct SettingsPersonalityTab: View {
 
     @EnvironmentObject private var rescueMode: RescueMode
 
+    @State private var selectedCommit: String?
+    @State private var isLoadingSnapshots = false
+    @State private var showRestoreConfirm = false
+    @State private var restoreOutcome: RestoreOutcome?
+
+    private enum RestoreOutcome: Equatable {
+        case success
+        case failure(String)
+    }
+
     var body: some View {
         Form {
             // MARK: - Soul Contract
@@ -110,10 +120,160 @@ struct SettingsPersonalityTab: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
+
+            // MARK: - Restore from Vault (rescue mode only)
+
+            if rescueMode.isActive {
+                restoreFromVaultSection
+            }
         }
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 300)
+        .task(id: rescueMode.isActive) {
+            if rescueMode.isActive {
+                await refreshSnapshots()
+            }
+        }
+        .confirmationDialog(
+            "Restore from this backup?",
+            isPresented: $showRestoreConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Restore Backup", role: .destructive) {
+                Task { await performRestore() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(confirmMessage)
+        }
     }
+
+    // MARK: - Restore from Vault
+
+    @ViewBuilder
+    private var restoreFromVaultSection: some View {
+        Section {
+            if rescueMode.availableSnapshots.isEmpty {
+                HStack {
+                    Text(isLoadingSnapshots ? "Loading backups\u{2026}" : "No backups found in the vault.")
+                        .font(.caption)
+                        .foregroundColor(FaeDesign.textMuted)
+                    Spacer()
+                    Button("Reload") {
+                        Task { await refreshSnapshots() }
+                    }
+                    .disabled(isLoadingSnapshots)
+                }
+            } else {
+                Picker("Backup", selection: $selectedCommit) {
+                    ForEach(rescueMode.availableSnapshots, id: \.commitHash) { snapshot in
+                        Text(snapshotLabel(snapshot)).tag(Optional(snapshot.commitHash))
+                    }
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Restore Selected\u{2026}") {
+                        showRestoreConfirm = true
+                    }
+                    .disabled(selectedCommit == nil || rescueMode.isRestoring)
+                }
+
+                if rescueMode.isRestoring {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Restoring\u{2026}")
+                            .font(.caption)
+                            .foregroundColor(FaeDesign.textSecondary)
+                    }
+                }
+            }
+
+            if let outcome = restoreOutcome {
+                restoreStatusRow(outcome)
+            }
+        } header: {
+            Text("Restore from Vault")
+        } footer: {
+            Text("Replaces Fae's soul, memory, settings, and skills with a saved backup. Fae quits afterward so the restored data loads cleanly. This cannot be undone.")
+                .font(.caption2)
+                .foregroundColor(FaeDesign.textMuted)
+        }
+    }
+
+    @ViewBuilder
+    private func restoreStatusRow(_ outcome: RestoreOutcome) -> some View {
+        switch outcome {
+        case .success:
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundColor(FaeDesign.statusSuccess)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Restore complete")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(FaeDesign.textPrimary)
+                    Text("Quit Fae to load the restored data.")
+                        .font(.caption)
+                        .foregroundColor(FaeDesign.textSecondary)
+                }
+                Spacer()
+                Button("Quit Fae") {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+            .padding(.vertical, 4)
+        case .failure(let message):
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(FaeDesign.statusError)
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(FaeDesign.rowanBerryText)
+                Spacer()
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func refreshSnapshots() async {
+        isLoadingSnapshots = true
+        await rescueMode.loadSnapshots()
+        if let selected = selectedCommit,
+           !rescueMode.availableSnapshots.contains(where: { $0.commitHash == selected }) {
+            selectedCommit = nil
+        }
+        isLoadingSnapshots = false
+    }
+
+    private func performRestore() async {
+        guard let commit = selectedCommit else { return }
+        let succeeded = await rescueMode.restore(commit: commit)
+        restoreOutcome = succeeded
+            ? .success
+            : .failure("Restore failed. Your current data is unchanged.")
+    }
+
+    private func snapshotLabel(_ snapshot: GitVaultManager.VaultSnapshot) -> String {
+        let shortHash = String(snapshot.commitHash.prefix(7))
+        let date = Self.snapshotDateFormatter.string(from: snapshot.date)
+        return "\(date)  ·  \(snapshot.message)  ·  \(shortHash)"
+    }
+
+    private var confirmMessage: String {
+        guard let commit = selectedCommit,
+              let snapshot = rescueMode.availableSnapshots.first(where: { $0.commitHash == commit })
+        else {
+            return "This replaces Fae's current data with the selected backup. This cannot be undone."
+        }
+        let date = Self.snapshotDateFormatter.string(from: snapshot.date)
+        return "Fae's soul, memory, settings, and skills will be replaced with the backup from \(date). This cannot be undone."
+    }
+
+    private static let snapshotDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, HH:mm"
+        return formatter
+    }()
 
     // MARK: - Status Helpers
 

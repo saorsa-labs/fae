@@ -189,6 +189,20 @@ final class RescueModeTests: XCTestCase {
         mode.activate()
         XCTAssertTrue(mode.isActive)
     }
+
+    // The restore UI calls these before a vault is wired; they must degrade
+    // safely (empty list / false) rather than crash so the panel stays usable.
+    func testLoadSnapshotsWithoutVaultClearsList() async {
+        let mode = RescueMode()
+        await mode.loadSnapshots()
+        XCTAssertTrue(mode.availableSnapshots.isEmpty)
+    }
+
+    func testRestoreWithoutVaultReturnsFalse() async {
+        let mode = RescueMode()
+        let restored = await mode.restore(commit: "deadbeef")
+        XCTAssertFalse(restored)
+    }
 }
 
 // MARK: - OrbTypes Tests (OrbFeeling enum)
