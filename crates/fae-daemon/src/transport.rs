@@ -25,9 +25,11 @@ use crate::conductor::ConductorStore;
 use crate::events::{ConnSink, EventBus, EventSink, PlaybackRegistry};
 use crate::server_request::{ServerReply, ServerRequester};
 use crate::session::{
-    handle_frame, run_authorized_agent_prompt, run_authorized_toolhost_execute, SessionBackends,
-    SessionState,
+    handle_frame, run_authorized_agent_prompt, run_authorized_skillhost_activate,
+    run_authorized_skillhost_list, run_authorized_skillhost_run, run_authorized_toolhost_execute,
+    SessionBackends, SessionState,
 };
+use crate::skillhost::SkillHost;
 use crate::toolhost::confirm::ServerRequestConfirmation;
 use crate::toolhost::ToolHost;
 use crate::{next_event_id, now_ms};
@@ -70,6 +72,7 @@ pub async fn serve_unix(
     agents: AgentSessionRegistry,
     conductor: Arc<crate::conductor::ConductorRuntime>,
     conductor_store: Arc<ConductorStore>,
+    skill_host: Arc<SkillHost>,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
     match std::fs::remove_file(&socket_path) {
@@ -103,6 +106,7 @@ pub async fn serve_unix(
         let agents = agents.clone();
         let conductor = Arc::clone(&conductor);
         let conductor_store = Arc::clone(&conductor_store);
+        let skill_host = Arc::clone(&skill_host);
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
@@ -117,6 +121,7 @@ pub async fn serve_unix(
                 &agents,
                 conductor,
                 conductor_store,
+                skill_host,
             )
             .await
             {
@@ -141,6 +146,7 @@ async fn handle_connection(
     agents: &AgentSessionRegistry,
     conductor: Arc<crate::conductor::ConductorRuntime>,
     conductor_store: Arc<ConductorStore>,
+    skill_host: Arc<SkillHost>,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -508,6 +514,178 @@ async fn handle_connection(
                                 &cmd.request_id,
                                 "sandbox_error",
                                 "toolhost sandbox unavailable",
+                            );
+                            sink.send_line(response_line(&response)?);
+                        }
+                        continue;
+                    }
+                    // A2.5: `skillhost.list` / `skillhost.activate` — read-only
+                    // (discovery metadata + SKILL.md body). Handled inline (no
+                    // confirm round-trip, so they cannot block the read loop).
+                    if cmd.command == "skillhost.list" {
+                        let outcome =
+                            run_authorized_skillhost_list(record, &cmd, &skill_host, now, event_id);
+                        if append_audit_jsonl(audit_path, &outcome.audit).is_err() {
+                            let response = Response::error(
+                                &outcome.response.request_id,
+                                "audit_error",
+                                "audit write failed",
+                            );
+                            sink.send_line(response_line(&response)?);
+                            return Ok(());
+                        }
+                        sink.send_line(response_line(&outcome.response)?);
+                        continue;
+                    }
+                    if cmd.command == "skillhost.activate" {
+                        let outcome = run_authorized_skillhost_activate(
+                            record,
+                            &cmd,
+                            &skill_host,
+                            now,
+                            event_id,
+                        );
+                        if append_audit_jsonl(audit_path, &outcome.audit).is_err() {
+                            let response = Response::error(
+                                &outcome.response.request_id,
+                                "audit_error",
+                                "audit write failed",
+                            );
+                            sink.send_line(response_line(&response)?);
+                            return Ok(());
+                        }
+                        sink.send_line(response_line(&outcome.response)?);
+                        continue;
+                    }
+                    // A2.5: `skillhost.run` — build a `uv run --script …` command
+                    // and route it through the SAME governed ToolHost bash path
+                    // (`execute_governed`: dangerous scope + owner confirm).
+                    // SPAWNED like `toolhost.execute` (BLOCKER-1). If a session
+                    // ToolHost already exists it is reused; otherwise a skill run
+                    // gets an ephemeral TEMP sandbox (scripts are referenced by
+                    // absolute path, so the sandbox is just a cwd). To keep the
+                    // root state machine consistent with `toolhost.execute`, the
+                    // temp path is taken ONLY from `Unset` (transitioning to
+                    // `InitializedTemp`); a pending/approved/inconsistent durable
+                    // root denies fail-closed rather than shadow it with a temp
+                    // sandbox.
+                    if cmd.command == "skillhost.run" {
+                        if toolhost.is_none() {
+                            use crate::toolhost::root_confirm::ToolRootState;
+                            // Atomically decide: only `Unset` may take the temp
+                            // path (marking `InitializedTemp`); everything else
+                            // denies with a stable reason.
+                            let deny_reason: Option<&'static str> = {
+                                let mut st = root_state.lock().await;
+                                match &*st {
+                                    ToolRootState::Unset => {
+                                        *st = ToolRootState::InitializedTemp;
+                                        None
+                                    }
+                                    ToolRootState::PendingRootConfirm => {
+                                        Some("root_initialization_pending")
+                                    }
+                                    // A durable root was approved/initialized but
+                                    // no host is bound yet: run a `toolhost.execute`
+                                    // first (which binds it). Fail closed rather
+                                    // than shadow the durable root with a temp one.
+                                    _ => Some("toolhost_not_ready"),
+                                }
+                            };
+                            if let Some(reason) = deny_reason {
+                                let audit = crate::session::manual_audit(
+                                    event_id,
+                                    now,
+                                    Some(record.client_id.clone()),
+                                    "skillhost.run",
+                                    fae_control_plane::AuditDecision::Error,
+                                    reason,
+                                );
+                                let _ = append_audit_jsonl(audit_path, &audit);
+                                let response =
+                                    Response::error(&cmd.request_id, reason, "toolhost not ready");
+                                sink.send_line(response_line(&response)?);
+                                continue;
+                            }
+                            match tempfile::tempdir() {
+                                Ok(dir) => {
+                                    match ToolHost::new(
+                                        dir.path().to_path_buf(),
+                                        Limits::default(),
+                                        Arc::clone(&conductor_store),
+                                    )
+                                    .await
+                                    {
+                                        Ok(h) => {
+                                            toolhost = Some(Arc::new(h));
+                                            tool_root = Some(dir);
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "fae-daemon: skillhost toolhost init failed: {e}"
+                                            );
+                                            // Revert so a later attempt can retry.
+                                            let mut st = root_state.lock().await;
+                                            *st = ToolRootState::Unset;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("fae-daemon: skillhost sandbox init failed: {e}");
+                                    let mut st = root_state.lock().await;
+                                    *st = ToolRootState::Unset;
+                                }
+                            }
+                        }
+                        if let Some(host) = toolhost.as_ref() {
+                            let record = record.clone();
+                            let host = Arc::clone(host);
+                            let skill_host = Arc::clone(&skill_host);
+                            let confirm = Arc::clone(&confirm);
+                            let cancel = session_cancel.clone();
+                            let audit_path_t = audit_path.to_path_buf();
+                            let sink_t = Arc::clone(&sink);
+                            tool_tasks.spawn(async move {
+                                let outcome = run_authorized_skillhost_run(
+                                    &record,
+                                    &cmd,
+                                    &skill_host,
+                                    &host,
+                                    confirm.as_ref(),
+                                    cancel,
+                                    now,
+                                    event_id,
+                                )
+                                .await;
+                                if append_audit_jsonl(&audit_path_t, &outcome.audit).is_err() {
+                                    let response = Response::error(
+                                        &outcome.response.request_id,
+                                        "audit_error",
+                                        "audit write failed",
+                                    );
+                                    if let Ok(line) = response_line(&response) {
+                                        sink_t.send_line(line);
+                                    }
+                                    return;
+                                }
+                                if let Ok(line) = response_line(&outcome.response) {
+                                    sink_t.send_line(line);
+                                }
+                            });
+                        } else {
+                            let audit = crate::session::manual_audit(
+                                event_id,
+                                now,
+                                Some(record.client_id.clone()),
+                                "skillhost.run",
+                                fae_control_plane::AuditDecision::Error,
+                                "sandbox_unavailable",
+                            );
+                            let _ = append_audit_jsonl(audit_path, &audit);
+                            let response = Response::error(
+                                &cmd.request_id,
+                                "sandbox_error",
+                                "skillhost sandbox unavailable",
                             );
                             sink.send_line(response_line(&response)?);
                         }

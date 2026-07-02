@@ -32,6 +32,10 @@ const TOOLHOST_AUDIT_FILE: &str = "toolhost_audit.jsonl";
 /// Sibling to `toolhost_audit.jsonl` in the SAME private store dir, NEVER in
 /// `fae.db`/`MemoryOrchestrator` (storage-isolation invariant).
 const TOOLHOST_RECEIPTS_FILE: &str = "toolhost_receipts.jsonl";
+/// ADR-013 Vision A (A2.5): the governed SkillHost's fail-closed lifecycle audit
+/// (`skill_loaded`/`skill_quarantined`/`skill_executed`). Sibling to the
+/// ToolHost audit; SAME private store dir, NEVER `fae.db`/`MemoryOrchestrator`.
+const SKILLHOST_AUDIT_FILE: &str = "skillhost_audit.jsonl";
 const RECIPES_DIR: &str = "recipes";
 
 /// Append-only store. Cheap to clone (holds only a path).
@@ -163,6 +167,18 @@ impl ConductorStore {
         record: &impl serde::Serialize,
     ) -> Result<(), ConductorError> {
         append_jsonl(&self.dir.join(TOOLHOST_RECEIPTS_FILE), record)
+    }
+
+    /// Append one governed-SkillHost lifecycle-audit row (ADR-013 Vision A, A2.5).
+    ///
+    /// Generic over the record type so the conductor store has NO dependency on
+    /// the `skillhost` module (one-way boundary: skillhost → conductor). The
+    /// caller serializes a `SkillHostAuditRecord`.
+    pub fn append_skillhost_audit(
+        &self,
+        record: &impl serde::Serialize,
+    ) -> Result<(), ConductorError> {
+        append_jsonl(&self.dir.join(SKILLHOST_AUDIT_FILE), record)
     }
 
     /// Read all persisted feedback rows. Missing file means a fresh store

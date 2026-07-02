@@ -310,6 +310,20 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         // (FAE_TOOLHOST_WORKSPACE_GRANT). The owner approves the SPECIFIC path
         // via a distinct daemon-initiated `workspace.confirm_root` card.
         "toolhost.set_root" => &[Scope::ToolWorkspaceGrant],
+        // ADR-013 Vision A (A2.5): the governed daemon SkillHost. `list` +
+        // `activate` are read-only (discovery metadata + SKILL.md body), so they
+        // take the SAFE envelope scope. `run` deliberately ALSO takes the safe
+        // envelope (not dangerous) so the wire authorize returns `Allow` — the
+        // dangerous gate is enforced INSIDE `execute_governed` on the ToolHost
+        // bash tool it routes to (which re-checks `tool.execute_dangerous` +
+        // runs the owner `tool.confirm` round-trip). This mirrors the
+        // `toolhost.execute` two-tier model exactly: a dangerous scope at the
+        // wire would map to `ConfirmRequired` and break the deferred-confirm
+        // path. A safe-only client passes the wire but is denied at the inner
+        // bash policy (fail-closed defense in depth). Two registration points
+        // (MAJOR-2): this table runs before dispatch; the handlers are in
+        // transport.rs (`run` spawns; `list`/`activate` inline).
+        "skillhost.list" | "skillhost.activate" | "skillhost.run" => &[Scope::ToolExecuteSafe],
         "scheduler.list" => &[Scope::SchedulerRead],
         "scheduler.mutate" => &[Scope::SchedulerWrite],
         "agent.run" => &[Scope::AgentExecute],
@@ -1181,6 +1195,28 @@ mod tests {
         assert!(!ClientClass::SwiftFrontend
             .default_scopes()
             .contains(&Scope::ToolWorkspaceGrant));
+    }
+
+    #[test]
+    fn skillhost_commands_take_safe_envelope_scope() {
+        // A2.5 (ADR-013): list/activate are read-only; run defers its dangerous
+        // gate to the inner ToolHost bash policy (execute_governed). All three
+        // take the SAFE envelope so the wire authorize returns Allow (a dangerous
+        // scope here would map to ConfirmRequired and break deferred confirm).
+        for cmd in ["skillhost.list", "skillhost.activate", "skillhost.run"] {
+            assert_eq!(
+                required_scopes(cmd),
+                Some(&[Scope::ToolExecuteSafe][..]),
+                "{cmd} must require the safe envelope scope"
+            );
+        }
+        // A safe-scoped client is authorized at the wire (Allow, not
+        // ConfirmRequired) — the dangerous gate lives inside execute_governed.
+        let c = client(&[Scope::ToolExecuteSafe], 1000, None);
+        assert!(matches!(
+            authorize(&c, &cmd("skillhost.run"), 10),
+            AuthzDecision::Allow
+        ));
     }
 
     #[test]

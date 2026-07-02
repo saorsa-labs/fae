@@ -41,6 +41,11 @@ mod events;
 mod offline_turn;
 mod server_request;
 mod session;
+/// ADR-013 Vision A (A2.5) — the daemon governed skill-execution host. Discovers
+/// Fae's integrity'd skills (SKILL.md + MANIFEST.json + scripts/), fails closed
+/// on any SHA-256 mismatch, and prepares `uv run --script` commands that route
+/// through the EXISTING governed ToolHost bash path (no second execution lane).
+mod skillhost;
 /// ADR-013 Vision A — the daemon tool/skill execution host (fluers substrate).
 /// Dormant in A1: wiring + reachability proof only. A2 builds the governed
 /// ToolHost (fluers native tools + Skills over `SessionEnv`, behind a Fae
@@ -355,6 +360,19 @@ async fn main() -> DaemonResult<()> {
     }
     println!();
 
+    // A2.5: discover Fae's integrity'd skills once at startup. Default location
+    // mirrors the Swift app (`<fae data dir>/skills`); `FAE_SKILLS_DIR` overrides
+    // it. A missing dir yields an empty host (no skills) — never a startup error.
+    // The skill lifecycle audit shares the conductor store (skillhost_audit.jsonl,
+    // sibling to toolhost_audit.jsonl; NEVER fae.db).
+    let skills_dir = std::env::var_os("FAE_SKILLS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| conductor_data_dir.join("skills"));
+    let skill_audit = std::sync::Arc::new(skillhost::audit::ConductorStoreSkillAudit::new(
+        std::sync::Arc::clone(&toolhost_store),
+    ));
+    let skill_host = std::sync::Arc::new(skillhost::SkillHost::new(skills_dir, skill_audit));
+
     // Serves until the process is killed. Fails closed on bind/permission error.
     transport::serve_unix(
         socket_path,
@@ -369,6 +387,7 @@ async fn main() -> DaemonResult<()> {
         agents,
         conductor_runtime,
         toolhost_store,
+        skill_host,
     )
     .await?;
     Ok(())
