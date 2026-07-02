@@ -28,6 +28,10 @@ const MUTATIONS_FILE: &str = "conductor_recipe_mutations.jsonl";
 /// Sibling to the conductor telemetry files; lives in the SAME private store
 /// dir, NEVER in `fae.db`/`MemoryOrchestrator` (storage-isolation invariant).
 const TOOLHOST_AUDIT_FILE: &str = "toolhost_audit.jsonl";
+/// ADR-013 Vision A (B4): the governed ToolHost's fail-closed mutation receipts.
+/// Sibling to `toolhost_audit.jsonl` in the SAME private store dir, NEVER in
+/// `fae.db`/`MemoryOrchestrator` (storage-isolation invariant).
+const TOOLHOST_RECEIPTS_FILE: &str = "toolhost_receipts.jsonl";
 const RECIPES_DIR: &str = "recipes";
 
 /// Append-only store. Cheap to clone (holds only a path).
@@ -146,6 +150,19 @@ impl ConductorStore {
         record: &impl serde::Serialize,
     ) -> Result<(), ConductorError> {
         append_jsonl(&self.dir.join(TOOLHOST_AUDIT_FILE), record)
+    }
+
+    /// Append one governed-ToolHost mutation receipt (ADR-013 Vision A, B4).
+    ///
+    /// Generic over the record type so the conductor store keeps its one-way
+    /// boundary (toolhost → conductor, never the reverse). The caller serializes
+    /// a `MutationReceipt`. Fail-closed: the ToolHost denies the mutation if this
+    /// write errors.
+    pub fn append_toolhost_receipt(
+        &self,
+        record: &impl serde::Serialize,
+    ) -> Result<(), ConductorError> {
+        append_jsonl(&self.dir.join(TOOLHOST_RECEIPTS_FILE), record)
     }
 
     /// Read all persisted feedback rows. Missing file means a fresh store

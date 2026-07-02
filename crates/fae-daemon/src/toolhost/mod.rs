@@ -36,6 +36,7 @@ use crate::toolhost::audit::{AuditDecision, ConductorStoreAudit, ToolHostAudit};
 use crate::toolhost::confirm::{build_detail, ConfirmReply, ConfirmRequest, ToolConfirmation};
 use crate::toolhost::egress::{DisabledGate, ToolEgressGate};
 use crate::toolhost::policy::{EvalDecision, FaeToolPolicy, ToolHostGovernance};
+use crate::toolhost::receipts::{ConductorStoreReceipts, MutationReceipt, ToolHostReceipts};
 use fae_control_plane::ClientRecord;
 
 pub mod audit;
@@ -43,7 +44,22 @@ pub mod confirm;
 pub mod damage;
 pub mod egress;
 pub mod policy;
+pub mod receipts;
 pub mod root_confirm;
+
+/// Resolve the current user's home directory for the protected-path damage
+/// control's absolute-spelling scan (B3). `None` ⇒ only the `~`/`$HOME`/
+/// `${HOME}` symbolic spellings are scanned (still fail-closed, just less
+/// literal coverage).
+fn resolve_home() -> Option<String> {
+    std::env::var("HOME").ok().filter(|h| !h.is_empty())
+}
+
+/// The mutating tools that produce a receipt (B4). Read/glob/grep/networked are
+/// non-mutating and never reach the receipt lane.
+fn is_mutating_tool(tool: &str) -> bool {
+    matches!(tool, "write" | "edit" | "bash")
+}
 
 /// A request to execute one tool call under governance.
 #[derive(Debug, Clone)]
@@ -114,11 +130,15 @@ pub struct ToolHost {
     env: Arc<LocalSessionEnv>,
     registry: HashMap<String, Arc<dyn Tool>>,
     audit: Arc<dyn ToolHostAudit>,
+    /// (B4) Fail-closed mutation-receipt sink (write/edit/bash).
+    receipts: Arc<dyn ToolHostReceipts>,
     egress: Arc<dyn ToolEgressGate>,
     clock: Arc<dyn ToolHostClock>,
     /// (A3→B) Temp sandbox vs durable workspace — drives the workspace-wipe
     /// damage control in `evaluate`.
     root_mode: crate::toolhost::policy::RootMode,
+    /// (B3) Resolved home dir for the protected-path absolute-spelling scan.
+    home: Option<String>,
 }
 
 impl ToolHost {
@@ -140,7 +160,8 @@ impl ToolHost {
         Self::with_wiring(
             root,
             limits,
-            Arc::new(ConductorStoreAudit::new(store)),
+            Arc::new(ConductorStoreAudit::new(Arc::clone(&store))),
+            Arc::new(ConductorStoreReceipts::new(store)),
             Arc::new(DisabledGate),
             Arc::new(SystemToolHostClock),
             crate::toolhost::policy::RootMode::TempSandbox,
@@ -159,7 +180,8 @@ impl ToolHost {
         Self::with_wiring(
             root,
             limits,
-            Arc::new(ConductorStoreAudit::new(store)),
+            Arc::new(ConductorStoreAudit::new(Arc::clone(&store))),
+            Arc::new(ConductorStoreReceipts::new(store)),
             Arc::new(DisabledGate),
             Arc::new(SystemToolHostClock),
             crate::toolhost::policy::RootMode::DurableWorkspace,
@@ -167,11 +189,13 @@ impl ToolHost {
         .await
     }
 
-    /// Build a host with explicit audit/egress/clock wiring.
+    /// Build a host with explicit audit/receipts/egress/clock wiring.
+    #[allow(clippy::too_many_arguments)]
     async fn with_wiring(
         root: PathBuf,
         limits: Limits,
         audit: Arc<dyn ToolHostAudit>,
+        receipts: Arc<dyn ToolHostReceipts>,
         egress: Arc<dyn ToolEgressGate>,
         clock: Arc<dyn ToolHostClock>,
         root_mode: crate::toolhost::policy::RootMode,
@@ -195,9 +219,11 @@ impl ToolHost {
             env,
             registry,
             audit,
+            receipts,
             egress,
             clock,
             root_mode,
+            home: resolve_home(),
         })
     }
 
@@ -216,6 +242,7 @@ impl ToolHost {
             now_ms: self.clock.now_ms(),
             call_id: req.call_id.clone(),
             root_mode: self.root_mode,
+            home: self.home.clone(),
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
         let ctx = InvokeContext {
@@ -270,6 +297,7 @@ impl ToolHost {
             now_ms: self.clock.now_ms(),
             call_id: req.call_id.clone(),
             root_mode: self.root_mode,
+            home: self.home.clone(),
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
         let ev = policy.evaluate(&req.tool, &req.input).await;
@@ -279,6 +307,9 @@ impl ToolHost {
                 {
                     return Err(ToolHostError::Denied("audit_write_failed".into()));
                 }
+                // B4: fail-closed mutation receipt BEFORE execution.
+                self.write_receipt_or_deny(&req, ev.risk_label, "allowed", gov.now_ms)
+                    .await?;
                 self.run_tool(&req).await
             }
             EvalDecision::Deny(reason) => {
@@ -317,6 +348,14 @@ impl ToolHost {
                         ) {
                             return Err(ToolHostError::Denied("audit_write_failed".into()));
                         }
+                        // B4: fail-closed mutation receipt BEFORE execution.
+                        self.write_receipt_or_deny(
+                            &req,
+                            ev.risk_label,
+                            "confirmed_by_owner",
+                            gov.now_ms,
+                        )
+                        .await?;
                         self.run_tool(&req).await
                     }
                     ConfirmReply::Denied(r) => {
@@ -377,6 +416,93 @@ impl ToolHost {
             Err(_) => false,
         }
     }
+
+    /// (B4) Write the fail-closed mutation receipt for a mutating tool BEFORE it
+    /// executes. Non-mutating tools (read/glob/grep) are a no-op. A receipt-write
+    /// failure returns [`ToolHostError::Denied`] so the mutation never runs.
+    async fn write_receipt_or_deny(
+        &self,
+        req: &ToolHostRequest,
+        risk_label: &'static str,
+        outcome: &'static str,
+        ts_ms: u64,
+    ) -> Result<(), ToolHostError> {
+        if !is_mutating_tool(&req.tool) {
+            return Ok(());
+        }
+        // Bounded, redacted summary — the SAME shape the confirm channel sends
+        // (never file content). `old_exists` reuses the confirm probe.
+        let old_exists = self.probe_old_exists(&req.tool, &req.input).await;
+        let detail = match build_detail(&req.tool, &req.input, old_exists) {
+            Some(d) => d,
+            // A mutating tool we cannot summarize: fail closed rather than run an
+            // unrecorded mutation.
+            None => return Err(ToolHostError::Denied("receipt_detail_unbuildable".into())),
+        };
+        let (path, pre_image_sha256, pre_image_note) = self.pre_image(&req.tool, &req.input).await;
+        let receipt = MutationReceipt {
+            event_type: "tool_mutation",
+            ts_ms,
+            tool: req.tool.clone(),
+            call_id: req.call_id.clone(),
+            risk_class: risk_label.to_string(),
+            path,
+            pre_image_sha256,
+            pre_image_note,
+            detail,
+            outcome,
+        };
+        match self.receipts.record(receipt) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    tool = %req.tool,
+                    call_id = %req.call_id,
+                    error = %e,
+                    "toolhost receipt write failed — denying mutation"
+                );
+                Err(ToolHostError::Denied("receipt_write_failed".into()))
+            }
+        }
+    }
+
+    /// (B4) The target path + pre-image SHA-256 for the receipt. For write/edit,
+    /// reads the existing target within the edit byte cap and hashes it; for a
+    /// too-large / absent / unreadable target it records a note and no hash. For
+    /// bash there is no single target — `("not_applicable")`.
+    async fn pre_image(
+        &self,
+        tool: &str,
+        input: &Value,
+    ) -> (Option<String>, Option<String>, Option<&'static str>) {
+        if !matches!(tool, "write" | "edit") {
+            return (None, None, Some("not_applicable"));
+        }
+        let Some(path) = input.get("path").and_then(Value::as_str) else {
+            return (None, None, Some("absent"));
+        };
+        use fluers_runtime::RuntimeError;
+        match self
+            .env
+            .read_file_full(std::path::Path::new(path), Limits::default().max_edit_bytes)
+            .await
+        {
+            Ok(content) => (
+                Some(path.to_string()),
+                Some(crate::toolhost::receipts::sha256_hex(content.as_bytes())),
+                None,
+            ),
+            // Exists but exceeds the cap — record without hashing (bounded read).
+            Err(RuntimeError::FileTooLarge { .. }) => {
+                (Some(path.to_string()), None, Some("too_large"))
+            }
+            // Not found ⇒ a fresh create (no pre-image); other errors ⇒ unreadable.
+            Err(RuntimeError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                (Some(path.to_string()), None, Some("absent"))
+            }
+            Err(_) => (Some(path.to_string()), None, Some("unreadable")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -422,6 +548,7 @@ mod tests {
             now_ms: FixedClock.now_ms(),
             call_id: "call-1".into(),
             root_mode: crate::toolhost::policy::RootMode::TempSandbox,
+            home: None,
         })
     }
 
@@ -712,23 +839,20 @@ mod tests {
     // ToolHost::execute end-to-end (governed dispatch)
     // -----------------------------------------------------------------------
 
+    use crate::toolhost::receipts::{CapturingReceipts, ToolHostReceipts};
+
     async fn fresh_host(
         audit: Arc<CapturingAudit>,
         egress: Arc<dyn ToolEgressGate>,
     ) -> (ToolHost, tempfile::TempDir) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let audit_dyn: Arc<dyn ToolHostAudit> = audit;
-        let host = ToolHost::with_wiring(
-            dir.path().to_path_buf(),
-            Limits::default(),
-            audit_dyn,
+        let receipts = Arc::new(CapturingReceipts::new()) as Arc<dyn ToolHostReceipts>;
+        fresh_host_with_receipts(
+            audit,
+            receipts,
             egress,
-            Arc::new(FixedClock),
             crate::toolhost::policy::RootMode::TempSandbox,
         )
         .await
-        .expect("host");
-        (host, dir)
     }
 
     async fn fresh_durable_host(
@@ -738,15 +862,33 @@ mod tests {
         // A ToolHost bound to a DURABLE root (RootMode::DurableWorkspace) — the
         // workspace-wipe damage control is active. The "project" is a real
         // tempdir (treated as a durable workspace for the test).
+        let receipts = Arc::new(CapturingReceipts::new()) as Arc<dyn ToolHostReceipts>;
+        fresh_host_with_receipts(
+            audit,
+            receipts,
+            egress,
+            crate::toolhost::policy::RootMode::DurableWorkspace,
+        )
+        .await
+    }
+
+    /// A host with an explicit receipts sink (B4 tests capture/fail it).
+    async fn fresh_host_with_receipts(
+        audit: Arc<CapturingAudit>,
+        receipts: Arc<dyn ToolHostReceipts>,
+        egress: Arc<dyn ToolEgressGate>,
+        root_mode: crate::toolhost::policy::RootMode,
+    ) -> (ToolHost, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let audit_dyn: Arc<dyn ToolHostAudit> = audit;
         let host = ToolHost::with_wiring(
             dir.path().to_path_buf(),
             Limits::default(),
             audit_dyn,
+            receipts,
             egress,
             Arc::new(FixedClock),
-            crate::toolhost::policy::RootMode::DurableWorkspace,
+            root_mode,
         )
         .await
         .expect("host");
@@ -1101,5 +1243,252 @@ mod tests {
             .expect_err("must deny");
         assert!(matches!(err, ToolHostError::Denied(_)));
         assert!(!conf.was_called());
+    }
+
+    // -----------------------------------------------------------------------
+    // B4: mutation receipts
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn receipt_written_on_write_with_pre_image_hash() {
+        // An approved write to an EXISTING file records a receipt whose
+        // pre_image_sha256 is the hash of the pre-mutation content.
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let (host, _dir) = fresh_host_with_receipts(
+            audit,
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::new(FakeEgressGate::allow()),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await;
+        host.env
+            .write_file(std::path::Path::new("out.txt"), "OLD")
+            .await
+            .expect("seed");
+        let conf = FakeConfirmation::approve();
+        host.execute_governed(
+            req(
+                dangerous_client(),
+                "write",
+                json!({"path":"out.txt","content":"NEW"}),
+            ),
+            &conf,
+        )
+        .await
+        .expect("approved + ran");
+        let snap = receipts.snapshot();
+        assert_eq!(snap.len(), 1, "exactly one mutation receipt");
+        let r = &snap[0];
+        assert_eq!(r.tool, "write");
+        assert_eq!(r.outcome, "confirmed_by_owner");
+        assert_eq!(r.path.as_deref(), Some("out.txt"));
+        assert_eq!(
+            r.pre_image_sha256.as_deref(),
+            Some(crate::toolhost::receipts::sha256_hex(b"OLD").as_str()),
+            "pre-image hash must be of the OLD content, not the NEW write"
+        );
+        assert!(r.pre_image_note.is_none());
+    }
+
+    #[tokio::test]
+    async fn receipt_write_failure_blocks_the_mutation() {
+        // Fail-closed: if the receipt cannot be written, the write is DENIED and
+        // the file is never created.
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        receipts.set_failing();
+        let (host, _dir) = fresh_host_with_receipts(
+            audit,
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::new(FakeEgressGate::allow()),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req(
+                    dangerous_client(),
+                    "write",
+                    json!({"path":"nope.txt","content":"x"}),
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("receipt failure must deny");
+        assert!(
+            matches!(&err, ToolHostError::Denied(r) if r == "receipt_write_failed"),
+            "got {err:?}"
+        );
+        // The mutation never ran: the file must not exist.
+        assert!(
+            host.env
+                .read_file_full(std::path::Path::new("nope.txt"), 1024)
+                .await
+                .is_err(),
+            "denied mutation must not create the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn receipt_for_fresh_write_notes_absent_pre_image() {
+        // A write to a NON-existent target has no pre-image → note "absent".
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let (host, _dir) = fresh_host_with_receipts(
+            audit,
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::new(FakeEgressGate::allow()),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await;
+        let conf = FakeConfirmation::approve();
+        host.execute_governed(
+            req(
+                dangerous_client(),
+                "write",
+                json!({"path":"fresh.txt","content":"hi"}),
+            ),
+            &conf,
+        )
+        .await
+        .expect("approved + ran");
+        let snap = receipts.snapshot();
+        assert_eq!(snap[0].pre_image_sha256, None);
+        assert_eq!(snap[0].pre_image_note, Some("absent"));
+    }
+
+    #[tokio::test]
+    async fn receipt_for_bash_records_command_without_pre_image() {
+        // A bash mutation records the (redacted, bounded) command with no
+        // pre-image and note "not_applicable".
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let (host, _dir) = fresh_host_with_receipts(
+            audit,
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::new(FakeEgressGate::allow()),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await;
+        let conf = FakeConfirmation::approve();
+        // `echo` is benign — passes damage control, confirmed, runs.
+        let _ = host
+            .execute_governed(
+                req(dangerous_client(), "bash", json!({"command":"echo hi"})),
+                &conf,
+            )
+            .await;
+        let snap = receipts.snapshot();
+        assert_eq!(snap.len(), 1, "bash mutation records a receipt");
+        assert_eq!(snap[0].tool, "bash");
+        assert_eq!(snap[0].path, None);
+        assert_eq!(snap[0].pre_image_note, Some("not_applicable"));
+        // The redacted detail carries the command preview (bash command IS the action).
+        let serialized = serde_json::to_string(&snap[0].detail).expect("serialize");
+        assert!(
+            serialized.contains("echo hi"),
+            "command preview present: {serialized}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_receipt_for_non_mutating_read() {
+        // A safe read produces NO mutation receipt (read is not a mutation).
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let (host, _dir) = fresh_host_with_receipts(
+            audit,
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::new(FakeEgressGate::allow()),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await;
+        host.env
+            .write_file(std::path::Path::new("r.txt"), "hi")
+            .await
+            .expect("seed");
+        let conf = FakeConfirmation::approve();
+        host.execute_governed(
+            req(
+                client(&[Scope::ToolExecuteSafe]),
+                "read",
+                json!({"path":"r.txt"}),
+            ),
+            &conf,
+        )
+        .await
+        .expect("read runs");
+        assert!(
+            receipts.snapshot().is_empty(),
+            "read must not record a mutation receipt"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // B3: DamageControl parity (protected paths + disaster tier), end-to-end
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn governed_bash_credential_read_denies_without_prompting() {
+        // Reading a credential file via bash is a hard Block — deny, no prompt.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req(
+                    dangerous_client(),
+                    "bash",
+                    json!({"command":"cat ~/.ssh/id_rsa"}),
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("must deny");
+        assert!(matches!(err, ToolHostError::Denied(_)));
+        assert!(!conf.was_called(), "a Block must never prompt the owner");
+        assert_eq!(audit.snapshot()[0].reason, "protected_credential_path");
+    }
+
+    #[tokio::test]
+    async fn governed_write_to_home_credential_path_denies() {
+        // A write whose path names a home-anchored credential file is Blocked.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req(
+                    dangerous_client(),
+                    "write",
+                    json!({"path":"~/.aws/credentials","content":"x"}),
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("must deny");
+        assert!(matches!(err, ToolHostError::Denied(_)));
+        assert!(!conf.was_called());
+        assert_eq!(audit.snapshot()[0].reason, "protected_credential_path");
+    }
+
+    #[tokio::test]
+    async fn governed_bash_home_wipe_disaster_denies_without_prompting() {
+        // `rm -rf ~` is the Disaster tier — deny, no prompt, prominent reason.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req(dangerous_client(), "bash", json!({"command":"rm -rf ~"})),
+                &conf,
+            )
+            .await
+            .expect_err("must deny");
+        assert!(matches!(err, ToolHostError::Denied(_)));
+        assert!(!conf.was_called());
+        assert_eq!(audit.snapshot()[0].reason, "rm_home_directory");
     }
 }
