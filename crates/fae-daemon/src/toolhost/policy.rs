@@ -48,7 +48,7 @@ use fluers_core::{PolicyVerdict, ToolPolicy};
 use serde_json::Value;
 
 use crate::toolhost::audit::{AuditDecision, ToolHostAudit, ToolHostAuditRecord};
-use crate::toolhost::damage::{is_catastrophic_command, is_workspace_wipe};
+use crate::toolhost::damage::{classify_bash, classify_path_arg, is_workspace_wipe, DamageVerdict};
 use crate::toolhost::egress::{EgressDecision, ToolEgressGate};
 
 /// (A3→B) Whether the ToolHost root is the ephemeral temp sandbox or an
@@ -219,6 +219,10 @@ pub struct ToolHostGovernance {
     /// (A3→B) Temp sandbox vs durable workspace — drives the workspace-wipe
     /// damage control.
     pub(crate) root_mode: RootMode,
+    /// (B3) The resolved home directory, for the absolute-path spelling of the
+    /// protected/credential-path damage control (`~`/`$HOME` symbolic spellings
+    /// are caught without it). `None` ⇒ only the symbolic spellings are scanned.
+    pub(crate) home: Option<String>,
 }
 
 /// The internal (non-fluers) evaluation outcome — richer than
@@ -294,20 +298,51 @@ impl FaeToolPolicy {
             }
         }
 
-        // 3. PathPolicy (per-tool extractor; absent optional field ⇒ allow).
+        // 3. PathPolicy (per-tool extractor; absent optional field ⇒ allow) +
+        //    (B3) protected/credential-path damage control for read/write/edit.
         if let PathProbe::Paths(paths) = path_probe(rc, input) {
             for p in &paths {
                 if path_is_escape(p) {
                     return Evaluated::deny(risk_label, "path_escape");
                 }
             }
+            // Block reads/writes/edits of home-anchored credential/identity
+            // material (parity with Swift DamageControlPolicy's zero-access set).
+            // glob/grep patterns are searches, not file targets — Swift gates
+            // read/write/edit/bash, so we mirror that scope.
+            if matches!(rc, RiskClass::Read | RiskClass::Write | RiskClass::Edit) {
+                for p in &paths {
+                    if let DamageVerdict::Block(reason) = classify_path_arg(p) {
+                        return Evaluated::deny(risk_label, reason);
+                    }
+                }
+            }
         }
 
-        // 4. DamageControl (Shell only).
+        // 4. DamageControl (Shell only) — three-tier verdict (B3).
         if matches!(rc, RiskClass::Shell) {
             if let Some(cmd_str) = input.get("command").and_then(Value::as_str) {
-                if is_catastrophic_command(cmd_str) {
-                    return Evaluated::deny(risk_label, "damage_control");
+                match classify_bash(cmd_str, self.gov.home.as_deref()) {
+                    DamageVerdict::Allow => {}
+                    // Hard deny (root delete, disk format, credential/identity access).
+                    DamageVerdict::Block(reason) => return Evaluated::deny(risk_label, reason),
+                    // Catastrophic: the daemon denies, but loudly (never a silent
+                    // Disaster deny — the Swift tier's physical-click escape hatch
+                    // has no daemon analogue).
+                    DamageVerdict::Disaster(reason) => {
+                        tracing::warn!(
+                            tool = %tool,
+                            call_id = %self.gov.call_id,
+                            reason = %reason,
+                            "damage-control DISASTER verdict — denied"
+                        );
+                        return Evaluated::deny(risk_label, reason);
+                    }
+                    // Dangerous-but-legitimate → surface the owner confirmation.
+                    // (bash already carries `tool.execute_dangerous` scope, so
+                    // `needs_confirm` is typically already set; this keeps the
+                    // mapping explicit and covers any future safe-scoped shell.)
+                    DamageVerdict::ConfirmRequired(_) => needs_confirm = true,
                 }
                 // A3→B: under a DURABLE root, workspace-wipe commands (rm -rf .,
                 // git clean -fdx, ...) are catastrophic (real files) — deny BEFORE
