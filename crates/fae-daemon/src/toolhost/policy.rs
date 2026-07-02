@@ -223,6 +223,9 @@ pub struct ToolHostGovernance {
     /// protected/credential-path damage control (`~`/`$HOME` symbolic spellings
     /// are caught without it). `None` ⇒ only the symbolic spellings are scanned.
     pub(crate) home: Option<String>,
+    /// (B2) The execution-isolation tier this call runs under (host/jailed),
+    /// resolved from the request origin. Stamped on every audit row.
+    pub(crate) isolation: crate::toolhost::isolation::IsolationMode,
 }
 
 /// The internal (non-fluers) evaluation outcome — richer than
@@ -398,6 +401,7 @@ impl FaeToolPolicy {
             decision,
             reason: reason.into(),
             risk_class: risk_label,
+            isolation: self.gov.isolation.as_label(),
         };
         match self.gov.audit.record(rec) {
             Ok(()) => true,

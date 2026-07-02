@@ -31,6 +31,9 @@ pub struct ToolHostAuditRecord {
     pub reason: String,
     /// The risk class assigned at classification (`Read`/`Write`/`Shell`/…).
     pub risk_class: &'static str,
+    /// The execution-isolation tier the call ran (or would have run) under
+    /// (`host`/`jailed`) — from the request's origin (Phase B2).
+    pub isolation: &'static str,
 }
 
 /// The outcome of a single policy decision.

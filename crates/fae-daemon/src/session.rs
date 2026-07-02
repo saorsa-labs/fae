@@ -1121,6 +1121,11 @@ pub async fn run_authorized_toolhost_execute(
                     input,
                     call_id: cmd.request_id.clone(),
                     cancel,
+                    // The `toolhost.execute` protocol path IS the owner's
+                    // interactive Swift-loop turn — host tier. Autonomous
+                    // origins (proactive/scheduler/script) that require the OS
+                    // jail are wired in Phase C when those callers land.
+                    origin: crate::toolhost::isolation::ToolOrigin::OwnerInteractive,
                 };
                 match toolhost.execute_governed(req, confirmation).await {
                     Ok(result) => Response::ok(
