@@ -49,4 +49,10 @@ tracing-subscriber = { workspace = true }
 tempfile = "3"
 dirs = "2"
 
+# B2: OS-level execution isolation. macOS uses `/usr/bin/sandbox-exec` (no
+# crate); Linux uses Landlock (pure syscalls, no daemon/root) applied in a
+# pre_exec hook so only the tool's child process is confined.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.5"
+
 [dev-dependencies]

@@ -42,8 +42,11 @@ pub mod audit;
 pub mod confirm;
 pub mod damage;
 pub mod egress;
+pub mod isolation;
 pub mod policy;
 pub mod root_confirm;
+
+use crate::toolhost::isolation::{IsolationMode, JailedSessionEnv, ToolOrigin};
 
 /// A request to execute one tool call under governance.
 #[derive(Debug, Clone)]
@@ -58,6 +61,10 @@ pub struct ToolHostRequest {
     pub call_id: String,
     /// Cooperative cancellation.
     pub cancel: CancellationToken,
+    /// (B2) Where the call originated. Drives the required [`IsolationMode`]:
+    /// non-interactive origins require the OS jail; an owner's interactive turn
+    /// may run on the host. No `Default` — every construction states it.
+    pub origin: ToolOrigin,
 }
 
 /// The governed outcome of one tool call.
@@ -112,7 +119,14 @@ impl ToolHostClock for SystemToolHostClock {
 pub struct ToolHost {
     #[allow(dead_code)] // exercised by execute(); kept for future A3 introspection.
     env: Arc<LocalSessionEnv>,
+    /// Host-tier tools (bare fluers env — path-confined only).
     registry: HashMap<String, Arc<dyn Tool>>,
+    /// (B2) Jailed-tier tools: identical set built over a [`JailedSessionEnv`]
+    /// whose `exec` runs inside an OS sandbox. Selected per-call by isolation.
+    jailed_registry: HashMap<String, Arc<dyn Tool>>,
+    /// (B2) Whether the OS sandbox backend is present. When `false`, a call that
+    /// *requires* the jail fails closed (deny) rather than degrading to host.
+    jail_available: bool,
     audit: Arc<dyn ToolHostAudit>,
     egress: Arc<dyn ToolEgressGate>,
     clock: Arc<dyn ToolHostClock>,
@@ -176,24 +190,43 @@ impl ToolHost {
         clock: Arc<dyn ToolHostClock>,
         root_mode: crate::toolhost::policy::RootMode,
     ) -> Result<Self, ToolHostError> {
+        // Resolve the canonical real root BEFORE building the env (the seatbelt
+        // profile / landlock ruleset are generated from it verbatim). The dir is
+        // created by LocalSessionEnv::new, so canonicalize afterwards.
         let env = Arc::new(
-            LocalSessionEnv::new(root, limits)
+            LocalSessionEnv::new(root.clone(), limits)
                 .await
                 .map_err(|e| ToolHostError::Sandbox(e.to_string()))?,
         );
-        let registry = fluers_runtime::tool::mvp_tools_with_limits(
+        let real_root = tokio::fs::canonicalize(&root)
+            .await
+            .map_err(|e| ToolHostError::Sandbox(e.to_string()))?;
+
+        let index = |tools: Vec<Arc<dyn Tool>>| -> HashMap<String, Arc<dyn Tool>> {
+            tools
+                .into_iter()
+                .map(|t| {
+                    let name = t.definition().name.clone();
+                    (name, t)
+                })
+                .collect()
+        };
+        let registry = index(fluers_runtime::tool::mvp_tools_with_limits(
             Arc::clone(&env) as Arc<dyn SessionEnv>,
             limits,
-        )
-        .into_iter()
-        .map(|t| {
-            let name = t.definition().name.clone();
-            (name, t)
-        })
-        .collect();
+        ));
+        // The jailed toolset shares the same inner env (reads/writes/glob/grep
+        // are already fd-anchored); only `exec` is intercepted by the OS jail.
+        let jailed_env: Arc<dyn SessionEnv> =
+            Arc::new(JailedSessionEnv::new(Arc::clone(&env), real_root));
+        let jailed_registry = index(fluers_runtime::tool::mvp_tools_with_limits(
+            jailed_env, limits,
+        ));
         Ok(Self {
             env,
             registry,
+            jailed_registry,
+            jail_available: isolation::jail_backend_available(),
             audit,
             egress,
             clock,
@@ -209,6 +242,7 @@ impl ToolHost {
     /// trap); [`ToolHostError::UnknownTool`] for a classified-but-unregistered
     /// tool; [`ToolHostError::Tool`] for an execution failure.
     pub async fn execute(&self, req: ToolHostRequest) -> Result<ToolHostResult, ToolHostError> {
+        let isolation = req.origin.required_isolation();
         let gov = Arc::new(ToolHostGovernance {
             client: req.client.clone(),
             audit: Arc::clone(&self.audit),
@@ -216,8 +250,10 @@ impl ToolHost {
             now_ms: self.clock.now_ms(),
             call_id: req.call_id.clone(),
             root_mode: self.root_mode,
+            isolation,
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
+        self.guard_isolation(&policy, &req, isolation)?;
         let ctx = InvokeContext {
             tool_call_id: req.call_id.clone(),
             cancel: req.cancel.clone(),
@@ -236,6 +272,7 @@ impl ToolHost {
                         decision: crate::toolhost::audit::AuditDecision::Denied,
                         reason: "confirm_leaked_from_policy".into(),
                         risk_class: "Unknown",
+                        isolation: gov.isolation.as_label(),
                     })
                     .ok();
                 return Err(ToolHostError::Denied(format!(
@@ -246,7 +283,7 @@ impl ToolHost {
                 return Err(ToolHostError::Denied(reason));
             }
         }
-        self.run_tool(&req).await
+        self.run_tool(&req, isolation).await
     }
 
     /// Governed execute WITH owner confirmation (A3 — the production path for
@@ -263,6 +300,7 @@ impl ToolHost {
         req: ToolHostRequest,
         confirmation: &dyn ToolConfirmation,
     ) -> Result<ToolHostResult, ToolHostError> {
+        let isolation = req.origin.required_isolation();
         let gov = Arc::new(ToolHostGovernance {
             client: req.client.clone(),
             audit: Arc::clone(&self.audit),
@@ -270,8 +308,10 @@ impl ToolHost {
             now_ms: self.clock.now_ms(),
             call_id: req.call_id.clone(),
             root_mode: self.root_mode,
+            isolation,
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
+        self.guard_isolation(&policy, &req, isolation)?;
         let ev = policy.evaluate(&req.tool, &req.input).await;
         match ev.decision {
             EvalDecision::Allow => {
@@ -279,7 +319,7 @@ impl ToolHost {
                 {
                     return Err(ToolHostError::Denied("audit_write_failed".into()));
                 }
-                self.run_tool(&req).await
+                self.run_tool(&req, isolation).await
             }
             EvalDecision::Deny(reason) => {
                 let _ =
@@ -317,7 +357,7 @@ impl ToolHost {
                         ) {
                             return Err(ToolHostError::Denied("audit_write_failed".into()));
                         }
-                        self.run_tool(&req).await
+                        self.run_tool(&req, isolation).await
                     }
                     ConfirmReply::Denied(r) => {
                         let _ = policy.record_audit(
@@ -333,14 +373,41 @@ impl ToolHost {
         }
     }
 
+    /// Fail-closed isolation gate (B2): if the call *requires* the OS jail but
+    /// no backend is available, deny + audit BEFORE any policy evaluation or
+    /// tool dispatch — never silently degrade to host execution.
+    fn guard_isolation(
+        &self,
+        policy: &FaeToolPolicy,
+        req: &ToolHostRequest,
+        isolation: IsolationMode,
+    ) -> Result<(), ToolHostError> {
+        if isolation.requires_backend() && !self.jail_available {
+            let reason = "isolation_unavailable";
+            let _ = policy.record_audit(&req.tool, "Unknown", AuditDecision::Denied, reason);
+            return Err(ToolHostError::Denied(reason.into()));
+        }
+        Ok(())
+    }
+
     /// Dispatch an already-policy-checked tool call (the shared tail of
     /// [`execute`](Self::execute) and [`execute_governed`](Self::execute_governed)).
-    async fn run_tool(&self, req: &ToolHostRequest) -> Result<ToolHostResult, ToolHostError> {
+    /// `isolation` selects the tier: [`Jailed`](IsolationMode::Jailed) routes to
+    /// the OS-sandboxed toolset, [`Host`](IsolationMode::Host) to the bare env.
+    async fn run_tool(
+        &self,
+        req: &ToolHostRequest,
+        isolation: IsolationMode,
+    ) -> Result<ToolHostResult, ToolHostError> {
         let ctx = InvokeContext {
             tool_call_id: req.call_id.clone(),
             cancel: req.cancel.clone(),
         };
-        let Some(tool) = self.registry.get(&req.tool) else {
+        let registry = match isolation {
+            IsolationMode::Jailed => &self.jailed_registry,
+            IsolationMode::Host => &self.registry,
+        };
+        let Some(tool) = registry.get(&req.tool) else {
             return Err(ToolHostError::UnknownTool(req.tool.clone()));
         };
         let output = tool
@@ -376,6 +443,15 @@ impl ToolHost {
             // Not found / unreadable / path issue ⇒ treat as absent.
             Err(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+impl ToolHost {
+    /// Override the detected jail availability (to exercise the fail-closed
+    /// path on a runner that actually has a backend).
+    fn set_jail_available(&mut self, available: bool) {
+        self.jail_available = available;
     }
 }
 
@@ -422,6 +498,7 @@ mod tests {
             now_ms: FixedClock.now_ms(),
             call_id: "call-1".into(),
             root_mode: crate::toolhost::policy::RootMode::TempSandbox,
+            isolation: IsolationMode::Host,
         })
     }
 
@@ -768,6 +845,7 @@ mod tests {
             input: serde_json::json!({"path":"greet.txt"}),
             call_id: "c1".into(),
             cancel: CancellationToken::new(),
+            origin: ToolOrigin::OwnerInteractive,
         };
         let res = host.execute(req).await.expect("allowed + ran");
         assert!(!res.output.content.is_empty());
@@ -789,6 +867,7 @@ mod tests {
             input: serde_json::json!({"path":"a.txt"}),
             call_id: "c2".into(),
             cancel: CancellationToken::new(),
+            origin: ToolOrigin::OwnerInteractive,
         };
         let err = host.execute(req).await.unwrap_err();
         assert!(matches!(err, ToolHostError::Denied(_)));
@@ -806,12 +885,22 @@ mod tests {
     }
 
     fn req(client: ClientRecord, tool: &str, input: Value) -> ToolHostRequest {
+        req_origin(client, tool, input, ToolOrigin::OwnerInteractive)
+    }
+
+    fn req_origin(
+        client: ClientRecord,
+        tool: &str,
+        input: Value,
+        origin: ToolOrigin,
+    ) -> ToolHostRequest {
         ToolHostRequest {
             client,
             tool: tool.into(),
             input,
             call_id: "call-1".into(),
             cancel: CancellationToken::new(),
+            origin,
         }
     }
 
@@ -1101,5 +1190,197 @@ mod tests {
             .expect_err("must deny");
         assert!(matches!(err, ToolHostError::Denied(_)));
         assert!(!conf.was_called());
+    }
+
+    // -----------------------------------------------------------------------
+    // B2: execution isolation
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn required_jail_without_backend_denies_without_running() {
+        // Fail-closed: a non-interactive origin REQUIRES the jail; if no backend
+        // is available the call denies BEFORE any policy eval or tool dispatch.
+        let audit = Arc::new(CapturingAudit::new());
+        let (mut host, _dir) =
+            fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        host.set_jail_available(false); // simulate an old kernel / missing sandbox-exec
+        let conf = FakeConfirmation::approve();
+        // A plain safe read (no confirm) from a Proactive origin → jailed required.
+        let err = host
+            .execute_governed(
+                req_origin(
+                    client(&[Scope::ToolExecuteSafe]),
+                    "read",
+                    json!({"path":"a.txt"}),
+                    ToolOrigin::Proactive,
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("must deny when the required jail is unavailable");
+        match err {
+            ToolHostError::Denied(reason) => assert_eq!(reason, "isolation_unavailable"),
+            other => panic!("expected Denied(isolation_unavailable), got {other:?}"),
+        }
+        assert!(!conf.was_called(), "must deny without prompting");
+        let rows = audit.snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].reason, "isolation_unavailable");
+        assert_eq!(rows[0].isolation, "jailed");
+    }
+
+    #[tokio::test]
+    async fn owner_interactive_runs_on_host_even_without_backend() {
+        // The owner's interactive turn does NOT require the jail, so it runs on
+        // the host tier regardless of backend availability. The audit records
+        // the host tier.
+        let audit = Arc::new(CapturingAudit::new());
+        let (mut host, _dir) =
+            fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        host.set_jail_available(false);
+        host.env
+            .write_file(std::path::Path::new("a.txt"), "hi")
+            .await
+            .expect("write");
+        let conf = FakeConfirmation::approve();
+        let r = host
+            .execute_governed(
+                req_origin(
+                    client(&[Scope::ToolExecuteSafe]),
+                    "read",
+                    json!({"path":"a.txt"}),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect("owner-interactive read runs on host");
+        assert!(!r.output.content.is_empty());
+        assert_eq!(audit.snapshot()[0].isolation, "host");
+    }
+
+    #[tokio::test]
+    async fn jailed_bash_confines_writes_to_the_root() {
+        // The load-bearing proof: a jailed `bash` may write INSIDE the root but
+        // NOT to a sibling directory outside it, while the same write on the
+        // host tier (control) succeeds — so the denial is the OS jail, not perms.
+        //
+        // Uses dirs under the crate's `target/` (a non-temp base) so the sibling
+        // is outside every write-allowed subpath (root + system temp).
+        if !isolation::jail_backend_available() {
+            eprintln!("skip: no OS sandbox backend on this runner (jail unavailable)");
+            return;
+        }
+        let audit = Arc::new(CapturingAudit::new());
+        // Build a durable host rooted OUTSIDE the system temp so the sibling
+        // "outside" dir is not in the allow set.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("faejail-it-{nonce}"));
+        let root = base.join("root");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).expect("mk root");
+        std::fs::create_dir_all(&outside).expect("mk outside");
+        let host = ToolHost::with_wiring(
+            root.clone(),
+            Limits::default(),
+            Arc::clone(&audit) as Arc<dyn ToolHostAudit>,
+            Arc::new(FakeEgressGate::allow()),
+            Arc::new(FixedClock),
+            crate::toolhost::policy::RootMode::DurableWorkspace,
+        )
+        .await
+        .expect("durable host");
+
+        let outside_probe = outside.join("escape.txt");
+        let outside_cmd = format!("touch {}", shell_quote(&outside_probe.to_string_lossy()));
+        let conf = FakeConfirmation::approve();
+
+        // 1. Jailed write OUTSIDE the root must fail (non-zero exit under jail).
+        let jailed_out = host
+            .execute_governed(
+                req_origin(
+                    dangerous_client(),
+                    "bash",
+                    json!({ "command": outside_cmd }),
+                    ToolOrigin::Proactive,
+                ),
+                &conf,
+            )
+            .await
+            .expect("bash runs (the write inside it is what's denied)");
+        let exit_out = jailed_out
+            .output
+            .details
+            .as_ref()
+            .and_then(|d| d.get("exit_code"))
+            .and_then(|v| v.as_i64())
+            .expect("exit_code");
+        assert_ne!(exit_out, 0, "jailed write outside the root must fail");
+        assert!(
+            !outside_probe.exists(),
+            "the outside file must not have been created under the jail"
+        );
+
+        // 2. Jailed write INSIDE the root must succeed (exit 0 + file present).
+        let jailed_in = host
+            .execute_governed(
+                req_origin(
+                    dangerous_client(),
+                    "bash",
+                    json!({ "command": "touch inside.txt" }),
+                    ToolOrigin::Proactive,
+                ),
+                &conf,
+            )
+            .await
+            .expect("inside write runs");
+        let exit_in = jailed_in
+            .output
+            .details
+            .as_ref()
+            .and_then(|d| d.get("exit_code"))
+            .and_then(|v| v.as_i64())
+            .expect("exit_code");
+        assert_eq!(exit_in, 0, "jailed write inside the root must succeed");
+        assert!(root.join("inside.txt").exists(), "inside file must exist");
+
+        // 3. Control: the SAME outside write on the HOST tier succeeds — proving
+        //    the denial above was the OS jail, not a permission error.
+        let host_out = host
+            .execute_governed(
+                req_origin(
+                    dangerous_client(),
+                    "bash",
+                    json!({ "command": outside_cmd }),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect("host bash runs");
+        let exit_host = host_out
+            .output
+            .details
+            .as_ref()
+            .and_then(|d| d.get("exit_code"))
+            .and_then(|v| v.as_i64())
+            .expect("exit_code");
+        assert_eq!(exit_host, 0, "host write outside the root should succeed");
+        assert!(
+            outside_probe.exists(),
+            "host tier should have created the outside file"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Quote a path for safe inclusion in a `sh -c` command (test helper).
+    fn shell_quote(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
