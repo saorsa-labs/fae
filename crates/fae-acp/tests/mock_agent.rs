@@ -12,6 +12,10 @@ use std::path::Path;
 
 use fae_acp::{AcpPermissionDecision, AcpServerRequest, AcpSession, ApprovalPolicy};
 
+/// `FAE_ACP_MOCK_FS` is process-global and read at agent spawn — serialize the
+/// tests so one test's env mutation can't leak into another's spawned agent.
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Point `resolve_agent("mock")` at the freshly built mock binary.
 fn use_mock_agent() {
     std::env::set_var(
@@ -22,6 +26,7 @@ fn use_mock_agent() {
 
 #[tokio::test]
 async fn mock_agent_permission_approved() {
+    let _env = ENV_LOCK.lock().await;
     use_mock_agent();
     let session = AcpSession::start("mock", Path::new("/tmp"), ApprovalPolicy::DenyAll)
         .await
@@ -54,6 +59,7 @@ async fn mock_agent_permission_approved() {
 
 #[tokio::test]
 async fn mock_agent_permission_declined() {
+    let _env = ENV_LOCK.lock().await;
     use_mock_agent();
     let session = AcpSession::start("mock", Path::new("/tmp"), ApprovalPolicy::DenyAll)
         .await
@@ -78,6 +84,7 @@ async fn mock_agent_permission_declined() {
 
 #[tokio::test]
 async fn mock_agent_fs_read_after_write_mediated() {
+    let _env = ENV_LOCK.lock().await;
     use_mock_agent();
     // With FS enabled, an approved turn issues `fs/write_text_file` then reads it
     // back with `fs/read_text_file`, both mediated by the client (gap A3b). The
