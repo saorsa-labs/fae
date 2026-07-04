@@ -38,6 +38,10 @@ use fae_engine::{
 };
 
 mod agents;
+/// Phase G1 — pure context-compaction planning (token estimate, prompt budget,
+/// oldest-first eviction with hysteresis). Shared by the delegate child loop and
+/// the `conversation.compact` command. See `compaction.rs`.
+mod compaction;
 mod conductor;
 /// Phase F1 — the native jailed agentic loop (`conversation.delegate`). The
 /// daemon runs its own generate → execute-tool (jailed, `ToolOrigin::Delegated`)
@@ -640,6 +644,9 @@ fn conductor_cloud_lane_from_env(mode: conductor::ModelMode) -> Option<Conductor
         base_url,
         model_id,
         api_key,
+        // The specific OpenRouter model's window is not known from env; use the
+        // conservative default (Phase G1).
+        context_window: fae_engine::DEFAULT_OPENROUTER_CONTEXT_WINDOW,
     });
     Some(ConductorCloudLane {
         worker_id,

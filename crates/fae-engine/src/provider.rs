@@ -168,4 +168,10 @@ pub trait ProviderAdapter: Send + Sync {
 pub struct AdapterInfo {
     pub backend: String,
     pub model_id: String,
+    /// The model's context window, in tokens (Phase G1). Threaded to
+    /// `runtime.status` context telemetry and used to size the delegate loop's
+    /// compaction budget. A TTS adapter — which has no text context — reports
+    /// `0`; a text backend reports its configured/known window, or a
+    /// conservative documented constant when the real value is unavailable.
+    pub context_window: usize,
 }

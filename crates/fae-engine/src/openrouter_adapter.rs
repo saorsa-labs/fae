@@ -48,7 +48,17 @@ pub struct OpenRouterConfig {
     /// API key — stays in memory only; never logged, never sent over the
     /// daemon's NDJSON socket, and never included in error messages.
     pub api_key: String,
+    /// The model's context window, in tokens (Phase G1). OpenRouter serves many
+    /// models with different windows, so the caller supplies it; use
+    /// [`DEFAULT_OPENROUTER_CONTEXT_WINDOW`] when the specific model's window is
+    /// not known.
+    pub context_window: usize,
 }
+
+/// Conservative default context window for a cloud model reached through
+/// OpenRouter when the specific model's window is unknown (Phase G1). Most
+/// current chat models comfortably exceed this, so it under-promises headroom.
+pub const DEFAULT_OPENROUTER_CONTEXT_WINDOW: usize = 8192;
 
 /// A [`ProviderAdapter`] that streams chat completions from OpenRouter.
 ///
@@ -86,6 +96,7 @@ impl OpenRouterAdapter {
             info: AdapterInfo {
                 backend: "openrouter".to_owned(),
                 model_id: config.model_id,
+                context_window: config.context_window,
             },
         }
     }
@@ -299,6 +310,7 @@ mod tests {
             base_url: base_url.into(),
             model_id: "test/model-x".to_owned(),
             api_key: "sk-test-key".to_owned(),
+            context_window: DEFAULT_OPENROUTER_CONTEXT_WINDOW,
         })
     }
 

@@ -82,6 +82,8 @@ impl TtsAdapter for MockTtsAdapter {
         AdapterInfo {
             backend: "mock".to_owned(),
             model_id: self.model_id.clone(),
+            // TTS has no text context window.
+            context_window: 0,
         }
     }
 

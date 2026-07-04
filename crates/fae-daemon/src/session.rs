@@ -7,7 +7,7 @@
 //! the same control-plane-first discipline the workspace was built on.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use async_trait::async_trait;
 use fae_audio::AudioManager;
@@ -27,6 +27,57 @@ use crate::server_request::ServerRequester;
 
 /// Daemon version surfaced by `host.version`.
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Ephemeral, in-process context-usage telemetry for the most recent
+/// conversation turn (Phase G1). Recorded by [`inject_text_core`], read by the
+/// `runtime.status` command. Never persisted — a fresh daemon starts blank
+/// (`None` ⇒ the status keys render as zeros/`null`, but the keys are always
+/// present so a client can rely on the shape from the first status call).
+#[derive(Debug, Clone, Copy, Default)]
+struct LastTurnContext {
+    /// Estimated tokens in the prompt sent to the engine (system + messages).
+    prompt_tokens_est: usize,
+    /// Estimated tokens in the completion the engine returned.
+    completion_tokens_est: usize,
+    /// Whether this turn's prompt was compacted before generation. Always
+    /// `false` today: the daemon is stateless per turn (Swift resends full
+    /// history), so the interactive path never compacts — the field exists so
+    /// the telemetry shape is stable once the delegate/compaction lanes report.
+    compacted: bool,
+    /// Estimated tokens of any pinned summary folded into the prompt. `None`
+    /// when the turn carried no compaction summary.
+    pinned_summary_tokens: Option<usize>,
+}
+
+/// Process-global holder for the most recent turn's context telemetry. A plain
+/// `Mutex<Option<..>>` (never locked across an `.await`): the recorder writes it
+/// after a turn resolves, the reader clones it out for `runtime.status`.
+static LAST_TURN_CONTEXT: LazyLock<Mutex<Option<LastTurnContext>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Record the most recent turn's context telemetry (best-effort; a poisoned lock
+/// is recovered rather than propagated — telemetry must never break a turn).
+fn record_last_turn_context(snapshot: LastTurnContext) {
+    let mut guard = LAST_TURN_CONTEXT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = Some(snapshot);
+}
+
+/// The `context.last_turn` JSON for `runtime.status`. Keys are ALWAYS present;
+/// before the first turn every value is a zero/`false`/`null` placeholder.
+fn last_turn_context_json() -> serde_json::Value {
+    let snapshot = LAST_TURN_CONTEXT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_default();
+    serde_json::json!({
+        "prompt_tokens_est": snapshot.prompt_tokens_est,
+        "completion_tokens_est": snapshot.completion_tokens_est,
+        "compacted": snapshot.compacted,
+        "pinned_summary_tokens": snapshot.pinned_summary_tokens,
+    })
+}
 
 /// State carried across frames on a single connection.
 pub enum SessionState {
@@ -457,9 +508,22 @@ async fn dispatch(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResul
                 "engine": { "backend": info.backend, "model_id": info.model_id },
                 "tts": { "backend": tts_info.backend, "model_id": tts_info.model_id },
                 "adapter": adapter,
+                // Phase G1 context telemetry: the engine's window plus the most
+                // recent turn's estimated usage. `window` comes straight from the
+                // adapter; `last_turn` is the ephemeral in-process snapshot.
+                "context": {
+                    "window": info.context_window,
+                    "last_turn": last_turn_context_json(),
+                },
             }))
         }
         "conversation.inject_text" => inject_text(backends, cmd).await.map_err(Into::into),
+        // Phase G1: summarize a conversation into a compact continuation context.
+        // One bounded summarizer generation; the caller falls back to hard
+        // truncation on a typed failure.
+        "conversation.compact" => conversation_compact(backends, cmd)
+            .await
+            .map_err(Into::into),
         // M2-live §3: explicit user-feedback signal (payload-based). Requires
         // the conductor runtime (InstallKey + isolated ConductorStore).
         "conversation.feedback" => record_feedback(backends, cmd).await,
@@ -2421,6 +2485,11 @@ pub(crate) async fn inject_text_core(
     }
     let request = parse_chat_request(&cmd.payload)?;
 
+    // Phase G1: estimate the prompt's token footprint (system + every message)
+    // for `runtime.status` context telemetry. The padded NaN-retry variants are
+    // ignored here — telemetry reflects the caller's actual prompt.
+    let prompt_tokens_est = estimate_request_tokens(&request);
+
     // Orb-host-owns-state: signal that the assistant is generating. Published
     // ONLY after a successful parse (a malformed payload returns above before
     // this, so it never publishes `active:true`). The paired `active:false` is
@@ -2482,7 +2551,110 @@ pub(crate) async fn inject_text_core(
         Scope::ConversationRead,
         serde_json::json!({ "active": false }),
     );
+
+    // Phase G1: record this turn's context telemetry (best-effort). On success
+    // the completion estimate comes from the returned text; a failed turn still
+    // records the prompt estimate with a zero completion. The interactive path
+    // does not compact (the daemon is stateless per turn), so `compacted` is
+    // false and there is no pinned summary.
+    let completion_tokens_est = outcome
+        .as_ref()
+        .ok()
+        .and_then(|value| value.get("text").and_then(serde_json::Value::as_str))
+        .map_or(0, crate::compaction::estimate_tokens);
+    record_last_turn_context(LastTurnContext {
+        prompt_tokens_est,
+        completion_tokens_est,
+        compacted: false,
+        pinned_summary_tokens: None,
+    });
+
     outcome
+}
+
+/// Estimate the total prompt tokens of a [`ChatRequest`] — the system prompt
+/// plus every message's content — via the shared [`crate::compaction`]
+/// heuristic. Text-only (audio clips are not counted).
+fn estimate_request_tokens(request: &ChatRequest) -> usize {
+    let system = request
+        .system
+        .as_deref()
+        .map_or(0, crate::compaction::estimate_tokens);
+    system + crate::compaction::estimate_messages(&request.messages)
+}
+
+/// System prompt for the bounded conversation summarizer (Phase G1). Faithful,
+/// neutral, no preamble — the output folds directly into a continuation prompt.
+const SUMMARIZER_SYSTEM_PROMPT: &str = "Summarize this conversation faithfully \
+     for continuation context. Preserve the user's goals, the key facts, any \
+     decisions made, and any unfinished tasks. Be concise and neutral: do not \
+     add new information, opinions, or a preamble. Output only the summary.";
+
+/// Hard cap on the summarizer's output — small enough that the summary folds
+/// back into a prompt without reintroducing the overflow it resolves. Note: the
+/// [`ChatRequest`] contract has no temperature knob, so "low temperature" is
+/// left to the adapter/model default; boundedness is enforced by this token cap.
+pub(crate) const SUMMARY_MAX_TOKENS: usize = 256;
+
+/// Payload for `conversation.compact`: the messages to summarize. Strict
+/// (`deny_unknown_fields`); each entry uses the same wire shape as inject_text.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompactPayload {
+    messages: Vec<serde_json::Value>,
+}
+
+/// `conversation.compact` (Phase G1) — run ONE bounded summarizer generation
+/// over the given messages and return `{ summary, tokens_est }`. A summarizer
+/// failure surfaces a typed error so the caller can fall back to hard truncation.
+async fn conversation_compact(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let payload: CompactPayload =
+        serde_json::from_value(cmd.payload.clone()).map_err(|_| "bad_request")?;
+    if payload.messages.is_empty() {
+        return Err("bad_request");
+    }
+    let messages = payload
+        .messages
+        .iter()
+        .map(parse_message)
+        .collect::<Result<Vec<_>, _>>()?;
+    let summary = summarize_conversation(backends.engine, messages).await?;
+    let tokens_est = crate::compaction::estimate_tokens(&summary);
+    Ok(serde_json::json!({ "summary": summary, "tokens_est": tokens_est }))
+}
+
+/// Run ONE bounded summarizer generation over `messages`, returning the summary
+/// text. Shared by `conversation.compact` and the delegate loop's history
+/// compaction so both use the IDENTICAL bounded path. Bounded by
+/// [`SUMMARY_MAX_TOKENS`]; an empty result is a typed failure (never a silent
+/// empty summary that would erase context).
+pub(crate) async fn summarize_conversation(
+    engine: &dyn ProviderAdapter,
+    messages: Vec<ChatMessage>,
+) -> Result<String, &'static str> {
+    let request = ChatRequest {
+        system: Some(SUMMARIZER_SYSTEM_PROMPT.to_owned()),
+        messages,
+        tools: Vec::new(),
+        max_tokens: SUMMARY_MAX_TOKENS,
+    };
+    let turn = run_turn(engine, request).await.map_err(|detail| {
+        eprintln!("fae-daemon: conversation summarizer failed: {detail}");
+        "summarize_failed"
+    })?;
+    let summary = turn
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if summary.is_empty() {
+        return Err("summarize_empty");
+    }
+    Ok(summary)
 }
 
 /// B5 cascaded ASR fallback. The Swift app decides when a primary transcript is
@@ -3780,6 +3952,179 @@ mod tests {
         assert!(
             result["adapter"].is_null(),
             "mock backend loads no adapter → null"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_status_reports_context_telemetry_keys() {
+        // Phase G1: runtime.status must carry a `context` block — the engine's
+        // window plus a `last_turn` snapshot whose keys are ALWAYS present, so a
+        // client can rely on the shape from the first status call (before any
+        // turn has run). Mirrors the adapter-key-must-exist contract above.
+        let reg = registry();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame("runtime.status", serde_json::json!({})),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(out.response.ok, "runtime.status should succeed");
+        let result = out.response.result.expect("result");
+        let context = result.get("context").expect("context block present");
+        // `window` comes straight from the adapter (mock's default window).
+        assert_eq!(
+            context["window"].as_u64(),
+            Some(fae_engine::DEFAULT_MOCK_CONTEXT_WINDOW as u64),
+            "context.window must be the engine's context window (got {context})"
+        );
+        let last = context.get("last_turn").expect("last_turn present");
+        for key in [
+            "prompt_tokens_est",
+            "completion_tokens_est",
+            "compacted",
+            "pinned_summary_tokens",
+        ] {
+            assert!(
+                last.get(key).is_some(),
+                "last_turn must always carry `{key}` (got {last})"
+            );
+        }
+        // The interactive path never compacts (the daemon is stateless per turn).
+        assert_eq!(last["compacted"], serde_json::Value::Bool(false));
+    }
+
+    /// Records the last request it received, then returns a fixed final answer —
+    /// lets a test assert the summarizer generation is bounded (Phase G1).
+    struct RecordingAdapter {
+        last: Mutex<Option<ChatRequest>>,
+        answer: String,
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for RecordingAdapter {
+        fn describe(&self) -> fae_engine::AdapterInfo {
+            fae_engine::AdapterInfo {
+                backend: "recording".to_owned(),
+                model_id: "recording".to_owned(),
+                context_window: 8192,
+            }
+        }
+        async fn stream_chat(
+            &self,
+            request: ChatRequest,
+        ) -> Result<fae_engine::ChatStream, fae_engine::EngineError> {
+            *self
+                .last
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(request);
+            let events = vec![
+                Ok(ChatEvent::Token(self.answer.clone())),
+                Ok(ChatEvent::Done {
+                    finish_reason: "stop".to_owned(),
+                }),
+            ];
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    #[tokio::test]
+    async fn summarize_conversation_is_bounded_and_uses_summarizer_prompt() {
+        // Phase G1 boundedness: ONE generation, capped at SUMMARY_MAX_TOKENS, no
+        // tools, and the dedicated summarizer system prompt.
+        let engine = RecordingAdapter {
+            last: Mutex::new(None),
+            answer: "compact summary".to_owned(),
+        };
+        let messages = vec![
+            ChatMessage::text(Role::User, "let's plan the trip"),
+            ChatMessage::text(Role::Assistant, "sure, where to?"),
+        ];
+        let summary = summarize_conversation(&engine, messages)
+            .await
+            .expect("summary");
+        assert_eq!(summary, "compact summary");
+        let sent = engine
+            .last
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("request recorded");
+        assert_eq!(
+            sent.max_tokens, SUMMARY_MAX_TOKENS,
+            "summary is token-bounded"
+        );
+        assert!(sent.tools.is_empty(), "summarizer takes no tools");
+        assert_eq!(sent.system.as_deref(), Some(SUMMARIZER_SYSTEM_PROMPT));
+    }
+
+    #[tokio::test]
+    async fn summarize_conversation_empty_result_is_typed_error() {
+        // A blank summary must never silently erase context — it is a typed
+        // failure so the caller falls back to hard truncation.
+        let engine = MockAdapter::scripted(
+            "m",
+            vec![vec![ChatEvent::Done {
+                finish_reason: "stop".to_owned(),
+            }]],
+        );
+        let err = summarize_conversation(&engine, vec![ChatMessage::text(Role::User, "hi")])
+            .await
+            .expect_err("empty summary is an error");
+        assert_eq!(err, "summarize_empty");
+    }
+
+    #[tokio::test]
+    async fn conversation_compact_returns_summary_and_estimate() {
+        // End-to-end through handle_frame: the command wires to the handler and
+        // returns { summary, tokens_est }.
+        let reg = registry();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let engine = MockAdapter::scripted(
+            "m",
+            vec![vec![
+                ChatEvent::Token("brief recap".to_owned()),
+                ChatEvent::Done {
+                    finish_reason: "stop".to_owned(),
+                },
+            ]],
+        );
+        let out = handle_frame(
+            &reg,
+            &engine,
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame(
+                "conversation.compact",
+                serde_json::json!({
+                    "messages": [
+                        { "role": "user", "content": "a long conversation about x" },
+                        { "role": "assistant", "content": "and my reply" }
+                    ]
+                }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(
+            out.response.ok,
+            "conversation.compact should succeed: {:?}",
+            out.response.error
+        );
+        let result = out.response.result.expect("result");
+        assert_eq!(result["summary"], "brief recap");
+        assert_eq!(
+            result["tokens_est"].as_u64(),
+            Some(crate::compaction::estimate_tokens("brief recap") as u64)
         );
     }
 

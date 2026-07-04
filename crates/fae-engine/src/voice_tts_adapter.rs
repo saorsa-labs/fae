@@ -57,6 +57,8 @@ impl VoiceTtsAdapter {
         let info = AdapterInfo {
             backend: "voice-tts".to_owned(),
             model_id: model_repo.clone(),
+            // TTS has no text context window.
+            context_window: 0,
         };
         let (jobs, receiver) = mpsc::channel::<Job>();
         std::thread::Builder::new()

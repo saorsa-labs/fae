@@ -290,6 +290,11 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         // registration points (MAJOR-2): this table runs *before* dispatch;
         // the handler arm is in fae-daemon `session.rs::dispatch`.
         "conversation.feedback" => &[Scope::ConversationWrite],
+        // Phase G1: `conversation.compact` runs conversation content through the
+        // engine to produce a continuation summary — same scope family as
+        // inject_text. Two registration points: this table runs before dispatch;
+        // the handler arm is in fae-daemon `session.rs::dispatch`.
+        "conversation.compact" => &[Scope::ConversationWrite],
         // M2-live §4: advisory reward snapshot (read-only). StatusRead — the
         // existing pattern for aggregate operator surfaces with no conversation
         // content (runtime.status, agent.list). Two registration points (§4.3):

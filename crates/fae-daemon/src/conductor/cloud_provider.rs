@@ -181,6 +181,7 @@ mod tests {
             AdapterInfo {
                 backend: "cut".to_owned(),
                 model_id: "cut".to_owned(),
+                context_window: 8192,
             }
         }
         async fn stream_chat(&self, _request: ChatRequest) -> Result<ChatStream, EngineError> {
@@ -208,6 +209,7 @@ mod tests {
             AdapterInfo {
                 backend: "err".to_owned(),
                 model_id: "err".to_owned(),
+                context_window: 8192,
             }
         }
         async fn stream_chat(&self, _request: ChatRequest) -> Result<ChatStream, EngineError> {
