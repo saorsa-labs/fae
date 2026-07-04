@@ -35,6 +35,9 @@ final class ConversationEventBridgeController: ObservableObject {
     /// are silently discarded when the next real transcription overwrites the buffer.
     private var pendingUserTranscription: String? = nil
 
+    /// Closure for sending peer commands to the daemon. Wired by FaeApp (Phase E).
+    var peerCommandSender: ((String, [String: Any]) -> Void)?
+
     init() {
         subscribe()
     }
@@ -164,6 +167,18 @@ final class ConversationEventBridgeController: ObservableObject {
                 let isActive = userInfo["is_active"] as? Bool ?? false
                 Task { @MainActor [weak self] in
                     self?.handleThinkingText(text: text, isActive: isActive)
+                }
+            }
+        )
+
+        // x0x peer events (Phase E)
+        observations.append(
+            center.addObserver(
+                forName: .faePeerEvent, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo else { return }
+                Task { @MainActor [weak self] in
+                    self?.handlePeerEvent(userInfo: userInfo)
                 }
             }
         )
@@ -531,5 +546,76 @@ final class ConversationEventBridgeController: ObservableObject {
     /// user/assistant/tool interaction messages.
     private func appendStatusMessage(_ text: String) {
         subtitleState?.showToolMessage(text)
+    }
+
+    // MARK: - x0x Peer Events (Phase E)
+
+    private func handlePeerEvent(userInfo: [AnyHashable: Any]) {
+        let event = userInfo["event"] as? String ?? ""
+        let sender = userInfo["sender"] as? String ?? "<unknown>"
+        let senderShort = String(sender.prefix(8))
+        switch event {
+        case "peer.message":
+            let text = userInfo["text"] as? String ?? ""
+            let attributed = "[\(senderShort)\u{2026} via x0x] \(text)"
+            subtitleState?.showToolMessage(attributed)
+            activeConversationRuntimeController?.appendMessage(role: .tool, content: attributed)
+        case "peer.consent":
+            let kind = userInfo["kind"] as? String ?? "unknown"
+            let label: String
+            switch kind {
+            case "consent_receipt":    label = "Connection authorized by \(senderShort)\u{2026}"
+            case "consent_revocation": label = "Connection revoked by \(senderShort)\u{2026}"
+            default:                   label = "Consent (\(kind)) from \(senderShort)\u{2026}"
+            }
+            subtitleState?.showToolMessage("x0x: \(label)")
+            NSLog("ConversationEventBridgeController: peer consent %@ from %@", kind, senderShort)
+        case "peer.handoff_offer":
+            let sourceMachine = userInfo["source_machine"] as? String ?? "<unknown>"
+            let tailLen = userInfo["tail_len"] as? Int ?? 0
+            let pendingTurn = userInfo["pending_turn"] as? String
+            showHandoffOfferAlert(
+                sender: sender, senderShort: senderShort,
+                sourceMachine: sourceMachine, tailLen: tailLen,
+                pendingTurn: pendingTurn)
+        default:
+            NSLog("ConversationEventBridgeController: unhandled peer event: %@", event)
+        }
+    }
+
+    private func showHandoffOfferAlert(
+        sender: String,
+        senderShort: String,
+        sourceMachine: String,
+        tailLen: Int,
+        pendingTurn: String?
+    ) {
+        let alert = NSAlert()
+        alert.messageText = "Continue conversation from \(sourceMachine)?"
+        let detail = tailLen > 0
+            ? "\(senderShort)\u{2026} is offering to hand off a conversation (\(tailLen) previous turn\(tailLen == 1 ? "" : "s"))."
+            : "\(senderShort)\u{2026} is offering to hand off a new conversation."
+        alert.informativeText = {
+            if let pt = pendingTurn, !pt.isEmpty {
+                return "\(detail)\n\nPending message: \u{201C}\(pt)\u{201D}"
+            }
+            return detail
+        }()
+        alert.addButton(withTitle: "Accept")
+        alert.addButton(withTitle: "Decline")
+        alert.alertStyle = .informational
+        if alert.runModal() == .alertFirstButtonReturn {
+            if let pt = pendingTurn, !pt.isEmpty {
+                NotificationCenter.default.post(
+                    name: .faeConversationInjectText,
+                    object: nil,
+                    userInfo: ["text": pt, "prefill_only": true])
+            }
+            activeConversationRuntimeController?.appendMessage(
+                role: .tool,
+                content: "[Handoff accepted from \(sourceMachine)] Ready to continue.")
+            subtitleState?.showToolMessage("Handoff from \(sourceMachine) accepted.")
+            NSLog("ConversationEventBridgeController: handoff from %@ accepted", sourceMachine)
+        }
     }
 }

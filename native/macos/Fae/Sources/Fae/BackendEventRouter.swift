@@ -234,6 +234,44 @@ final class BackendEventRouter: Sendable {
                 userInfo: payload
             )
 
+        // MARK: - x0x Peer Events (Phase E)
+
+        case "peer.message":
+            let sender = payload["sender"] as? String ?? "<unknown>"
+            let text = payload["text"] as? String ?? ""
+            NotificationCenter.default.post(
+                name: .faePeerEvent, object: nil,
+                userInfo: ["event": "peer.message", "sender": sender, "text": text])
+
+        case "peer.presence":
+            let sender = payload["sender"] as? String ?? "<unknown>"
+            let status = payload["status"] as? String ?? "unknown"
+            NSLog("BackendEventRouter: peer presence — %@ is %@", sender, status)
+
+        case "peer.consent":
+            let sender = payload["sender"] as? String ?? "<unknown>"
+            let kind = payload["kind"] as? String ?? "unknown"
+            NotificationCenter.default.post(
+                name: .faePeerEvent, object: nil,
+                userInfo: ["event": "peer.consent", "sender": sender, "kind": kind])
+
+        case "peer.handoff_offer":
+            let sender = payload["sender"] as? String ?? "<unknown>"
+            let sourceMachine = payload["source_machine"] as? String ?? "<unknown>"
+            let tailLen = payload["tail_len"] as? Int ?? 0
+            var peerUserInfo: [String: Any] = [
+                "event": "peer.handoff_offer",
+                "sender": sender,
+                "source_machine": sourceMachine,
+                "tail_len": tailLen,
+            ]
+            if let pt = payload["pending_turn"] as? String { peerUserInfo["pending_turn"] = pt }
+            NotificationCenter.default.post(name: .faePeerEvent, object: nil, userInfo: peerUserInfo)
+
+        case "peer.consent_result", "peer.info":
+            NSLog("BackendEventRouter: peer event %@ — payload keys: %@",
+                  event, payload.keys.joined(separator: ","))
+
         // MARK: - Pipeline State (all remaining pipeline.* events)
 
         default:
@@ -473,4 +511,18 @@ extension Notification.Name {
     /// userInfo keys:
     /// - `error: String` — failure description
     static let faeDataResetFailed = Notification.Name("faeDataResetFailed")
+
+    // MARK: - x0x Peer (Phase E)
+
+    /// Posted for actionable x0x peer events decoded from the daemon event stream.
+    ///
+    /// userInfo keys (all String unless noted):
+    /// - `event`          — "peer.message" | "peer.consent" | "peer.handoff_offer"
+    /// - `sender`         — remote agent ID
+    /// - `text`           — message body (peer.message only)
+    /// - `kind`           — "consent_receipt" | "consent_revocation" (peer.consent only)
+    /// - `source_machine` — origin host name (peer.handoff_offer only)
+    /// - `tail_len`       — Int, prior-turn count (peer.handoff_offer only)
+    /// - `pending_turn`   — optional pending user query (peer.handoff_offer only)
+    static let faePeerEvent = Notification.Name("faePeerEvent")
 }

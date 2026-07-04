@@ -2,6 +2,23 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Phase E commit 3 (Swift surface: peer messages, consent + handoff cards, owner-fleet config)
+
+### New Features
+- **`[x0x]` FaeConfig section**: three keys (`enabled`, `ownerFleet`, `allowList`); fully round-tripped through parse → serialize → re-parse. `X0xConfig` struct added to `FaeConfig`; wired into `DaemonLLMEngine.setX0xConfig()` (called by `FaeCore` before `load()`) so `FAE_X0X_INGRESS`, `FAE_X0X_OWNER_FLEET`, and `FAE_X0X_ALLOW` are injected into the daemon environment automatically.
+- **`peer.*` event decode**: `DaemonEventSubscriber.dispatchEvent()` now forwards any `peer.*` event it receives onto `.faeBackendEvent` (previously dropped silently). `BackendEventRouter` routes `peer.message`, `peer.consent`, `peer.handoff_offer`, and `peer.presence` to the new `.faePeerEvent` notification. `peer.consent_result` / `peer.info` are logged.
+- **Peer event rendering in `ConversationEventBridgeController`**: subscribes to `.faePeerEvent`. `peer.message` appends an attributed remote message to the conversation surface and subtitle overlay. `peer.consent` shows a subtitle notification identifying the sender and consent direction (authorized / revoked). `peer.handoff_offer` presents an `NSAlert` (Accept / Decline) — Accept injects any `pending_turn` via `.faeConversationInjectText` and appends a status message.
+- **"Hand off to…" menu in Edit**: when `[x0x] ownerFleet` is non-empty, a `Menu("Hand off to…")` is appended to `CommandMenu("Edit")` listing each fleet agent ID (truncated to 12 chars). Selecting one calls `FaeAppDelegate.sendX0xHandoff(to:)`, which snapshots the current conversation and sends `peer.handoff_send` to the daemon.
+- **`FaeCore.sendPeerCommand(_:payload:)`**: public helper that casts `llmEngine` to `DaemonLLMEngine` and calls `sendPeerCommand(_:payload:)` on it; logs loudly if the daemon engine is not active. `DaemonLLMEngine.sendPeerCommand` is a thin public wrapper over `sendAdapterCommand`.
+- **"x0x Connections" settings section**: new `Section.x0x` in `SettingsModelsPrivacyTab` with a toggle, owner-fleet text editor, and allow-list text editor. Hydrated from `FaeConfig.load()` on appear.
+
+### Tests
+- `FaeConfigParsingTests`: five new tests — `testX0xEnabledDefaultIsFalse`, `testX0xEnabledRoundTrip`, `testX0xOwnerFleetRoundTrip`, `testX0xAllowListRoundTrip`, `testX0xSerializationRoundTrip`.
+
+### Deviations from spec
+- `peer.consent` carries no `envelope_id` in the wire payload — it is a `ConsentReceipt`/`ConsentRevocation` notification, not a consent request. Rendered as subtitle notification only (no approval card).
+- `peer.handoff_offer` omits `conversation_tail` in the wire event (only `tail_len` is sent); only `pending_turn` is injected into the input path.
+
 ## Unreleased — Phase E commit 2 (x0x SSE peer ingress + outbound commands)
 
 ### New Features

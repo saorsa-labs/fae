@@ -808,6 +808,15 @@ actor DaemonLLMEngine: LLMEngine {
     /// Daily budget cap passed as `FAE_CLOUD_DAILY_BUDGET_MICROS` to the daemon.
     var cloudDailyBudgetUSD: Double = 2.0
 
+    // MARK: - x0x peer lane (Phase E)
+
+    /// Enable x0x peer ingress (FAE_X0X_INGRESS=1). Set by FaeCore before load().
+    var x0xEnabled: Bool = false
+    /// Owner-fleet agent IDs forwarded as FAE_X0X_OWNER_FLEET.
+    var x0xOwnerFleet: [String] = []
+    /// Allow-list agent IDs forwarded as FAE_X0X_ALLOW.
+    var x0xAllowList: [String] = []
+
     // MARK: - B-Swift Phase B: crash-supervisor state
     //
     // The supervisor owns the bounded-restart POLICY (pure, injectable clock).
@@ -945,6 +954,14 @@ actor DaemonLLMEngine: LLMEngine {
     func setCloudLane(privacyLane: String, budgetUSD: Double) {
         cloudPrivacyLane = privacyLane
         cloudDailyBudgetUSD = min(max(budgetUSD, 0.01), 100.0)
+    }
+
+    /// Set x0x peer lane parameters before `load()` is called.
+    /// Called by FaeCore immediately after constructing the engine.
+    func setX0xConfig(enabled: Bool, ownerFleet: [String], allowList: [String]) {
+        x0xEnabled = enabled
+        x0xOwnerFleet = ownerFleet
+        x0xAllowList = allowList
     }
 
     // MARK: LLMEngine
@@ -1247,6 +1264,12 @@ actor DaemonLLMEngine: LLMEngine {
                 command, code, output.tail(1_000))
             throw DaemonLLMEngineError.adapterCommandFailed(command: command, code: code)
         }
+    }
+
+    /// Send a peer command to the daemon (e.g. `peer.send`, `peer.handoff_send`).
+    /// Thin public wrapper over the private `sendAdapterCommand`.
+    func sendPeerCommand(_ command: String, payload: [String: Any]) async throws {
+        try await sendAdapterCommand(command: command, payload: payload)
     }
 
     // MARK: - Audio two-pass helpers (S18)
@@ -1681,6 +1704,19 @@ actor DaemonLLMEngine: LLMEngine {
             // Never log the key — only confirm the lane is active.
             NSLog("DaemonLLMEngine: cloud lane active (lane=%@, budget=%.2f USD/day)",
                   resolvedLane, cloudDailyBudgetUSD)
+        }
+
+        // x0x peer lane (Phase E)
+        if x0xEnabled {
+            environment["FAE_X0X_INGRESS"] = "1"
+            if !x0xOwnerFleet.isEmpty {
+                environment["FAE_X0X_OWNER_FLEET"] = x0xOwnerFleet.joined(separator: ",")
+            }
+            if !x0xAllowList.isEmpty {
+                environment["FAE_X0X_ALLOW"] = x0xAllowList.joined(separator: ",")
+            }
+            NSLog("DaemonLLMEngine: x0x peer ingress enabled (fleet=%d, allow=%d)",
+                  x0xOwnerFleet.count, x0xAllowList.count)
         }
 
         daemonProcess.environment = environment

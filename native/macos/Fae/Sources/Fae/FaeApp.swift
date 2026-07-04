@@ -399,6 +399,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         orbBridge.orbState = orbState
         conversationBridge.subtitleState = subtitles
         conversationBridge.conversationController = conversation
+        conversationBridge.peerCommandSender = { [weak faeCore] command, payload in
+            faeCore?.sendPeerCommand(command, payload: payload)
+        }
         pipelineAux.canvasController = canvasController
         pipelineAux.auxiliaryWindows = auxiliaryWindows
         pipelineAux.subtitleState = subtitles
@@ -1052,6 +1055,32 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Fae: restored handoff from iCloud KV store")
         }
     }
+
+    // MARK: - x0x Handoff (Phase E)
+
+    /// Send the current conversation snapshot to a peer Fae instance via x0x.
+    func sendX0xHandoff(to agentId: String) {
+        guard let provider = handoff.snapshotProvider else {
+            NSLog("FaeApp: no snapshot provider for x0x handoff to %@", String(agentId.prefix(8)))
+            return
+        }
+        let snapshot = provider()
+        let machineName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        let tailEntries: [[String: String]] = snapshot.entries.map { entry in
+            ["role": entry.role, "text": entry.content]
+        }
+        let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let snapshotPayload: [String: Any] = [
+            "source_machine": machineName,
+            "conversation_tail": tailEntries,
+            "created_at_ms": createdAtMs,
+        ]
+        faeCore.sendPeerCommand("peer.handoff_send", payload: [
+            "to_agent_id": agentId,
+            "snapshot": snapshotPayload,
+        ])
+        NSLog("FaeApp: x0x handoff sent to %@ (%d entries)", String(agentId.prefix(8)), tailEntries.count)
+    }
 }
 
 // MARK: - App Entry Point
@@ -1127,6 +1156,18 @@ struct FaeApp: App {
                     appDelegate.personalityEditor.showInstructionsEditor()
                 }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
+
+                let fleet = FaeConfig.load().x0x.ownerFleet
+                if !fleet.isEmpty {
+                    Divider()
+                    Menu("Hand off to\u{2026}") {
+                        ForEach(fleet, id: \.self) { agentId in
+                            Button(String(agentId.prefix(12)) + "\u{2026}") {
+                                appDelegate.sendX0xHandoff(to: agentId)
+                            }
+                        }
+                    }
+                }
             }
             CommandGroup(before: .sidebar) {
                 Button("Stop") {
