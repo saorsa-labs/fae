@@ -262,6 +262,13 @@ public struct GenerationOptions: Sendable {
     /// model transcribes and answers in one request; the MLX engine ignores it.
     public var audioWAVBase64: String?
 
+    /// Phase G2: a pinned summary of the conversation turns that were evicted
+    /// from the kept window. When non-empty the daemon folds it into a stable
+    /// `system ++ pinned_summary` prefix (before the retained turns) so the
+    /// prefix cache keeps hitting. Only the daemon engine honours it; the MLX
+    /// engine ignores it. `nil`/empty ⇒ no pinned block (today's behaviour).
+    public var pinnedSummary: String?
+
     public init(
         temperature: Float = 0.7,
         topP: Float = 0.9,
@@ -277,7 +284,8 @@ public struct GenerationOptions: Sendable {
         quantizedKVStart: Int = 512,
         repetitionContextSize: Int = 64,
         prefillStepSize: Int? = nil,
-        audioWAVBase64: String? = nil
+        audioWAVBase64: String? = nil,
+        pinnedSummary: String? = nil
     ) {
         self.temperature = temperature
         self.topP = topP
@@ -294,6 +302,7 @@ public struct GenerationOptions: Sendable {
         self.repetitionContextSize = repetitionContextSize
         self.prefillStepSize = prefillStepSize
         self.audioWAVBase64 = audioWAVBase64
+        self.pinnedSummary = pinnedSummary
     }
 }
 
@@ -343,6 +352,16 @@ public protocol LLMEngine: Actor {
     /// Pass `nil` to unload any currently active adapter and revert to base weights.
     /// Engines that do not support adapters may implement this as a no-op.
     func swapAdapter(to directory: URL?) async throws
+
+    /// Phase G2: fold the given evicted turns (optionally on top of a prior pinned
+    /// summary) into a single compact summary, for the main-lane compression
+    /// protocol. Returns the summary text, or `nil` when this engine cannot
+    /// summarize (no daemon) so the caller hard-truncates instead. Only the daemon
+    /// engine implements it; every other engine gets the default no-op below.
+    func compactConversation(
+        evicted: [LLMMessage],
+        priorSummary: String?
+    ) async throws -> String?
 }
 
 public extension LLMEngine {
@@ -362,5 +381,14 @@ public extension LLMEngine {
 
     func swapAdapter(to directory: URL?) async throws {
         // Default no-op for engines without adapter support.
+    }
+
+    func compactConversation(
+        evicted: [LLMMessage],
+        priorSummary: String?
+    ) async throws -> String? {
+        // Default: engines without a daemon summarizer cannot compact — the
+        // caller falls back to hard truncation.
+        nil
     }
 }

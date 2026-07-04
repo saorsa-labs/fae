@@ -68,6 +68,10 @@ actor PipelineCoordinator {
     /// turn-local one.
     private var daemonPlaybackFallbackReasonsLogged: Set<String> = []
 
+    /// Phase G2: true while an after-turn conversation compaction is in flight, so
+    /// overlapping turns do not double-fold the same evicted backlog.
+    private var compactionInFlight = false
+
     /// JSC runtime for executing `<tool_program>` script blocks.
     /// Lazily created on first script execution to avoid unnecessary
     /// JSC overhead when no scripts are used.
@@ -3253,6 +3257,11 @@ actor PipelineCoordinator {
         }
         let baseTurnContextPrefix = generationContext.turnContextPrefix ?? ""
         let history = await conversationState.history
+        // Phase G2: the pinned summary of turns already evicted from `history`.
+        // Sent alongside the kept window so the model keeps long-horizon context;
+        // the covered turns are already excluded (they were trimmed). `nil` until
+        // the first compaction, and only the daemon lane honours it.
+        let pinnedSummary = await conversationState.pinnedSummary
 
         // Fast mode disables explicit reasoning on all turns, including tool
         // follow-ups. This keeps "thinking off" behavior consistent and avoids
@@ -3344,7 +3353,8 @@ actor PipelineCoordinator {
             quantizedKVStart: config.llm.kvQuantStartTokens,
             repetitionContextSize: config.llm.repetitionContextSize,
             prefillStepSize: prefillStep,
-            audioWAVBase64: pttAudioForTurn
+            audioWAVBase64: pttAudioForTurn,
+            pinnedSummary: pinnedSummary
         )
 
         // Cache options for speculative prefill on next turn. The audio clip
@@ -3803,6 +3813,12 @@ actor PipelineCoordinator {
             endAssistantGeneration(for: generationID)
             return
         }
+
+        // Phase G2: the turn's generation is done (past ttfa) — fold any turns
+        // evicted from the kept window into the pinned summary off the hot path.
+        // Fire-and-forget: never blocks this turn or the next; a failure is logged
+        // loudly and retried, never dropped silently.
+        scheduleConversationCompaction()
 
         let llmEndedAt = Date()
         let llmElapsed = llmEndedAt.timeIntervalSince(llmStartedAt)
@@ -5537,6 +5553,49 @@ actor PipelineCoordinator {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
         return !["0", "false", "off", "no"].contains(value)
+    }
+
+    // MARK: - Phase G2 conversation compaction
+
+    /// Fire-and-forget trigger for the after-turn pinned-summary fold. Detached so
+    /// it never blocks the turn that scheduled it or the next one.
+    private func scheduleConversationCompaction() {
+        Task { [weak self] in
+            await self?.runConversationCompaction()
+        }
+    }
+
+    /// Fold the previous turn's evicted messages into the pinned summary via the
+    /// daemon, off the hot path. Contract: the turn already proceeded on the
+    /// hard-truncated window, so this NEVER blocks and NEVER drops context
+    /// silently — an unavailable summarizer or a compact failure is logged loudly
+    /// and the evicted backlog is retained for a later attempt. Reentrancy-guarded
+    /// so overlapping turns cannot double-fold the same backlog.
+    private func runConversationCompaction() async {
+        guard !compactionInFlight else { return }
+        compactionInFlight = true
+        defer { compactionInFlight = false }
+
+        guard let work = await conversationState.pendingCompaction() else { return }
+        let covered = work.evicted.count
+        do {
+            guard let summary = try await llmEngine.compactConversation(
+                evicted: work.evicted, priorSummary: work.priorSummary)
+            else {
+                NSLog(
+                    "PipelineCoordinator: conversation compaction unavailable — %d evicted turns kept hard-truncated (no daemon summarizer)",
+                    covered)
+                return
+            }
+            await conversationState.applyCompactionResult(summary: summary, covered: covered)
+            NSLog(
+                "PipelineCoordinator: conversation compaction folded %d evicted turns into pinned summary",
+                covered)
+        } catch {
+            NSLog(
+                "PipelineCoordinator: conversation compaction failed (%@) — %d evicted turns kept hard-truncated, will retry",
+                error.localizedDescription, covered)
+        }
     }
 
     /// Whether the daemon-owned playback path is active RIGHT NOW: the flag is

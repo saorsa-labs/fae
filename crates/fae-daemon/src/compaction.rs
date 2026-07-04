@@ -16,6 +16,14 @@
 //! Nothing here does I/O or touches the engine; the caller performs the actual
 //! summarizer generation and history mutation. Keeping the decision pure makes
 //! the eviction geometry and hysteresis exhaustively unit-testable.
+//!
+//! **Prefix-cache stability (Phase G2).** Once a summary is pinned, the main
+//! lane assembles each prompt as `system ++ pinned_summary ++ kept_turns` (see
+//! `session::assemble_system_with_pinned`). Between recompactions `system` and
+//! `pinned_summary` are byte-identical and `kept_turns` only appends, so the
+//! serving backend's prefix cache keeps hitting on the `system ++ pinned_summary`
+//! head — that stable-prefix invariant is the whole reason the summary is pinned
+//! rather than re-threaded, and it is asserted in `session`'s tests.
 
 use fae_engine::ChatMessage;
 

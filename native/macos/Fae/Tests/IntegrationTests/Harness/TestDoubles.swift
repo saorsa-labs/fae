@@ -14,7 +14,26 @@ actor MockLLMEngine: LLMEngine {
     var tokenDelayMs: UInt64 = 0
     var generateCallCount: Int = 0
 
+    // Phase G2 compaction stub controls.
+    var compactShouldThrow = false
+    var compactSummary: String?
+    var compactCallCount = 0
+
+    struct CompactError: Error {}
+
+    func setCompactShouldThrow(_ value: Bool) { compactShouldThrow = value }
+    func setCompactSummary(_ value: String?) { compactSummary = value }
+
     func load(modelID: String) async throws {}
+
+    func compactConversation(
+        evicted: [LLMMessage],
+        priorSummary: String?
+    ) async throws -> String? {
+        compactCallCount += 1
+        if compactShouldThrow { throw CompactError() }
+        return compactSummary
+    }
 
     func generate(
         messages: [LLMMessage],

@@ -39,10 +39,10 @@ struct LastTurnContext {
     prompt_tokens_est: usize,
     /// Estimated tokens in the completion the engine returned.
     completion_tokens_est: usize,
-    /// Whether this turn's prompt was compacted before generation. Always
-    /// `false` today: the daemon is stateless per turn (Swift resends full
-    /// history), so the interactive path never compacts — the field exists so
-    /// the telemetry shape is stable once the delegate/compaction lanes report.
+    /// Whether this turn's prompt carried a pinned conversation summary (Phase
+    /// G2). The daemon is stateless per turn, so it does not itself decide to
+    /// compact; Swift folds evicted turns into a summary and resends it as
+    /// `pinned_summary`. `true` exactly when this turn carried a non-empty one.
     compacted: bool,
     /// Estimated tokens of any pinned summary folded into the prompt. `None`
     /// when the turn carried no compaction summary.
@@ -2114,11 +2114,60 @@ fn parse_tool(value: &serde_json::Value) -> Result<ToolSpec, &'static str> {
     })
 }
 
+/// Phase G2 — header marking the pinned conversation-summary block folded into
+/// the system prompt. STABLE literal: the assembled `system ++ pinned` prefix
+/// must stay byte-identical between recompactions for the prefix cache to hit,
+/// so this text must never vary per turn.
+const PINNED_SUMMARY_HEADER: &str = "## Conversation so far (summary of earlier turns)";
+
+/// Phase G2 — normalize a payload's optional `pinned_summary` field: trimmed,
+/// with an all-whitespace value treated as absent. The SINGLE source of truth for
+/// "did this turn carry a pinned summary?" — shared by the prompt assembly and the
+/// telemetry read so both agree by construction.
+fn payload_pinned_summary(payload: &serde_json::Value) -> Option<&str> {
+    payload
+        .get("pinned_summary")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+}
+
+/// Phase G2 — fold an optional pinned conversation summary into the system prompt
+/// as ONE stable block placed immediately after the base system text, before the
+/// retained turns.
+///
+/// **Cache-stability rule.** The assembled prompt prefix is
+/// `system ++ pinned_summary ++ kept_turns`. Between recompactions the base
+/// `system` and the `pinned_summary` are byte-identical and `kept_turns` only
+/// appends, so the mistral.rs / llama.cpp prefix cache keeps hitting on the
+/// `system ++ pinned_summary` head — the whole point of pinning the summary
+/// rather than re-threading evicted turns. `PINNED_SUMMARY_HEADER` is a fixed
+/// literal for the same reason.
+///
+/// Back-compat: `pinned` is `None` (or all-whitespace, normalized to `None` by
+/// [`payload_pinned_summary`]) ⇒ the base `system` is returned byte-for-byte
+/// unchanged, so a turn that carries no summary is identical to today's.
+fn assemble_system_with_pinned(system: Option<String>, pinned: Option<&str>) -> Option<String> {
+    match pinned {
+        None => system,
+        Some(pinned) => Some(match system {
+            Some(base) => format!("{base}\n\n{PINNED_SUMMARY_HEADER}\n{pinned}"),
+            None => format!("{PINNED_SUMMARY_HEADER}\n{pinned}"),
+        }),
+    }
+}
+
 /// Build the engine request from the command payload. Two shapes, both under
 /// the same `conversation.inject_text` command and scope:
 /// - simple: `{ "text": "..." }` — one user message (back-compatible)
 /// - rich:   `{ "messages": [{role, content}, ...], "system"?, "tools"?,
-///   "max_tokens"? }` — full chat with tool schemas for native tool calling
+///   "max_tokens"?, "pinned_summary"? }` — full chat with tool schemas for
+///   native tool calling
+///
+/// Phase G2: an optional `pinned_summary` string is folded into the system
+/// prompt as ONE stable block (see [`assemble_system_with_pinned`]) placed
+/// immediately after the base system text, before the retained turns. Absent (or
+/// all-whitespace) ⇒ the request is byte-identical to today's — full back-compat.
 fn parse_chat_request(payload: &serde_json::Value) -> Result<ChatRequest, &'static str> {
     let messages = if let Some(array) = payload
         .get("messages")
@@ -2142,6 +2191,10 @@ fn parse_chat_request(payload: &serde_json::Value) -> Result<ChatRequest, &'stat
         .get("system")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
+    // Phase G2: fold the optional pinned summary into the system prefix. This is
+    // the SINGLE assembly authority — the stable `system ++ pinned` prefix the
+    // prefix cache relies on. Absent ⇒ `system` is returned unchanged.
+    let system = assemble_system_with_pinned(system, payload_pinned_summary(payload));
     let tools = match payload.get("tools").and_then(serde_json::Value::as_array) {
         Some(array) => array
             .iter()
@@ -2552,21 +2605,24 @@ pub(crate) async fn inject_text_core(
         serde_json::json!({ "active": false }),
     );
 
-    // Phase G1: record this turn's context telemetry (best-effort). On success
-    // the completion estimate comes from the returned text; a failed turn still
-    // records the prompt estimate with a zero completion. The interactive path
-    // does not compact (the daemon is stateless per turn), so `compacted` is
-    // false and there is no pinned summary.
+    // Phase G1/G2: record this turn's context telemetry (best-effort). On
+    // success the completion estimate comes from the returned text; a failed turn
+    // still records the prompt estimate with a zero completion. Phase G2: when the
+    // caller pinned a summary, report `compacted: true` + its token estimate. The
+    // field is re-read from the raw payload (parse_chat_request folds it into the
+    // system prefix) through the SAME normalizer, so the flag matches the assembly.
     let completion_tokens_est = outcome
         .as_ref()
         .ok()
         .and_then(|value| value.get("text").and_then(serde_json::Value::as_str))
         .map_or(0, crate::compaction::estimate_tokens);
+    let pinned_summary_tokens =
+        payload_pinned_summary(&cmd.payload).map(crate::compaction::estimate_tokens);
     record_last_turn_context(LastTurnContext {
         prompt_tokens_est,
         completion_tokens_est,
-        compacted: false,
-        pinned_summary_tokens: None,
+        compacted: pinned_summary_tokens.is_some(),
+        pinned_summary_tokens,
     });
 
     outcome
@@ -4337,6 +4393,86 @@ mod tests {
         // Name-only tool still gets a valid empty JSON-Schema object.
         assert!(request.tools[1].parameters.get("type").is_some());
         assert_eq!(request.max_tokens, 2048);
+    }
+
+    #[test]
+    fn parse_chat_request_pinned_summary_folds_after_system() {
+        // Phase G2: the pinned summary is folded into the system prefix as one
+        // stable block placed AFTER the base system text (before the turns), with
+        // the fixed header. The kept turns are untouched.
+        let payload = serde_json::json!({
+            "system": "You are Fae.",
+            "pinned_summary": "Earlier: user planned a trip to Skye.",
+            "messages": [{ "role": "user", "content": "what did we decide?" }],
+        });
+        let request = parse_chat_request(&payload).unwrap();
+        let system = request.system.expect("system present");
+        // Base system comes first, pinned block second, header present between.
+        assert!(system.starts_with("You are Fae."));
+        assert!(system.contains(PINNED_SUMMARY_HEADER));
+        assert!(system.ends_with("Earlier: user planned a trip to Skye."));
+        // The turns are carried verbatim — pinning does not touch kept messages.
+        assert_eq!(request.messages.len(), 1);
+        assert_eq!(request.messages[0].content, "what did we decide?");
+    }
+
+    #[test]
+    fn parse_chat_request_pinned_summary_prefix_is_byte_stable_across_turns() {
+        // MANDATORY cache-stability test (Phase G2). Two successive turns share
+        // the SAME base system + SAME pinned_summary and differ only by one
+        // appended user turn. The assembled `system ++ pinned` prefix (the whole
+        // ChatRequest.system, since the pinned block is folded into it) must be
+        // BYTE-IDENTICAL, and the kept turns must be append-only — this is exactly
+        // the invariant the mistral.rs / llama.cpp prefix cache relies on.
+        let system = "You are Fae, the head butler.";
+        let pinned = "Earlier: user is booking a ferry; decided on the 9am sailing.";
+
+        let turn1 = serde_json::json!({
+            "system": system,
+            "pinned_summary": pinned,
+            "messages": [{ "role": "user", "content": "remind me the time?" }],
+        });
+        let turn2 = serde_json::json!({
+            "system": system,
+            "pinned_summary": pinned,
+            "messages": [
+                { "role": "user", "content": "remind me the time?" },
+                { "role": "assistant", "content": "The 9am sailing." },
+                { "role": "user", "content": "and the price?" },
+            ],
+        });
+
+        let r1 = parse_chat_request(&turn1).unwrap();
+        let r2 = parse_chat_request(&turn2).unwrap();
+
+        // system ++ pinned prefix is byte-identical between recompactions.
+        assert_eq!(
+            r1.system, r2.system,
+            "system ++ pinned prefix must be byte-identical for prefix-cache hits"
+        );
+        // Kept turns are append-only: turn2 begins with turn1's messages verbatim.
+        assert_eq!(r2.messages[..r1.messages.len()], r1.messages[..]);
+        assert!(r2.messages.len() > r1.messages.len());
+    }
+
+    #[test]
+    fn parse_chat_request_absent_or_blank_pinned_summary_is_byte_identical() {
+        // Back-compat: no `pinned_summary` key ⇒ the request is byte-identical to
+        // today's, and an all-whitespace value is treated as absent (never emits a
+        // dangling header block).
+        let base = serde_json::json!({
+            "system": "You are Fae.",
+            "messages": [{ "role": "user", "content": "hi" }],
+        });
+        let blank = serde_json::json!({
+            "system": "You are Fae.",
+            "pinned_summary": "   \n  ",
+            "messages": [{ "role": "user", "content": "hi" }],
+        });
+        let base_req = parse_chat_request(&base).unwrap();
+        let blank_req = parse_chat_request(&blank).unwrap();
+        assert_eq!(base_req.system.as_deref(), Some("You are Fae."));
+        assert_eq!(base_req.system, blank_req.system);
     }
 
     #[test]

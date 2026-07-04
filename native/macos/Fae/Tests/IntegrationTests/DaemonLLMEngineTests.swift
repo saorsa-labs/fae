@@ -240,6 +240,46 @@ final class DaemonWireTests: XCTestCase {
         XCTAssertNil(wire[0]["audio_wav_base64"])
     }
 
+    // MARK: injectTextPayload — pinned summary (Phase G2)
+
+    func testInjectTextPayloadAttachesPinnedSummaryWhenCached() throws {
+        // When the caller has a cached pinned summary it rides the payload as
+        // `pinned_summary`; the daemon folds it into the stable system prefix.
+        var options = GenerationOptions(maxTokens: 128)
+        options.pinnedSummary = "Earlier: user booked the 9am ferry to Skye."
+
+        let payload = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "and the price?")],
+            systemPrompt: "You are Fae.",
+            options: options)
+
+        XCTAssertEqual(
+            payload["pinned_summary"] as? String,
+            "Earlier: user booked the 9am ferry to Skye.")
+        // The kept turns and system are untouched by pinning.
+        XCTAssertEqual(payload["system"] as? String, "You are Fae.")
+        let wire = try XCTUnwrap(payload["messages"] as? [[String: Any]])
+        XCTAssertEqual(wire[0]["content"] as? String, "and the price?")
+    }
+
+    func testInjectTextPayloadOmitsPinnedSummaryWhenAbsentOrBlank() throws {
+        // No cached summary ⇒ no key at all (byte-identical to today's payload).
+        let none = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hi")],
+            systemPrompt: "You are Fae.",
+            options: GenerationOptions(maxTokens: 64))
+        XCTAssertNil(none["pinned_summary"], "no key when the caller has no summary")
+
+        // An all-whitespace summary is treated as absent — never a dangling key.
+        var blankOptions = GenerationOptions(maxTokens: 64)
+        blankOptions.pinnedSummary = "   \n  "
+        let blank = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hi")],
+            systemPrompt: "You are Fae.",
+            options: blankOptions)
+        XCTAssertNil(blank["pinned_summary"], "blank summary omits the key")
+    }
+
     // MARK: parseTurn
 
     func testParseTurnExtractsTextAndToolCalls() {
@@ -691,6 +731,78 @@ final class DaemonAudioTwoPassTests: XCTestCase {
         XCTAssertEqual(result.count, 2)
         XCTAssertEqual(result.last?.role, .user)
         XCTAssertEqual(result.last?.content, "transcript")
+    }
+}
+
+// MARK: - Conversation compaction orchestration (Phase G2)
+
+final class ConversationCompactionEngineTests: XCTestCase {
+
+    /// Fallback contract: a compact ERROR must not alter the turn — the current
+    /// turn already proceeded on the hard-truncated window. The caller catches,
+    /// logs, and retains the backlog; it does NOT install a summary.
+    func testCompactErrorLeavesTurnStateIntactAndRetainsBacklog() async throws {
+        let engine = MockLLMEngine()
+        await engine.setCompactShouldThrow(true)
+
+        let state = ConversationStateTracker()
+        await state.setMaxHistory(4)
+        for i in 0..<6 { await state.addUserMessage("m\(i)") }
+
+        let pending = await state.pendingCompaction()
+        let work = try XCTUnwrap(pending)
+
+        var threw = false
+        do {
+            _ = try await engine.compactConversation(
+                evicted: work.evicted, priorSummary: work.priorSummary)
+        } catch {
+            // The caller's fallback: swallow, log loudly, do NOT apply a result.
+            threw = true
+        }
+        XCTAssertTrue(threw, "the summarizer error surfaces to the caller")
+
+        // The turn proceeded on the hard-truncated window; nothing was dropped
+        // silently — no summary, and the evicted backlog is kept for a retry.
+        let history = await state.history
+        XCTAssertEqual(history.count, 4)
+        let pinned = await state.pinnedSummary
+        XCTAssertNil(pinned)
+        let retained = await state.pendingEvictionCount()
+        XCTAssertEqual(retained, 2)
+    }
+
+    /// Happy path: a successful compaction installs the pinned summary and drains
+    /// the backlog, so subsequent turns carry the summary and exclude the covered
+    /// turns (already trimmed).
+    func testCompactSuccessInstallsPinnedSummaryViaEngine() async throws {
+        let engine = MockLLMEngine()
+        await engine.setCompactSummary("user counted from 0 to 5")
+
+        let state = ConversationStateTracker()
+        await state.setMaxHistory(4)
+        for i in 0..<6 { await state.addUserMessage("m\(i)") }
+
+        let pending = await state.pendingCompaction()
+        let work = try XCTUnwrap(pending)
+        let rawSummary = try await engine.compactConversation(
+            evicted: work.evicted, priorSummary: work.priorSummary)
+        let summary = try XCTUnwrap(rawSummary)
+        await state.applyCompactionResult(summary: summary, covered: work.evicted.count)
+
+        let pinned = await state.pinnedSummary
+        XCTAssertEqual(pinned, "user counted from 0 to 5")
+        let after = await state.pendingCompaction()
+        XCTAssertNil(after, "backlog drained after a successful fold")
+    }
+
+    /// An engine with no daemon summarizer returns nil (the default protocol
+    /// impl), so the caller hard-truncates without installing a summary.
+    func testEngineWithoutSummarizerReturnsNil() async throws {
+        let engine = MockLLMEngine()  // compactSummary is nil, no throw
+        let result = try await engine.compactConversation(
+            evicted: [LLMMessage(role: .user, content: "x")], priorSummary: nil)
+        XCTAssertNil(result)
     }
 }
 
