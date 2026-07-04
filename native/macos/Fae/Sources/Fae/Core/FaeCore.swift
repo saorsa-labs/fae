@@ -273,6 +273,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         modelID: daemonModelId,
                         eventBus: eventBus
                     )
+                    // Cloud lane (ADR-014): propagate privacy lane + budget so the
+                    // spawn function can inject the FAE_REMOTE_* env vars. Must be
+                    // set before load() is called.
+                    await daemonEngine.setCloudLane(
+                        privacyLane: runtimeConfig.llm.resolvedPrivacyLane,
+                        budgetUSD: runtimeConfig.llm.cloudDailyBudgetUSD
+                    )
                     // B-Swift Phase B: wire the supervisor callbacks. The engine
                     // owns process supervision; FaeCore owns the downstream
                     // effects of endpoint changes (DaemonEndpointStore + TTS
@@ -2015,6 +2022,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let value = sanitizedString(value), !value.isEmpty else { return }
             config.llm.remoteModel = value
             persistConfig(reason: "config.patch.llm.remote_model")
+
+        case "llm.privacy_lane":
+            guard let value = sanitizedString(value),
+                  ["local", "fleet", "all"].contains(value)
+            else { return }
+            config.llm.privacyLane = value
+            persistConfig(reason: "config.patch.llm.privacy_lane")
+
+        case "llm.cloud_daily_budget_usd":
+            guard let raw = value as? Double else { return }
+            config.llm.cloudDailyBudgetUSD = min(max(raw, 0.01), 100.0)
+            persistConfig(reason: "config.patch.llm.cloud_daily_budget_usd")
 
         case "llm.thinking_enabled":
             guard let value = value as? Bool else { return }

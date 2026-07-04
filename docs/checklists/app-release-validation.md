@@ -28,6 +28,7 @@ Run this full contract when any of the following changes:
 - settings that affect loaded models, policy, or diagnostics
 - **learned-conductor surfaces: routing policy/recipes, reward aggregation, shadow routing, the content-aware task classifier, recipe mutation, or the fae-metaopt boundary**
 - **daemon ToolHost routing (B-Swift Layer 3): the `read`-to-daemon routing slice, workspace-root provisioning/auto-approve, path confinement, or the `DaemonToolHostSession` persistent-connection wiring**
+- **cloud lane (ADR-014): `llm.privacyLane`, `llm.cloudDailyBudgetUSD`, API key Keychain path, daemon spawn env injection (`FAE_REMOTE_*`, `FAE_OPENROUTER_API_KEY`), or fallback surfacing**
 - any release candidate build
 
 ## Required environment
@@ -339,3 +340,37 @@ Validates the JavaScriptCore tool-program execution path end-to-end.
 - [ ] Verify script-scoped ticket is issued at script start
 - [ ] Verify ticket is revoked after script completion
 - [ ] Verify ticket is revoked after script failure/cancellation
+
+## Phase 13: Cloud Lane (ADR-014)
+
+Validates the cloud privacy lane configuration end-to-end.
+Mandatory when: `llm.privacyLane`, `llm.cloudDailyBudgetUSD`, cloud API key, or
+`FAE_REMOTE_*` / `FAE_OPENROUTER_API_KEY` env injection changes.
+
+### 13.1 Config round-trip
+- [ ] Set `llm.privacyLane = "all"` + `llm.cloudDailyBudgetUSD = 3.0` in config.toml; confirm values survive a load → serialize cycle (`FaeConfigParsingTests` suite).
+- [ ] Set `llm.privacyLane = "unknown"` in config.toml; confirm it resolves to `"local"` (no crash, no silent accept).
+- [ ] Confirm `cloudDailyBudgetUSD = 0.0` clamps to 0.01 and `cloudDailyBudgetUSD = 999.0` clamps to 100.0.
+
+### 13.2 Keychain key storage
+- [ ] Open Settings > Models & Privacy > Cloud Models; paste an API key and press Save.
+- [ ] Confirm the "API key stored in Keychain" indicator appears.
+- [ ] Quit and relaunch; confirm the indicator persists (key survived across launches).
+- [ ] Press Remove; confirm the indicator clears and the key is gone from Keychain.
+
+### 13.3 Daemon spawn env injection
+- [ ] Set lane = "all", store an API key, restart the daemon (`just run-dev`).
+- [ ] Confirm `DaemonLLMEngine` log line "cloud lane active (lane=all, …)" appears.
+- [ ] Confirm `FAE_OPENROUTER_API_KEY` does NOT appear in `~/Library/Logs/` or NSLog output.
+- [ ] Set lane = "local"; confirm the log line does NOT appear (no cloud vars injected).
+
+### 13.4 Fallback surface
+- [ ] Simulate a `conductor.fallback` `runtimeProgress` event (e.g. via test-server inject or by exhausting the budget).
+- [ ] Confirm a visible pill/subtitle notice appears: "Running locally (cloud request fell back: …)".
+- [ ] Confirm the notice clears after the auto-hide timer (not persistent).
+
+### 13.5 Settings tab layout
+- [ ] Open Settings > Models & Privacy; confirm three-state lane selector renders correctly.
+- [ ] Confirm "Changes apply at next daemon start" warning appears when lane != "local".
+- [ ] Confirm provider preset, base URL, model, budget fields are present and editable.
+- [ ] Confirm Instrument Serif header font and Scottish palette colours (no system .blue).
