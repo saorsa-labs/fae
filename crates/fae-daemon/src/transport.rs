@@ -23,9 +23,10 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::AgentSessionRegistry;
 use crate::conductor::ConductorStore;
 use crate::events::{ConnSink, EventBus, EventSink, PlaybackRegistry};
+use crate::mcp::McpCatalog;
 use crate::server_request::{ServerReply, ServerRequester};
 use crate::session::{
-    handle_frame, run_authorized_agent_prompt, run_authorized_delegate,
+    handle_frame, run_authorized_agent_prompt, run_authorized_delegate, run_authorized_mcp_list,
     run_authorized_skillhost_activate, run_authorized_skillhost_list, run_authorized_skillhost_run,
     run_authorized_toolhost_execute, SessionBackends, SessionState,
 };
@@ -33,6 +34,16 @@ use crate::skillhost::SkillHost;
 use crate::toolhost::confirm::ServerRequestConfirmation;
 use crate::toolhost::ToolHost;
 use crate::{next_event_id, now_ms};
+
+/// (Phase G3) Attach the shared MCP catalog to a freshly built ToolHost, if MCP
+/// is configured. A `None` catalog leaves the host with no MCP tier (every
+/// `mcp:` call denies `mcp_not_configured`).
+fn attach_mcp(host: ToolHost, mcp_catalog: &Option<Arc<McpCatalog>>) -> ToolHost {
+    match mcp_catalog {
+        Some(catalog) => host.with_mcp_catalog(Arc::clone(catalog)),
+        None => host,
+    }
+}
 
 /// Reject any single NDJSON frame larger than this **before authentication**.
 /// The control socket is same-user (OS-enforced peer credentials), so this is a
@@ -73,6 +84,7 @@ pub async fn serve_unix(
     conductor: Arc<crate::conductor::ConductorRuntime>,
     conductor_store: Arc<ConductorStore>,
     skill_host: Arc<SkillHost>,
+    mcp_catalog: Option<Arc<McpCatalog>>,
     peer_outbound: Option<Arc<crate::peer::PeerOutbound>>,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
@@ -108,6 +120,7 @@ pub async fn serve_unix(
         let conductor = Arc::clone(&conductor);
         let conductor_store = Arc::clone(&conductor_store);
         let skill_host = Arc::clone(&skill_host);
+        let mcp_catalog = mcp_catalog.clone();
         let peer_outbound = peer_outbound.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
@@ -124,6 +137,7 @@ pub async fn serve_unix(
                 conductor,
                 conductor_store,
                 skill_host,
+                mcp_catalog,
                 peer_outbound.as_deref(),
             )
             .await
@@ -152,6 +166,10 @@ async fn handle_connection(
     conductor: Arc<crate::conductor::ConductorRuntime>,
     conductor_store: Arc<ConductorStore>,
     skill_host: Arc<SkillHost>,
+    // (Phase G3) The shared external MCP catalog (or `None` when no servers are
+    // declared). Attached to each per-session ToolHost so `mcp:` calls route
+    // through the gate; also read directly for the `mcp.list` command.
+    mcp_catalog: Option<Arc<McpCatalog>>,
     peer_outbound: Option<&crate::peer::PeerOutbound>,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
@@ -434,7 +452,9 @@ async fn handle_connection(
                                     )
                                     .await
                                     {
-                                        Ok(h) => toolhost = Some(Arc::new(h)),
+                                        Ok(h) => {
+                                            toolhost = Some(Arc::new(attach_mcp(h, &mcp_catalog)))
+                                        }
                                         Err(e) => {
                                             eprintln!(
                                                 "fae-daemon: durable toolhost init failed: {e}"
@@ -456,7 +476,8 @@ async fn handle_connection(
                                         .await
                                         {
                                             Ok(h) => {
-                                                toolhost = Some(Arc::new(h));
+                                                toolhost =
+                                                    Some(Arc::new(attach_mcp(h, &mcp_catalog)));
                                                 tool_root = Some(dir);
                                             }
                                             Err(e) => {
@@ -576,6 +597,29 @@ async fn handle_connection(
                     if cmd.command == "skillhost.list" {
                         let outcome =
                             run_authorized_skillhost_list(record, &cmd, &skill_host, now, event_id);
+                        if append_audit_jsonl(audit_path, &outcome.audit).is_err() {
+                            let response = Response::error(
+                                &outcome.response.request_id,
+                                "audit_error",
+                                "audit write failed",
+                            );
+                            sink.send_line(response_line(&response)?);
+                            return Ok(());
+                        }
+                        sink.send_line(response_line(&outcome.response)?);
+                        continue;
+                    }
+                    // Phase G3: `mcp.list` — read-only external MCP catalog + health.
+                    // Handled inline (no confirm round-trip). Absent catalog =>
+                    // an empty listing (MCP not configured), never an error.
+                    if cmd.command == "mcp.list" {
+                        let outcome = run_authorized_mcp_list(
+                            record,
+                            &cmd,
+                            mcp_catalog.as_deref(),
+                            now,
+                            event_id,
+                        );
                         if append_audit_jsonl(audit_path, &outcome.audit).is_err() {
                             let response = Response::error(
                                 &outcome.response.request_id,

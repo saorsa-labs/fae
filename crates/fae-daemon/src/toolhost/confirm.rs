@@ -66,6 +66,11 @@ pub enum ConfirmDetail {
     },
     /// `bash`: a bounded preview of the command (the command IS the action).
     Shell { command_preview: String },
+    /// `mcp:*`: an external MCP tool invocation. Records the declared server +
+    /// raw tool name only (never the arguments). This tool ran in an EXTERNAL
+    /// trusted subprocess, NOT the OS jail (Phase G3) — the receipt names which
+    /// server acted so the audit trail stays honest about the trust boundary.
+    Mcp { server: String, tool: String },
 }
 
 /// The owner's reply to a confirmation (parsed fail-closed from the wire).
