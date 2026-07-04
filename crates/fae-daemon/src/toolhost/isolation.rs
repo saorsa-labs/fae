@@ -333,6 +333,9 @@ fn build_write_confined_ruleset(root: &Path) -> RuntimeResult<landlock::RulesetC
 impl JailedSessionEnv {
     /// Spawn `command` with a Landlock write-confinement applied in a
     /// `pre_exec` hook, replicating the inner env's timeout/cancel handling.
+    // `pre_exec` is an inherently unsafe API; this is the crate's single
+    // sanctioned unsafe block (see the SAFETY comment at the call site).
+    #[allow(unsafe_code)]
     async fn exec_jailed_linux(
         &self,
         command: &str,

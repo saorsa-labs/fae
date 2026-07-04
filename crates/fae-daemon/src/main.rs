@@ -10,7 +10,10 @@
 //!
 //! Run: `cargo run -p fae-daemon`. It bootstraps a private run dir + token,
 //! then serves the socket until killed.
-#![forbid(unsafe_code)]
+// Landlock's `pre_exec` self-restriction (toolhost/isolation.rs) is the single
+// sanctioned unsafe block on Linux; everywhere else unsafe stays forbidden.
+#![cfg_attr(not(target_os = "linux"), forbid(unsafe_code))]
+#![cfg_attr(target_os = "linux", deny(unsafe_code))]
 #![cfg_attr(
     not(test),
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
