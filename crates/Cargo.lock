@@ -8354,7 +8354,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 [[package]]
 name = "x0x-symphony-core"
 version = "0.1.0"
-source = "git+ssh://git@github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8368,7 +8368,7 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-orchestrator"
 version = "0.1.0"
-source = "git+ssh://git@github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8388,7 +8388,7 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-signing"
 version = "0.1.0"
-source = "git+ssh://git@github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8401,7 +8401,7 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-tracker-x0x-crdt"
 version = "0.1.0"
-source = "git+ssh://git@github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8421,7 +8421,7 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-workspace"
 version = "0.1.0"
-source = "git+ssh://git@github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
 dependencies = [
  "async-trait",
  "nix 0.30.1",

@@ -51,15 +51,14 @@ tracing-subscriber = { workspace = true }
 #   x0x-symphony-workspace       = { path = "../../../x0x-symphony/crates/x0x-symphony-workspace" }
 # (relative form above is for the *folded* projects/fae/crates/ layout.)
 #
-# TODO(publish): once x0x-symphony publishes to crates.io (or CI is granted a
-# read deploy key for the private repo), switch to `version = "…"` crates.io
-# pins. Until then a `just check` on a machine without repo access must export
-# CARGO_NET_GIT_FETCH_WITH_CLI=true so cargo reuses the CLI ssh credential.
-x0x-symphony-core = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-orchestrator = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-tracker-x0x-crdt = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-signing = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-workspace = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+# TODO(publish): once x0x-symphony's release workflow publishes to crates.io,
+# switch these to `version = "…"` pins. The repo is public, so the https+rev
+# form fetches anonymously (CI included) with no credentials.
+x0x-symphony-core = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-orchestrator = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-tracker-x0x-crdt = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-signing = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-workspace = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
 
 [dev-dependencies]
 tempfile = "3"
