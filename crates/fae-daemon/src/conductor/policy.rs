@@ -49,6 +49,19 @@ impl ModelMode {
         value.and_then(Self::parse).unwrap_or(Self::PureLocal)
     }
 
+    /// ADR-014: map the owner's `FAE_PRIVACY_LANE` selector to the mode cap.
+    /// `local`→PureLocal, `fleet`→LocalSymphony, `all`→AllAvailable (the only
+    /// value that permits the `RemoteAllowed` cloud lane). Missing OR unknown
+    /// fails closed to PureLocal — the local-only default.
+    pub fn from_privacy_lane(value: Option<&str>) -> Self {
+        match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("local") => Self::PureLocal,
+            Some("fleet") => Self::LocalSymphony,
+            Some("all") => Self::AllAvailable,
+            _ => Self::PureLocal,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PureLocal => "pure-local",
@@ -183,5 +196,37 @@ mod tests {
             ModelMode::AllAvailable,
             PrivacyLane::RemoteAllowed
         ));
+    }
+
+    #[test]
+    fn privacy_lane_maps_to_mode_cap_and_fails_closed() {
+        // ADR-014: local/fleet/all → the mode cap; anything else (incl. absent
+        // and unknown) fails closed to pure-local.
+        assert_eq!(
+            ModelMode::from_privacy_lane(Some("local")),
+            ModelMode::PureLocal
+        );
+        assert_eq!(
+            ModelMode::from_privacy_lane(Some("fleet")),
+            ModelMode::LocalSymphony
+        );
+        assert_eq!(
+            ModelMode::from_privacy_lane(Some("all")),
+            ModelMode::AllAvailable
+        );
+        assert_eq!(
+            ModelMode::from_privacy_lane(Some("  ALL  ")),
+            ModelMode::AllAvailable
+        );
+        // Fail-closed: absent and unknown both resolve to pure-local (no cloud).
+        assert_eq!(ModelMode::from_privacy_lane(None), ModelMode::PureLocal);
+        assert_eq!(
+            ModelMode::from_privacy_lane(Some("cloud")),
+            ModelMode::PureLocal
+        );
+        assert_eq!(
+            ModelMode::from_privacy_lane(Some("remote")),
+            ModelMode::PureLocal
+        );
     }
 }

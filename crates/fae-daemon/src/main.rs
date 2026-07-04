@@ -311,9 +311,18 @@ async fn main() -> DaemonResult<()> {
     let conductor_store = conductor::ConductorStore::open(conductor_data_dir.join("conductor"))
         .map_err(|e| format!("conductor store: {e}"))?;
     let conductor_recipes = conductor::RecipeSet::default(); // M1: no recipe needs loading (static-direct is hardcoded in the policy)
-    let conductor_workers = conductor_worker_registry_from_env();
-    let conductor_policy = conductor::StaticDirectPolicy;
     let model_mode = conductor_model_mode_from_env();
+    let mut conductor_workers = conductor_worker_registry_from_env();
+    // ADR-014 cloud lane: opt-in via FAE_PRIVACY_LANE=all + the OpenRouter env
+    // contract (base URL + model + key). Present ⇒ register a RemoteProvider
+    // worker and drive a real OpenRouter adapter behind the conductor egress
+    // gates. Absent/any-other config keeps the mock provider — the daemon's
+    // routing behavior is byte-for-byte unchanged unless the owner opts in.
+    let conductor_cloud_lane = conductor_cloud_lane_from_env(model_mode);
+    if let Some(lane) = &conductor_cloud_lane {
+        conductor_workers.register_remote_provider(&lane.worker_id, true);
+    }
+    let conductor_policy = conductor::StaticDirectPolicy;
     let budget_limits = conductor_budget_limits_from_env();
     if let Err(error) = budget_limits.validate() {
         tracing::warn!("invalid conductor budget limits; cloud routes will fail closed: {error}");
@@ -324,8 +333,27 @@ async fn main() -> DaemonResult<()> {
         conductor_worker_budget_limits_from_env(),
     );
     let provider_pricing = conductor_provider_pricing_from_env(&conductor_workers);
-    let conductor_egress =
-        conductor::ConductorEgress::production(model_mode, budget_governor, provider_pricing);
+    let conductor_egress = match conductor_cloud_lane {
+        Some(lane) => {
+            // Model id only — the API key is never printed. It was moved into
+            // the adapter and stays out of logs, the socket, and CloudRequest.
+            println!(
+                "conductor: cloud lane ENABLED — OpenRouter worker {} (RemoteAllowed)",
+                lane.worker_id
+            );
+            let provider =
+                std::sync::Arc::new(conductor::ProviderBackedCloudProvider::new(lane.adapter));
+            conductor::ConductorEgress::production_with_provider(
+                model_mode,
+                budget_governor,
+                provider_pricing,
+                provider,
+            )
+        }
+        None => {
+            conductor::ConductorEgress::production(model_mode, budget_governor, provider_pricing)
+        }
+    };
     if chain_enabled {
         eprintln!(
             "fae-daemon: conductor chain ENABLED (FAE_CONDUCTOR_CHAIN). Direct remains the default; chain executes only for vetted chain recipes."
@@ -428,6 +456,25 @@ fn init_tracing() {
 }
 
 fn conductor_model_mode_from_env() -> conductor::ModelMode {
+    // ADR-014: FAE_PRIVACY_LANE is the authoritative cloud-lane selector.
+    // local→pure-local, fleet→local-symphony, all→all-available (RemoteAllowed).
+    // Missing OR unknown fails closed to pure-local. FAE_MODEL_MODE remains a
+    // fallback for deployments predating the privacy selector.
+    if let Some(raw) = first_non_empty_env(["FAE_PRIVACY_LANE"]) {
+        let mode = conductor::ModelMode::from_privacy_lane(Some(&raw));
+        // A present-but-unrecognized value fails closed to pure-local; surface it
+        // rather than silently disabling a lane the owner meant to enable.
+        let recognized = matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "local" | "fleet" | "all"
+        );
+        if !recognized {
+            tracing::warn!(
+                "unknown FAE_PRIVACY_LANE {raw:?}; failing closed to local (pure-local)"
+            );
+        }
+        return mode;
+    }
     let raw = std::env::var("FAE_MODEL_MODE").ok();
     let mode = conductor::ModelMode::from_env_value(raw.as_deref());
     if raw
@@ -437,6 +484,38 @@ fn conductor_model_mode_from_env() -> conductor::ModelMode {
         tracing::warn!("unknown FAE_MODEL_MODE; defaulting to pure-local");
     }
     mode
+}
+
+/// A constructed ADR-014 cloud lane: the vetted RemoteProvider worker id and the
+/// real provider adapter (OpenRouter) to drive behind the conductor egress gates.
+struct ConductorCloudLane {
+    worker_id: String,
+    adapter: std::sync::Arc<dyn ProviderAdapter>,
+}
+
+/// Build the cloud lane from the startup environment (ADR-014). Returns `Some`
+/// ONLY when the owner opted into the RemoteAllowed cap (`FAE_PRIVACY_LANE=all` →
+/// `AllAvailable`) AND the full OpenRouter contract is present. Any missing piece
+/// keeps the local-only default (fail closed). The API key is moved into the
+/// adapter and never logged, never printed, never placed on the NDJSON socket,
+/// and never in a `CloudRequest`.
+fn conductor_cloud_lane_from_env(mode: conductor::ModelMode) -> Option<ConductorCloudLane> {
+    if mode != conductor::ModelMode::AllAvailable {
+        return None;
+    }
+    let base_url = first_non_empty_env(["FAE_REMOTE_BASE_URL"])?;
+    let model_id = first_non_empty_env(["FAE_REMOTE_MODEL"])?;
+    let api_key = first_non_empty_env(["FAE_OPENROUTER_API_KEY"])?;
+    let worker_id = conductor::workers::openrouter_worker_id(&model_id);
+    let adapter = fae_engine::OpenRouterAdapter::new(fae_engine::OpenRouterConfig {
+        base_url,
+        model_id,
+        api_key,
+    });
+    Some(ConductorCloudLane {
+        worker_id,
+        adapter: std::sync::Arc::new(adapter),
+    })
 }
 
 fn conductor_worker_registry_from_env() -> conductor::WorkerRegistry {
@@ -469,10 +548,21 @@ fn first_non_empty_env<const N: usize>(names: [&str; N]) -> Option<String> {
 }
 
 fn conductor_budget_limits_from_env() -> conductor::BudgetLimits {
-    // Stage 1 exposes the per-worker bucket machinery while keeping startup
-    // config deliberately conservative and simple. Unknown/unset values fall
-    // back to the safe default; LocalOnly routes never consult this governor.
-    conductor::BudgetLimits::default()
+    // ADR-014: FAE_CLOUD_DAILY_BUDGET_MICROS caps rolling daily cloud spend
+    // (micro-USD). Missing/invalid → the conservative default
+    // (`BudgetLimits::default`, ~2.5M micros ≈ $2.50/day). LocalOnly routes
+    // never consult this governor. Per-worker buckets stay available via
+    // `conductor_worker_budget_limits_from_env`.
+    let mut limits = conductor::BudgetLimits::default();
+    if let Some(raw) = first_non_empty_env(["FAE_CLOUD_DAILY_BUDGET_MICROS"]) {
+        match raw.trim().parse::<u64>() {
+            Ok(micros) => limits.max_daily_cost_micros = micros,
+            Err(_) => tracing::warn!(
+                "invalid FAE_CLOUD_DAILY_BUDGET_MICROS; using conservative default daily cap"
+            ),
+        }
+    }
+    limits
 }
 
 fn conductor_worker_budget_limits_from_env() -> HashMap<String, conductor::BudgetLimits> {
@@ -505,13 +595,20 @@ fn conductor_provider_pricing_from_env(
         if worker_id != conductor::workers::LOCAL_MODEL_WORKER_ID
             && !table.contains_worker(&worker_id)
         {
-            table.insert(
-                worker_id,
-                conductor::ProviderPricing {
-                    input_micros_per_token: 1,
-                    output_micros_per_token: 1,
-                },
-            );
+            // ADR-014: OpenRouter remote-provider workers get a conservative
+            // built-in price (`DEFAULT_OPENROUTER_PRICING`) so cloud egress is
+            // never silently dead for lack of a pricing entry; other workers
+            // keep the unit-price sentinel. `FAE_PROVIDER_PRICING` overrides both.
+            let pricing =
+                if worker_id.starts_with(conductor::workers::OPENROUTER_CLOUD_WORKER_PREFIX) {
+                    conductor::pricing::DEFAULT_OPENROUTER_PRICING
+                } else {
+                    conductor::ProviderPricing {
+                        input_micros_per_token: 1,
+                        output_micros_per_token: 1,
+                    }
+                };
+            table.insert(worker_id, pricing);
         }
     }
     table

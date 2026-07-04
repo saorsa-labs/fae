@@ -16,6 +16,18 @@ pub struct ProviderPricing {
     pub output_micros_per_token: u64,
 }
 
+/// ADR-014: a deliberately **conservative** (over-estimating) built-in price for
+/// OpenRouter remote-provider workers, so the §5.4 budget gate binds and cloud
+/// egress is never silently dead for lack of a pricing entry. Micro-USD per
+/// token: 15 in / 75 out bounds premium-tier models (well above GPT-4.1-mini's
+/// real rate) — fail-safe, since a higher estimate can only trip the daily cap
+/// sooner, never overspend. NON-AUTHORITATIVE: the provider account's own spend
+/// caps are the real cost control; operator `FAE_PROVIDER_PRICING` overrides this.
+pub const DEFAULT_OPENROUTER_PRICING: ProviderPricing = ProviderPricing {
+    input_micros_per_token: 15,
+    output_micros_per_token: 75,
+};
+
 /// Startup-loaded pricing table keyed by worker id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderPricingTable {

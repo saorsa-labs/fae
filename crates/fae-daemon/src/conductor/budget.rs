@@ -1,16 +1,13 @@
-//! Budget governance primitive for M2 cloud-bound conductor role-calls.
+//! Budget governance for cloud-bound conductor role-calls.
 //!
-//! This module is deliberately **dormant** in M1. The executor will consult the
-//! [`BudgetGovernor`] before every cloud-backed role-call once M2 egress wiring
-//! lands. Until then it is an isolated primitive with no runtime side effects.
+//! **Live** (ADR-014): the executor consults the [`BudgetGovernor`] before every
+//! cloud-backed role-call (`execute_cloud_role_call` → [`BudgetGovernor::check`]
+//! before egress, [`BudgetGovernor::record`] after) — see
+//! `crate::conductor::executor`.
 //!
 //! Privacy posture: budget state is stored only in the isolated conductor store
 //! (never `fae.db`) and contains structured routing/cost tokens only — no raw
 //! prompts, user text, memory text, file contents, or secrets.
-
-// TODO(M2, 2026-06-23): remove this scoped dormant allowance when executor
-// wiring calls `BudgetGovernor::check`/`record` around cloud-bound role-calls.
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,12 +87,6 @@ pub struct CostEstimate {
     pub output_tokens: u64,
 }
 
-impl CostEstimate {
-    pub fn total_tokens(self) -> u64 {
-        self.input_tokens.saturating_add(self.output_tokens)
-    }
-}
-
 /// Measured outcome after a role-call finishes. Token counts are persisted as
 /// telemetry-only budget state and never gate future calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +117,7 @@ pub enum BudgetVerdict {
 }
 
 impl BudgetVerdict {
+    #[allow(dead_code)] // exercised in unit tests; production uses into_route_failure
     pub fn is_allow(&self) -> bool {
         matches!(self, BudgetVerdict::Allow)
     }
