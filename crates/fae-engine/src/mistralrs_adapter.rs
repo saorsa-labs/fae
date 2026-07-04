@@ -135,6 +135,9 @@ impl LocalMistralrsAdapter {
             info: AdapterInfo {
                 backend: "mistralrs".to_owned(),
                 model_id: model_id.to_owned(),
+                // The configured max sequence length IS the KV-cache window the
+                // model runs with (see `configured_max_seq_len`, FAE_MAX_SEQ_LEN).
+                context_window: configured_max_seq_len(),
             },
         }
     }

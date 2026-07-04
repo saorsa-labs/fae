@@ -168,6 +168,7 @@ impl ProviderAdapter for KeyedMock {
         AdapterInfo {
             backend: "keyed".into(),
             model_id: "keyed".into(),
+            context_window: 8192,
         }
     }
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {

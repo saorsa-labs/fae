@@ -38,9 +38,11 @@ pub use llamacpp_adapter::{
     LlamaServerConfig, LlamaServerHandle, RemoteModelArtifact,
 };
 pub use mistralrs_adapter::LocalMistralrsAdapter;
-pub use mock::MockAdapter;
+pub use mock::{MockAdapter, DEFAULT_MOCK_CONTEXT_WINDOW};
 pub use models_lock::{Artifact, LockError, ModelsLock, SUPPORTED_SCHEMA_VERSION};
-pub use openrouter_adapter::{OpenRouterAdapter, OpenRouterConfig};
+pub use openrouter_adapter::{
+    OpenRouterAdapter, OpenRouterConfig, DEFAULT_OPENROUTER_CONTEXT_WINDOW,
+};
 #[cfg(not(target_os = "macos"))]
 pub use piper_tts_adapter::PiperTtsAdapter;
 pub use provider::{

@@ -19,12 +19,20 @@ use crate::provider::{
 /// loop (Phase F1: `fae.delegate`) can be driven deterministically with no
 /// model — e.g. iteration 1 emits a `write` tool call, iteration 2 a final
 /// answer. Once the scripts are exhausted it falls back to the echo behaviour.
+/// Default context window reported by a mock adapter (Phase G1). A plausible
+/// small-model window; override with [`MockAdapter::with_context_window`] to
+/// exercise compaction thresholds.
+pub const DEFAULT_MOCK_CONTEXT_WINDOW: usize = 8192;
+
 pub struct MockAdapter {
     model_id: String,
     /// Programmed per-call event sequences (scripted mode). `None` ⇒ echo mode.
     /// `Mutex` (not a lock held across `.await`) so the adapter stays `Sync`
     /// while advancing the script cursor between calls.
     scripts: Mutex<VecDeque<Vec<ChatEvent>>>,
+    /// The context window this mock reports via `describe`, so tests can drive
+    /// the compaction budget deterministically.
+    context_window: usize,
 }
 
 impl MockAdapter {
@@ -33,6 +41,7 @@ impl MockAdapter {
         MockAdapter {
             model_id: model_id.into(),
             scripts: Mutex::new(VecDeque::new()),
+            context_window: DEFAULT_MOCK_CONTEXT_WINDOW,
         }
     }
 
@@ -44,7 +53,16 @@ impl MockAdapter {
         MockAdapter {
             model_id: model_id.into(),
             scripts: Mutex::new(scripts.into()),
+            context_window: DEFAULT_MOCK_CONTEXT_WINDOW,
         }
+    }
+
+    /// Override the reported context window (Phase G1) — lets a test shrink the
+    /// window so the delegate loop's compaction path is exercised.
+    #[must_use]
+    pub fn with_context_window(mut self, context_window: usize) -> MockAdapter {
+        self.context_window = context_window;
+        self
     }
 }
 
@@ -54,6 +72,7 @@ impl ProviderAdapter for MockAdapter {
         AdapterInfo {
             backend: "mock".to_owned(),
             model_id: self.model_id.clone(),
+            context_window: self.context_window,
         }
     }
 

@@ -57,6 +57,7 @@ use serde_json::Value;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
+use crate::compaction::{self, PromptBudget, Watermark};
 use crate::conductor::ConductorStore;
 use crate::toolhost::confirm::ToolConfirmation;
 use crate::toolhost::isolation::{jail_backend_available, ToolOrigin};
@@ -70,11 +71,11 @@ pub const MAX_ITERATIONS_CEILING: u32 = 16;
 
 /// Hard ceiling on the cumulative output-token budget for a whole delegation.
 ///
-/// The plan calls for `tokens ≤ engine context / 2`. The daemon's
-/// [`ProviderAdapter`] does not (yet) surface a context size, so this is a
-/// conservative fixed fallback (a plausible half-context for a 64K-context
-/// model). When `AdapterInfo` carries the real context window, derive this from
-/// it. Output tokens are APPROXIMATED (see [`approx_output_tokens`]).
+/// The plan calls for `tokens ≤ engine context / 2`. This is the conservative
+/// fixed cap on the CUMULATIVE output tokens across a whole delegation (distinct
+/// from the per-prompt compaction budget, which Phase G1 derives from
+/// `AdapterInfo::context_window`). Output tokens are APPROXIMATED (see
+/// [`output_tokens`], which delegates to [`crate::compaction::estimate_tokens`]).
 pub const TOKEN_CEILING: u32 = 32_768;
 
 /// Per-turn generation cap. Each iteration's `max_tokens` is the smaller of this
@@ -439,6 +440,12 @@ pub async fn run_delegation(
     let mut history: Vec<ChatMessage> = vec![ChatMessage::text(Role::User, prompt.clone())];
 
     // ── 5. Loop ───────────────────────────────────────────────────────────────
+    // Phase G1: the child history is the ONLY daemon-owned conversation state
+    // that can outgrow the context window, so it is compacted between iterations.
+    // The prompt budget is derived from the engine's real context window; the
+    // watermark carries hysteresis so we do not re-summarize every turn.
+    let prompt_budget = PromptBudget::new(deps.engine.describe().context_window);
+    let mut watermark = Watermark::default();
     let start = Instant::now();
     let hash_prefix_len = prompt_sha256.len().min(12);
     let id = format!("del-{}-{}", deps.now_ms, &prompt_sha256[..hash_prefix_len]);
@@ -454,6 +461,44 @@ pub async fn run_delegation(
             status = DelegationStatus::BudgetExhausted;
             break;
         }
+
+        // Phase G1: compact the child history before this generation if it has
+        // outgrown the prompt budget. Iteration 0's history is just the task, so
+        // nothing is evictable until enough turns accumulate.
+        if iteration > 0 {
+            watermark.turns_since_summary = watermark.turns_since_summary.saturating_add(1);
+            let plan = compaction::plan_compaction(&history, prompt_budget, watermark);
+            if plan.recompute {
+                let cutoff = plan.evict.len();
+                if cutoff > 0 && cutoff < history.len() {
+                    let evicted: Vec<ChatMessage> = history[..cutoff].to_vec();
+                    // The SAME bounded summarizer path as `conversation.compact`.
+                    // Hold the engine permit across the generation (serialize on
+                    // the single local engine), then drop it before continuing.
+                    let summary = {
+                        let _gen = Arc::clone(&deps.engine_permit).acquire_owned().await.ok();
+                        crate::session::summarize_conversation(deps.engine.as_ref(), evicted).await
+                    };
+                    if let Ok(summary_text) = summary {
+                        // The summary generation's own output counts against the
+                        // cumulative budget so compaction cannot mask overrun.
+                        budget.tokens_used = budget
+                            .tokens_used
+                            .saturating_add(output_tokens(&summary_text));
+                        let pinned = ChatMessage::text(
+                            Role::User,
+                            format!("[summary of earlier turns]\n{summary_text}"),
+                        );
+                        history.splice(..cutoff, std::iter::once(pinned));
+                        watermark.turns_since_summary = 0;
+                    }
+                    // A summarizer failure is non-fatal: continue on the
+                    // un-compacted history — the hard token/iteration budget
+                    // still bounds the loop.
+                }
+            }
+        }
+
         let per_turn = PER_TURN_MAX_TOKENS
             .min(budget.tokens_remaining() as usize)
             .max(1);
@@ -490,9 +535,7 @@ pub async fn run_delegation(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        budget.tokens_used = budget
-            .tokens_used
-            .saturating_add(approx_output_tokens(&text));
+        budget.tokens_used = budget.tokens_used.saturating_add(output_tokens(&text));
         final_text = text.clone();
 
         let calls = turn
@@ -949,11 +992,11 @@ fn assistant_record(text: &str, calls: &[Value]) -> String {
     }
 }
 
-/// Approximate output tokens for a completed turn. The engine does not surface a
-/// token count, so this is a documented heuristic (~4 chars/token). It only
-/// gates the cumulative budget — an approximation is acceptable there.
-fn approx_output_tokens(text: &str) -> u32 {
-    u32::try_from(text.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
+/// Approximate output tokens for a completed turn, as a saturating `u32` for the
+/// cumulative budget. Delegates to the shared [`crate::compaction::estimate_tokens`]
+/// (Phase G1) so budget accounting and compaction planning use one heuristic.
+fn output_tokens(text: &str) -> u32 {
+    u32::try_from(compaction::estimate_tokens(text)).unwrap_or(u32::MAX)
 }
 
 /// Map a ToolHost error to a delegation tool-event status label.
@@ -999,6 +1042,7 @@ mod tests {
     use fae_control_plane::{ClientClass, Scope};
     use fae_engine::{AdapterInfo, ChatEvent, ChatStream, EngineError, MockAdapter};
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
     use std::time::{Duration, Instant};
 
@@ -1106,6 +1150,7 @@ mod tests {
             AdapterInfo {
                 backend: "keyed".into(),
                 model_id: "keyed".into(),
+                context_window: 8192,
             }
         }
         async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
@@ -1149,6 +1194,7 @@ mod tests {
             AdapterInfo {
                 backend: "timed".into(),
                 model_id: "timed".into(),
+                context_window: 8192,
             }
         }
         async fn stream_chat(&self, _request: ChatRequest) -> Result<ChatStream, EngineError> {
@@ -1187,10 +1233,11 @@ mod tests {
     }
 
     #[test]
-    fn approx_tokens_is_char_quarter_ceiling() {
-        assert_eq!(approx_output_tokens(""), 0);
-        assert_eq!(approx_output_tokens("abcd"), 1);
-        assert_eq!(approx_output_tokens("abcde"), 2);
+    fn output_tokens_is_char_quarter_ceiling() {
+        // The budget heuristic delegates to compaction::estimate_tokens.
+        assert_eq!(output_tokens(""), 0);
+        assert_eq!(output_tokens("abcd"), 1);
+        assert_eq!(output_tokens("abcde"), 2);
     }
 
     /// A child budget can NEVER exceed the parent's remaining (floor 1).
@@ -1384,6 +1431,92 @@ mod tests {
             .expect("delegation ran");
         assert_eq!(outcome.status, DelegationStatus::BudgetExhausted);
         assert_eq!(outcome.receipt.iterations_used, 1);
+    }
+
+    /// A mock that returns tool calls for the first `tool_iters` LOOP generations
+    /// and a final answer after, plus a recognizable summary for any SUMMARIZER
+    /// generation (distinguished by the summarizer system prompt). Its context
+    /// window is tiny so the delegate's compaction path is exercised (Phase G1).
+    struct CompactionMock {
+        loop_calls: AtomicUsize,
+        summarizer_calls: Arc<AtomicUsize>,
+        tool_iters: usize,
+        window: usize,
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for CompactionMock {
+        fn describe(&self) -> AdapterInfo {
+            AdapterInfo {
+                backend: "compaction".into(),
+                model_id: "compaction".into(),
+                context_window: self.window,
+            }
+        }
+        async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
+            let is_summarizer = request
+                .system
+                .as_deref()
+                .is_some_and(|system| system.contains("Summarize this conversation"));
+            let turn = if is_summarizer {
+                self.summarizer_calls.fetch_add(1, Ordering::SeqCst);
+                final_answer("earlier turns summarized")
+            } else {
+                let n = self.loop_calls.fetch_add(1, Ordering::SeqCst);
+                if n < self.tool_iters {
+                    tool_call("read", "{\"path\":\"note.txt\"}")
+                } else {
+                    final_answer("all done")
+                }
+            };
+            let events = turn.into_iter().map(Ok).collect::<Vec<_>>();
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    /// A long scripted delegation compacts its child history (a tiny context
+    /// window forces the tail over budget) yet still completes within budget:
+    /// the loop reaches its final answer and at least one summary was folded in.
+    /// Skips without the OS jail (the loop runs real jailed tools).
+    #[tokio::test]
+    async fn long_history_compacts_and_loop_completes() {
+        if !jail_backend_available() {
+            eprintln!("skip: OS jail unavailable on this host");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("ws");
+        std::fs::create_dir_all(&root).expect("mkdir ws");
+        // A large file so each `read` result inflates the child history past the
+        // tiny window, tripping the tail-over-budget compaction path.
+        std::fs::write(root.join("note.txt"), "x".repeat(2000)).expect("seed file");
+
+        let summarizer_calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(CompactionMock {
+            loop_calls: AtomicUsize::new(0),
+            summarizer_calls: Arc::clone(&summarizer_calls),
+            tool_iters: 12,
+            window: 64, // ceiling 51 — a few big tool results exceed it fast.
+        });
+        let deps = deps(engine, store_at(tmp.path()), 99);
+        let request = DelegationRequest {
+            prompt: "read the note repeatedly".into(),
+            role: DelegationRole::Leaf,
+            toolset: vec!["read".into()],
+            workspace_root: root,
+            max_iterations: 16,
+            max_output_tokens: 100_000,
+            depth: 0,
+        };
+        let outcome = run_delegation(&deps, request)
+            .await
+            .expect("delegation ran");
+        assert_eq!(outcome.status, DelegationStatus::Completed);
+        assert_eq!(outcome.text, "all done");
+        assert!(
+            summarizer_calls.load(Ordering::SeqCst) > 0,
+            "compaction must have folded earlier turns into at least one summary"
+        );
     }
 
     /// A leaf at depth 1 that emits the `delegate` tool is runtime-rejected (the

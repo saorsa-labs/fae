@@ -595,6 +595,11 @@ struct Sidecar {
     config: Option<LlamaServerConfig>,
 }
 
+/// Conservative context window reported for an ATTACHED (not daemon-spawned)
+/// `llama-server`, whose real `--ctx-size` we cannot observe (Phase G1). Matches
+/// the common small-model default; the spawned/lazy paths report the real value.
+pub const DEFAULT_LLAMA_CONTEXT_WINDOW: usize = 8192;
+
 /// A `llama-server` behind the [`ProviderAdapter`] contract.
 pub struct LlamaServerAdapter {
     http: reqwest::Client,
@@ -624,6 +629,10 @@ impl LlamaServerAdapter {
             info: AdapterInfo {
                 backend: "llama.cpp".to_owned(),
                 model_id: model_id.into(),
+                // An attached server's `--ctx-size` is not known here (we did not
+                // spawn it), so report a conservative documented default (Phase
+                // G1). The spawned/lazy constructors below carry the real value.
+                context_window: DEFAULT_LLAMA_CONTEXT_WINDOW,
             },
             lora_present: AtomicBool::new(false),
             lora_scale: AtomicU32::new(1.0_f32.to_bits()),
@@ -665,6 +674,7 @@ impl LlamaServerAdapter {
         timeout: std::time::Duration,
     ) -> Result<LlamaServerAdapter, EngineError> {
         let has_lora = config.lora_gguf.is_some();
+        let context_window = config.ctx_size as usize;
         let handle = LlamaServerHandle::spawn(&config, timeout).await?;
         let base_url = handle.base_url.clone();
         let adapter = LlamaServerAdapter {
@@ -673,6 +683,8 @@ impl LlamaServerAdapter {
             info: AdapterInfo {
                 backend: "llama.cpp".to_owned(),
                 model_id: model_id.into(),
+                // The sidecar is launched with `--ctx-size <ctx_size>` (Phase G1).
+                context_window,
             },
             lora_present: AtomicBool::new(false),
             lora_scale: AtomicU32::new(1.0_f32.to_bits()),
@@ -761,6 +773,7 @@ impl LazyLlamaServerAdapter {
     ) -> LazyLlamaServerAdapter {
         let model_id = model_id.into();
         let initial_adapter = config.lora_gguf.clone();
+        let context_window = config.ctx_size as usize;
         LazyLlamaServerAdapter {
             config,
             model_id: model_id.clone(),
@@ -768,6 +781,8 @@ impl LazyLlamaServerAdapter {
             info: AdapterInfo {
                 backend: "llama.cpp".to_owned(),
                 model_id,
+                // The stored config spawns the sidecar with `--ctx-size` (Phase G1).
+                context_window,
             },
             spawned: Mutex::new(None),
             spawn_lock: tokio::sync::Mutex::new(()),
