@@ -20,6 +20,16 @@ pub const CLAUDE_CLOUD_WORKER_ID: &str = "acp:claude";
 pub const GEMINI_CLOUD_WORKER_ID: &str = "acp:gemini";
 pub const COPILOT_CLOUD_WORKER_ID: &str = "acp:copilot";
 
+/// ADR-014 cloud lane (`RemoteProvider` locality): the prefix for OpenRouter
+/// remote-provider worker ids. The full id is `cloud:openrouter/<model>`, e.g.
+/// `cloud:openrouter/openai/gpt-4.1-mini`.
+pub const OPENROUTER_CLOUD_WORKER_PREFIX: &str = "cloud:openrouter/";
+
+/// Build the canonical OpenRouter remote-provider worker id for `model`.
+pub fn openrouter_worker_id(model: &str) -> String {
+    format!("{OPENROUTER_CLOUD_WORKER_PREFIX}{model}")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkerRegistration {
     locality: WorkerLocality,
@@ -97,6 +107,22 @@ impl WorkerRegistry {
             id.into(),
             WorkerRegistration {
                 locality: WorkerLocality::OwnerFleet,
+                provisioned,
+            },
+        );
+    }
+
+    /// Add a vetted `RemoteProvider` worker (ADR-014 cloud lane, e.g. an
+    /// OpenRouter model). Registered ONLY at startup when the owner has opted
+    /// into the `RemoteAllowed` lane (`FAE_PRIVACY_LANE=all`) AND the OpenRouter
+    /// credential is present; `provisioned = true` supplies the standing grant
+    /// the non-local approval gate requires. The credential itself is never
+    /// stored here — only the boolean grant state.
+    pub fn register_remote_provider(&mut self, id: impl Into<String>, provisioned: bool) {
+        self.workers.insert(
+            id.into(),
+            WorkerRegistration {
+                locality: WorkerLocality::RemoteProvider,
                 provisioned,
             },
         );
@@ -185,5 +211,19 @@ mod tests {
         registry.register_cloud_backed(CODEX_CLOUD_WORKER_ID, false);
         assert!(registry.contains(CODEX_CLOUD_WORKER_ID));
         assert!(!registry.is_provisioned(CODEX_CLOUD_WORKER_ID));
+    }
+
+    #[test]
+    fn remote_provider_worker_registers_with_remote_locality() {
+        let mut registry = WorkerRegistry::m1();
+        let id = openrouter_worker_id("openai/gpt-4.1-mini");
+        assert_eq!(id, "cloud:openrouter/openai/gpt-4.1-mini");
+        assert!(id.starts_with(OPENROUTER_CLOUD_WORKER_PREFIX));
+        registry.register_remote_provider(&id, true);
+        assert!(registry.contains(&id));
+        assert_eq!(registry.locality(&id), Some(WorkerLocality::RemoteProvider));
+        assert!(registry.is_provisioned(&id));
+        // The local model stays present and unaffected.
+        assert!(registry.contains(LOCAL_MODEL_WORKER_ID));
     }
 }

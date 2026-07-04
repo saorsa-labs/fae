@@ -59,6 +59,12 @@ pub mod budget;
 /// LLM/mistralrs/async/cloud — deterministic rule-based MVP; the trait is the
 /// upgrade surface.
 pub mod classifier;
+/// ADR-014 cloud lane: [`cloud_provider::ProviderBackedCloudProvider`] drives a
+/// real `fae_engine` `ProviderAdapter` (OpenRouter) to completion behind the
+/// conductor egress gates. Replaces `MockCloudProvider` in production wiring
+/// only when the `RemoteAllowed` lane is enabled (`FAE_PRIVACY_LANE=all` + the
+/// OpenRouter env contract); default startup keeps the mock, unchanged.
+pub mod cloud_provider;
 pub mod error;
 pub mod eval;
 pub mod executor;
@@ -131,6 +137,7 @@ pub use budget::{
     ActualCost, BudgetDimension, BudgetGovernor, BudgetLimits, BudgetVerdict, CostEstimate,
     DEFAULT_DAILY_WINDOW_MS,
 };
+pub use cloud_provider::ProviderBackedCloudProvider;
 pub use error::ConductorError;
 pub use eval::{is_improvement, score, Corpus, RoutingScore, RoutingScorer};
 pub use executor::{route_turn, ConductorEgress, ConductorRuntime};

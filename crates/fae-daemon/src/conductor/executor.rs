@@ -197,6 +197,28 @@ impl ConductorEgress {
         )
     }
 
+    /// ADR-014: production wiring with a real [`CloudProvider`] (the
+    /// `ProviderBackedCloudProvider` driving OpenRouter). Identical to
+    /// [`Self::production`] but swaps the mock provider for `cloud_provider`.
+    /// Constructed at startup ONLY when the owner opts into the cloud lane
+    /// (`FAE_PRIVACY_LANE=all` + the OpenRouter env contract); the same
+    /// production membrane + request builder still gate every egress.
+    pub fn production_with_provider(
+        mode: ModelMode,
+        budget: BudgetGovernor,
+        pricing: ProviderPricingTable,
+        cloud_provider: Arc<dyn CloudProvider>,
+    ) -> Self {
+        Self::with_components(
+            mode,
+            budget,
+            pricing,
+            Arc::new(ConductorEgressMembrane),
+            Arc::new(DefaultCloudRequestBuilder),
+            cloud_provider,
+        )
+    }
+
     #[allow(dead_code)] // Legacy/testing constructor keeps M1 direct runtime easy to instantiate.
     pub fn pure_local(store: &ConductorStore) -> Self {
         let budget = BudgetGovernor::new(store.clone(), BudgetLimits::default());
@@ -479,10 +501,16 @@ impl ConductorRuntime {
                     // Defense-in-depth if the match arms are reordered.
                     self.run_cloud_direct(decision, backends, cmd).await
                 }
-                PrivacyLane::CloudBacked => self.run_cloud_direct(decision, backends, cmd).await,
+                // ADR-014: RemoteAllowed (RemoteProvider worker locality) shares
+                // the cloud-egress path with CloudBacked — the mode cap (§5.2,
+                // AllAvailable) + PII membrane + pricing + budget + provisioned
+                // approval all bind identically inside `execute_cloud_role_call`.
+                PrivacyLane::CloudBacked | PrivacyLane::RemoteAllowed => {
+                    self.run_cloud_direct(decision, backends, cmd).await
+                }
                 PrivacyLane::OwnerFleet => self.run_mesh_direct(decision, backends, cmd).await,
-                // TrustedPeer / RemoteAllowed: not implemented (M6+/ADR-gated).
-                // Fail closed rather than flowing through the cloud path.
+                // TrustedPeer: not implemented (M6+/ADR-gated). Fail closed
+                // rather than flowing through the cloud path.
                 lane => {
                     self.fail_closed_direct(
                         decision,
@@ -517,7 +545,12 @@ impl ConductorRuntime {
                             .await;
                     }
                     self.run_chain(decision, backends, cmd, decision.lane).await
-                } else if decision.lane == PrivacyLane::CloudBacked {
+                } else if matches!(
+                    decision.lane,
+                    PrivacyLane::CloudBacked | PrivacyLane::RemoteAllowed
+                ) {
+                    // ADR-014: RemoteAllowed shares the cloud-chain path with
+                    // CloudBacked (same egress gates per role-call).
                     self.run_cloud_chain(decision, backends, cmd).await
                 } else {
                     // Mesh-chain and unimplemented lanes (M6+/ADR-gated) are
@@ -866,8 +899,13 @@ impl ConductorRuntime {
 
     fn assert_non_local_approval(&self, decision: &OwnedRouteDecision) -> Result<(), RouteFailure> {
         match (&decision.lane, &decision.approval) {
+            // ADR-014: RemoteAllowed (a provisioned RemoteProvider worker) is
+            // standing-grantable exactly like CloudBacked/OwnerFleet Tier B —
+            // the credential presence IS the consent. The locality-match guard
+            // below still binds (a RemoteAllowed lane must target a
+            // RemoteProvider worker), so this cannot widen any other lane.
             (
-                PrivacyLane::CloudBacked | PrivacyLane::OwnerFleet,
+                PrivacyLane::CloudBacked | PrivacyLane::OwnerFleet | PrivacyLane::RemoteAllowed,
                 ApprovalClass::StandingGrant(_),
             ) if self.workers.is_provisioned(&decision.worker_id)
                 && self.worker_lane_matches_locality(&decision.worker_id, decision.lane) =>
@@ -1505,7 +1543,38 @@ pub async fn route_turn(
     let end_ts = now_ms();
     runtime.emit_receipt(&decision, &outcome, &fingerprint, latency_ms, end_ts);
     runtime.capture_shadow(ctx, fingerprint, end_ts);
+    // ADR-014: surface a fallback as a live socket event so the frontend CAN see
+    // that a non-local route (e.g. RemoteAllowed → budget exhausted) degraded to
+    // the local model. The isolated receipt already records this, but that is an
+    // audit sink, not a client-visible signal. Fires ONLY on fallback — a normal
+    // local turn (the production default) emits nothing new. Payload is
+    // structured only: no prompt text, no user content, no key material.
+    publish_route_fallback(backends.events, &decision, &outcome);
     wire
+}
+
+/// Publish a `conductor.route_fallback` event when a routed turn degraded to the
+/// local model. No-op for successful non-fallback turns. Delivered to subscribers
+/// holding `conversation:read` (same scope as the turn response).
+fn publish_route_fallback(
+    events: &crate::events::EventBus,
+    decision: &OwnedRouteDecision,
+    outcome: &TurnOutcome,
+) {
+    if !outcome.fallback {
+        return;
+    }
+    let reason = outcome.fallback_reason.clone().unwrap_or_default();
+    events.publish(
+        "conductor.route_fallback",
+        fae_control_plane::Scope::ConversationRead,
+        serde_json::json!({
+            "reason": reason,
+            "recipe_id": decision.recipe_id,
+            "attempted_worker_id": decision.worker_id,
+            "attempted_lane": format!("{:?}", decision.lane),
+        }),
+    );
 }
 
 fn now_ms() -> u64 {
@@ -1857,6 +1926,380 @@ mod tests {
             .join("store")
             .join("conductor_budget_usage.jsonl");
         std::fs::read_to_string(path).unwrap_or_default()
+    }
+
+    // ───────────────────── ADR-014 RemoteAllowed cloud lane ──────────────────
+
+    const REMOTE_WORKER_ID: &str = "cloud:openrouter/openai/gpt-4.1-mini";
+
+    /// A test runtime whose sole non-local worker is a `RemoteProvider` (the
+    /// ADR-014 cloud lane), mirroring [`test_runtime`] but registering the remote
+    /// worker instead of a CloudBackedAcp one.
+    fn remote_test_runtime(options: TestRuntimeOptions) -> Result<TestRuntime, Box<dyn Error>> {
+        let tmp = tempfile::tempdir()?;
+        let store = ConductorStore::open(tmp.path().join("store"))?;
+        let install_key = InstallKey::load_or_create(&tmp.path().join("install.key"))?;
+        let recipes = RecipeSet::from_iter([(
+            "recipe-cloud".to_string(),
+            recipe("recipe-cloud", CODEX_CLOUD_WORKER_ID, options.topology),
+        )]);
+        let mut workers = WorkerRegistry::m1();
+        workers.register_remote_provider(REMOTE_WORKER_ID, options.provisioned);
+        let budget = BudgetGovernor::new(store.clone(), budget_limits());
+        let egress = ConductorEgress::with_components(
+            options.mode,
+            budget,
+            options.pricing,
+            options.membrane,
+            options.builder,
+            options.provider,
+        );
+        Ok(TestRuntime {
+            _tmp: tmp,
+            runtime: ConductorRuntime::new_with_egress(
+                StaticDirectPolicy,
+                recipes,
+                workers,
+                store,
+                install_key,
+                options.chain_enabled,
+                egress,
+            )
+            .with_shadow(),
+            engine: MockAdapter::new("local"),
+            tts: MockTtsAdapter::new("tts"),
+            audio: AudioManager::new(),
+            events: EventBus::new(),
+            playbacks: PlaybackRegistry::new(),
+            agents: crate::agents::AgentSessionRegistry::new(),
+        })
+    }
+
+    fn remote_decision(request_id: &str) -> OwnedRouteDecision {
+        decision(
+            request_id,
+            "recipe-cloud",
+            REMOTE_WORKER_ID,
+            ConductorTopology::Direct,
+            PrivacyLane::RemoteAllowed,
+            ApprovalClass::StandingGrant("grant".to_string()),
+        )
+    }
+
+    /// Pricing that trips the per-call cost cap (`budget_limits().max_cost_micros_
+    /// per_call == 1_000_000`) even for a one-char prompt, to drive the budget
+    /// fail-closed path deterministically.
+    fn over_budget_pricing(worker_id: &str) -> ProviderPricingTable {
+        let mut table = ProviderPricingTable::empty();
+        table.insert(
+            worker_id,
+            crate::conductor::pricing::ProviderPricing {
+                input_micros_per_token: 10_000_000,
+                output_micros_per_token: 10_000_000,
+            },
+        );
+        table
+    }
+
+    /// Happy path: with `AllAvailable` mode, a provisioned `RemoteProvider`
+    /// worker, pricing, and a clean membrane, a `RemoteAllowed` turn reaches the
+    /// cloud provider and its answer flows back — no fallback.
+    #[tokio::test]
+    async fn remote_allowed_routes_to_cloud_when_all_gates_pass() -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(vec!["remote answer".to_string()]);
+        let (membrane, _m) = CountingMembrane::new(false);
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(REMOTE_WORKER_ID),
+            membrane,
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        let cmd = command("req-remote-ok", "summarise this");
+        let decision = remote_decision("req-remote-ok");
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert!(!outcome.fallback);
+        assert!(outcome.cost_micros.is_some());
+        assert_eq!(
+            wire.expect("cloud ok").get("text").and_then(Value::as_str),
+            Some("remote answer")
+        );
+        assert!(!budget_usage_content(&runtime).is_empty());
+        Ok(())
+    }
+
+    /// A `RemoteAllowed` turn whose worker has NO pricing is uncostable and fails
+    /// closed to local BEFORE any request is constructed (no egress).
+    #[tokio::test]
+    async fn remote_allowed_without_pricing_fails_closed() -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let (membrane, _m) = CountingMembrane::new(false);
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: ProviderPricingTable::empty(),
+            membrane,
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        let cmd = command("req-remote-nopricing", "hello");
+        let decision = remote_decision("req-remote-nopricing");
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "user is never blocked — falls back to local");
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+        assert!(outcome.fallback);
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("budget exceeded")));
+        assert!(budget_usage_content(&runtime).is_empty());
+        Ok(())
+    }
+
+    /// A `RemoteAllowed` turn over the budget cap falls back to local, carrying a
+    /// budget reason; no request is constructed.
+    #[tokio::test]
+    async fn remote_allowed_over_budget_falls_back_to_local() -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let (membrane, _m) = CountingMembrane::new(false);
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: over_budget_pricing(REMOTE_WORKER_ID),
+            membrane,
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        let cmd = command("req-remote-overbudget", "hi");
+        let decision = remote_decision("req-remote-overbudget");
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok());
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+        assert!(outcome.fallback);
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("budget exceeded")));
+        Ok(())
+    }
+
+    /// A credential-shaped prompt on the `RemoteAllowed` lane is blocked by the
+    /// PII membrane BEFORE a `CloudRequest` is constructed — no egress.
+    #[tokio::test]
+    async fn remote_allowed_membrane_block_builds_no_request() -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(REMOTE_WORKER_ID),
+            membrane: Arc::new(ConductorEgressMembrane),
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        let cmd = command(
+            "req-remote-secret",
+            "please review sk-abcdefghijklmnopqrstuvwxyz",
+        );
+        let decision = remote_decision("req-remote-secret");
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok());
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+        assert!(outcome.fallback);
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("privacy membrane blocked")));
+        Ok(())
+    }
+
+    /// The lane is honored: a `RemoteAllowed` decision under a mode cap that does
+    /// NOT permit it (LocalSymphony) is mode-blocked and fails closed — the cloud
+    /// worker is selected only when the mode cap permits the lane.
+    #[tokio::test]
+    async fn remote_allowed_blocked_when_mode_cap_forbids_lane() -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let (membrane, _m) = CountingMembrane::new(false);
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::LocalSymphony,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(REMOTE_WORKER_ID),
+            membrane,
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        let cmd = command("req-remote-modeblock", "hi");
+        let decision = remote_decision("req-remote-modeblock");
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok());
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+        assert!(outcome.fallback);
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("RemoteAllowed")));
+        Ok(())
+    }
+
+    /// A provider that records the exact [`CloudRequest`] it received. The
+    /// conductor never handles an API key (the key lives only in the adapter the
+    /// `ProviderBackedCloudProvider` wraps), so the request that crosses the
+    /// egress boundary — and the persisted budget line — carry no key material.
+    struct RecordingProvider {
+        last: Mutex<Option<CloudRequest>>,
+    }
+
+    impl CloudProvider for RecordingProvider {
+        fn call(&self, request: CloudRequest) -> CloudCallResult {
+            if let Ok(mut slot) = self.last.lock() {
+                *slot = Some(request.clone());
+            }
+            Ok(CloudCallSuccess {
+                response: serde_json::json!({
+                    "text": "ok",
+                    "tool_calls": Vec::<Value>::new(),
+                    "finish_reason": "stop",
+                }),
+                actual_cost: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn cloud_request_and_budget_record_carry_no_key_material() -> Result<(), Box<dyn Error>> {
+        let recorder = Arc::new(RecordingProvider {
+            last: Mutex::new(None),
+        });
+        let (membrane, _m) = CountingMembrane::new(false);
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(REMOTE_WORKER_ID),
+            membrane,
+            builder: Arc::new(DefaultCloudRequestBuilder),
+            provider: Arc::clone(&recorder) as Arc<dyn CloudProvider>,
+            chain_enabled: false,
+        })?;
+        let cmd = command("req-remote-hygiene", "route this prompt to the cloud");
+        let decision = remote_decision("req-remote-hygiene");
+        let backends = runtime.backends();
+        let (wire, _outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok());
+
+        // The CloudRequest that crossed the egress boundary carries only routing
+        // fields + the (membrane-scanned) prompt — never a credential.
+        let captured = recorder
+            .last
+            .lock()
+            .expect("recorder lock")
+            .clone()
+            .expect("provider was called");
+        let debug = format!("{captured:?}");
+        assert!(
+            !debug.contains("sk-"),
+            "no key material in CloudRequest: {debug}"
+        );
+        assert!(!debug.to_ascii_lowercase().contains("authorization"));
+        assert_eq!(captured.worker_id, REMOTE_WORKER_ID);
+
+        // The persisted budget line is structured routing/cost tokens only.
+        let budget = budget_usage_content(&runtime);
+        assert!(!budget.is_empty());
+        assert!(!budget.contains("sk-"));
+        assert!(!budget.to_ascii_lowercase().contains("api_key"));
+        Ok(())
+    }
+
+    /// A sink that captures the framed event lines the bus delivers.
+    struct CapturingSink {
+        lines: Mutex<Vec<Vec<u8>>>,
+    }
+
+    impl crate::events::EventSink for CapturingSink {
+        fn deliver(&self, line: &Arc<Vec<u8>>) {
+            if let Ok(mut lines) = self.lines.lock() {
+                lines.push(line.as_ref().clone());
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_event_published_only_on_fallback_and_is_key_free() {
+        let bus = EventBus::new();
+        let sink = Arc::new(CapturingSink {
+            lines: Mutex::new(Vec::new()),
+        });
+        let dyn_sink: Arc<dyn crate::events::EventSink> = sink.clone();
+        let mut scopes = std::collections::HashSet::new();
+        scopes.insert(fae_control_plane::Scope::ConversationRead);
+        bus.subscribe(Arc::downgrade(&dyn_sink), scopes);
+
+        let decision = remote_decision("req-fallback-event");
+
+        // A successful (non-fallback) turn emits nothing new.
+        let ok_outcome = TurnOutcome {
+            success: true,
+            fallback: false,
+            fallback_reason: None,
+            target_kind: TargetKind::LocalModel,
+            privacy_lane: PrivacyLane::RemoteAllowed,
+            cost_micros: Some(1),
+        };
+        publish_route_fallback(&bus, &decision, &ok_outcome);
+        assert_eq!(sink.lines.lock().expect("lock").len(), 0);
+
+        // A fallback emits a structured, client-visible event with the reason.
+        let fb_outcome = TurnOutcome {
+            success: true,
+            fallback: true,
+            fallback_reason: Some(
+                "budget exceeded (dimension=DailyCostMicros, limit=1)".to_string(),
+            ),
+            target_kind: TargetKind::LocalModel,
+            privacy_lane: PrivacyLane::LocalOnly,
+            cost_micros: None,
+        };
+        publish_route_fallback(&bus, &decision, &fb_outcome);
+        let lines = sink.lines.lock().expect("lock");
+        assert_eq!(lines.len(), 1);
+        let line = String::from_utf8(lines[0].clone()).expect("utf8");
+        assert!(line.contains("conductor.route_fallback"), "line: {line}");
+        assert!(line.contains("budget exceeded"), "reason surfaced: {line}");
+        assert!(line.contains("attempted_lane"), "line: {line}");
+        assert!(
+            line.contains("RemoteAllowed"),
+            "attempted lane surfaced: {line}"
+        );
+        // Structured only — no key material, no raw user prompt text.
+        assert!(!line.contains("sk-"));
+        assert!(!line.contains("route this prompt"));
     }
 
     /// Defense-in-depth for the red-team MINOR (lane/worker locality

@@ -299,8 +299,24 @@ pub enum ConductorRecipeError {
 pub enum RecipeProfile {
     /// M0–M3: local model + cloud-backed local ACP workers only; Direct/Chain
     /// only; LocalOnly/CloudBacked/OwnerFleet lanes only (OwnerFleet is
-    /// permitted in recipes but not executed until M4).
+    /// permitted in recipes but not executed until M4). The default: rejects
+    /// `RemoteProvider` workers and the `RemoteAllowed` lane.
     V1Safe,
+    /// ADR-014 cloud lane. Additionally permits `RemoteProvider` workers and the
+    /// `RemoteAllowed` privacy lane. Reachable only when the owner's mode cap
+    /// (`ModelMode::AllAvailable`) AND this profile both permit — the default
+    /// stays [`RecipeProfile::V1Safe`]. Locality/lane monotonicity
+    /// (`privacy_lane.permits(locality_to_lane(w))`) still binds.
+    V2RemoteAllowed,
+}
+
+impl RecipeProfile {
+    /// The permissive ADR-014 profile constructor, for call sites that read
+    /// intent-first (`RecipeProfile::v2_remote_allowed()`).
+    #[allow(dead_code)] // TODO(M2): recipe validation on candidate load
+    pub fn v2_remote_allowed() -> Self {
+        RecipeProfile::V2RemoteAllowed
+    }
 }
 
 impl FaeConductorRecipe {
@@ -346,45 +362,65 @@ impl FaeConductorRecipe {
             });
         }
 
-        // v1 safe profile: worker locality + privacy lane.
-        if profile == RecipeProfile::V1Safe {
-            for w in &self.allowed_workers {
-                // D-M2-1: `CloudBackedAcp` is permitted only as a cloud-backed Tier B
-                // worker. The PII membrane and D2 budget caps are the egress
-                // floor/ceiling; M1 remains local-only because static-direct is
-                // hardcoded `LocalModel` and this validation path is dormant.
-                if !matches!(
+        // Profile-scoped worker locality + privacy lane. Both profiles enforce
+        // locality/lane monotonicity; V2 (ADR-014) additionally admits
+        // `RemoteProvider` workers and the `RemoteAllowed` lane.
+        for w in &self.allowed_workers {
+            // D-M2-1: `CloudBackedAcp` is permitted only as a cloud-backed Tier B
+            // worker. The PII membrane and D2 budget caps are the egress
+            // floor/ceiling. V1 stays local-only in execution because
+            // static-direct is hardcoded `LocalModel`; V2 unlocks RemoteProvider
+            // for the ADR-014 cloud lane.
+            let locality_permitted = match profile {
+                RecipeProfile::V1Safe => matches!(
                     w.locality,
                     WorkerLocality::LocalModel | WorkerLocality::CloudBackedAcp
-                ) {
-                    return Err(ConductorRecipeError::WorkerLocalityNotPermitted(
-                        w.id.clone(),
-                        w.locality,
-                    ));
-                }
-                // CloudBacked is the M2 ACP lane; OwnerFleet is permitted in
-                // recipes (so M4 can flip the switch) but TrustedPeer/
-                // RemoteAllowed are not yet.
-                let lane_ok = matches!(
+                ),
+                RecipeProfile::V2RemoteAllowed => matches!(
+                    w.locality,
+                    WorkerLocality::LocalModel
+                        | WorkerLocality::CloudBackedAcp
+                        | WorkerLocality::OwnerFleet
+                        | WorkerLocality::RemoteProvider
+                ),
+            };
+            if !locality_permitted {
+                return Err(ConductorRecipeError::WorkerLocalityNotPermitted(
+                    w.id.clone(),
+                    w.locality,
+                ));
+            }
+            // CloudBacked is the M2 ACP lane; OwnerFleet is permitted in recipes
+            // (so M4 can flip the switch). V1 stops at OwnerFleet; V2 additionally
+            // permits RemoteAllowed. TrustedPeer stays ADR-gated for both.
+            let lane_ok = match profile {
+                RecipeProfile::V1Safe => matches!(
                     self.privacy_lane,
                     PrivacyLane::LocalOnly | PrivacyLane::CloudBacked | PrivacyLane::OwnerFleet
-                );
-                if !lane_ok {
-                    return Err(ConductorRecipeError::WorkerExceedsPrivacyLane(
-                        w.id.clone(),
-                        self.privacy_lane,
-                        w.locality,
-                    ));
-                }
-                // Even in a permitted recipe, a worker's locality must not
-                // exceed the declared lane.
-                if !self.privacy_lane.permits(locality_to_lane(w.locality)) {
-                    return Err(ConductorRecipeError::WorkerExceedsPrivacyLane(
-                        w.id.clone(),
-                        self.privacy_lane,
-                        w.locality,
-                    ));
-                }
+                ),
+                RecipeProfile::V2RemoteAllowed => matches!(
+                    self.privacy_lane,
+                    PrivacyLane::LocalOnly
+                        | PrivacyLane::CloudBacked
+                        | PrivacyLane::OwnerFleet
+                        | PrivacyLane::RemoteAllowed
+                ),
+            };
+            if !lane_ok {
+                return Err(ConductorRecipeError::WorkerExceedsPrivacyLane(
+                    w.id.clone(),
+                    self.privacy_lane,
+                    w.locality,
+                ));
+            }
+            // Even in a permitted recipe, a worker's locality must not exceed the
+            // declared lane (monotonicity binds in both profiles).
+            if !self.privacy_lane.permits(locality_to_lane(w.locality)) {
+                return Err(ConductorRecipeError::WorkerExceedsPrivacyLane(
+                    w.id.clone(),
+                    self.privacy_lane,
+                    w.locality,
+                ));
             }
         }
 
@@ -712,6 +748,42 @@ mod tests {
         assert!(matches!(
             r.validate(),
             Err(ConductorRecipeError::WorkerLocalityNotPermitted(_, _))
+        ));
+    }
+
+    #[test]
+    fn v2_permits_remote_workers() {
+        // ADR-014: the V2 profile admits a RemoteProvider worker on the
+        // RemoteAllowed lane. The default (V1) still rejects it (asserted by
+        // `v1_rejects_remote_workers`), so the two profiles diverge exactly here.
+        let mut r = direct_recipe();
+        let mut remote = local_worker("cloud:openrouter/openai/gpt-4.1-mini");
+        remote.locality = WorkerLocality::RemoteProvider;
+        r.allowed_workers = vec![remote.clone()];
+        r.role_slots[0].worker = remote;
+        r.privacy_lane = PrivacyLane::RemoteAllowed;
+
+        // Same recipe: rejected by V1, accepted by V2.
+        assert!(matches!(
+            r.validate_for(RecipeProfile::V1Safe),
+            Err(ConductorRecipeError::WorkerLocalityNotPermitted(_, _))
+        ));
+        assert!(r.validate_for(RecipeProfile::v2_remote_allowed()).is_ok());
+    }
+
+    #[test]
+    fn v2_still_enforces_lane_monotonicity() {
+        // A RemoteProvider worker on a narrower (CloudBacked) lane must still be
+        // rejected — V2 loosens the permitted set, not the monotonicity floor.
+        let mut r = direct_recipe();
+        let mut remote = local_worker("cloud:openrouter/openai/gpt-4.1-mini");
+        remote.locality = WorkerLocality::RemoteProvider;
+        r.allowed_workers = vec![remote.clone()];
+        r.role_slots[0].worker = remote;
+        r.privacy_lane = PrivacyLane::CloudBacked;
+        assert!(matches!(
+            r.validate_for(RecipeProfile::V2RemoteAllowed),
+            Err(ConductorRecipeError::WorkerExceedsPrivacyLane(_, _, _))
         ));
     }
 

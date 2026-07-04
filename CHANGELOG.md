@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Conductor cloud lane (ADR-014)**: the `fae-daemon` conductor can now route hard turns to an external model (OpenRouter) behind its single audited egress boundary — off by default. Opt in with `FAE_PRIVACY_LANE=all` plus `FAE_REMOTE_BASE_URL`, `FAE_REMOTE_MODEL`, and `FAE_OPENROUTER_API_KEY`; the daemon registers a `RemoteProvider` worker (`cloud:openrouter/<model>`) and drives the real adapter via `ProviderBackedCloudProvider`. Every cloud-bound prompt still passes the PII membrane, pricing (fail-closed on missing entry), the daily budget cap (`FAE_CLOUD_DAILY_BUDGET_MICROS`), and the provisioned-approval gate; a membrane block, missing pricing, or exhausted budget falls back to the local model and surfaces a `conductor.route_fallback` event. The API key lives only in the adapter — never on the NDJSON socket, in a `CloudRequest`, in the conductor store, or in any log line. Default startup is byte-for-byte unchanged (mock provider, local-only).
+
 ## [v0.8.108] - 2026-03-16
 
 ### Added
