@@ -52,6 +52,7 @@ P6 D1    Linux orb-host render spike            (independent of P2/P3; needs P4 
 P7 D3    Apple tools → portable skills wiring   (independent; can parallel P5/P6)
 P8 A1–A4 native ACP delegation/conductor        (independent — branch acp-native-rust; can parallel throughout)
 P9 C1/C4 training seam + mandatory bench gates   (formalizes P3; can follow P3)
+PD  Phase D  cloud/multi-model (OpenRouter)      (follows P9; ADR-014; off by default)
 XC  Release-validation real-audio phase          (cross-cutting gate before ANY user-facing release)
 ```
 
@@ -139,6 +140,15 @@ permission round-trip + fs mediation (the payoff). **A4** conductor seam + polis
 across MLX/Unsloth/PEFT, and enforce **FaeBenchmark regression gates** on every adapter before deploy
 ("LoRA prevents forgetting" was REFUTED — gates are mandatory).
 **Done:** the training loop is backend-agnostic behind the seam; no adapter deploys without passing gates.
+
+### PD — Phase D: cloud / multi-model lane  (follows P9; ADR-014)
+**Objective:** enable the optional OpenRouter egress lane behind the owner-controlled three-state privacy
+selector (`local` default / `fleet` / `all`). Wire `ProviderBackedCloudProvider` replacing `MockCloudProvider`
+in the conductor; enable the V2 safe profile that permits `RemoteProvider`; prove PII membrane + budget
+fail-closed in a sandboxed integration test.
+**ADR:** ADR-014 (Proposed — not started until ADR is Accepted + integration gate passes).
+**Note:** `OpenRouterAdapter` is committed unreferenced in `fae-engine`. The conductor wiring and
+V2 profile are the remaining work for this phase.
 
 ### XC — Release-validation real-audio phase  (cross-cutting gate)
 Before ANY user-facing release of the orb-host / V3b-playback / llama.cpp series, the
