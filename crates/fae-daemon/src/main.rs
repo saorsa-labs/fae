@@ -1262,6 +1262,146 @@ fn default_llama_cache_dir() -> Result<PathBuf, String> {
         .join("models/llamacpp"))
 }
 
+struct SharedLlamaServerSelection {
+    root_url: String,
+    model_id: String,
+}
+
+async fn resolve_shared_llama_server(
+    requested_model_id: &str,
+    explicit_model_id: bool,
+) -> Option<SharedLlamaServerSelection> {
+    let raw_url = env_path("FAE_LLAMA_SHARED_SERVER_URL")?;
+    let root_url = match normalize_shared_llama_root_url(&raw_url) {
+        Ok(url) => url,
+        Err(detail) => {
+            eprintln!(
+                "fae-daemon: shared llama.cpp server ignored; invalid FAE_LLAMA_SHARED_SERVER_URL: {detail}"
+            );
+            return None;
+        }
+    };
+    let timeout_ms = env_parsed("FAE_LLAMA_SHARED_SERVER_TIMEOUT_MS", 1500_u64);
+    let model_ids = match probe_shared_llama_server(&root_url, timeout_ms).await {
+        Ok(ids) => ids,
+        Err(detail) => {
+            eprintln!(
+                "fae-daemon: shared llama.cpp server {root_url} unavailable ({detail}); falling back to Fae-owned sidecar"
+            );
+            return None;
+        }
+    };
+    let model_id = select_shared_llama_model_id(requested_model_id, explicit_model_id, &model_ids);
+    println!("engine  : llama.cpp — attaching to shared server {root_url} with model {model_id}");
+    if !explicit_model_id && model_id != requested_model_id {
+        eprintln!(
+            "fae-daemon: shared llama.cpp server did not advertise default alias {requested_model_id:?}; selected advertised model {model_id:?}. Set FAE_MODEL_ID to pin a model."
+        );
+    }
+    Some(SharedLlamaServerSelection { root_url, model_id })
+}
+
+fn normalize_shared_llama_root_url(raw_url: &str) -> Result<String, String> {
+    let mut url = raw_url.trim().trim_end_matches('/').to_owned();
+    if url.is_empty() {
+        return Err("value is empty".to_owned());
+    }
+    if let Some(stripped) = url.strip_suffix("/v1") {
+        url = stripped.to_owned();
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("{raw_url:?} must start with http:// or https://"));
+    }
+    Ok(url)
+}
+
+async fn probe_shared_llama_server(root_url: &str, timeout_ms: u64) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|error| format!("build HTTP client: {error}"))?;
+
+    let health_url = format!("{root_url}/health");
+    let health = client
+        .get(&health_url)
+        .send()
+        .await
+        .map_err(|error| format!("GET {health_url}: {error}"))?;
+    let health_status = health.status();
+    if !health_status.is_success() {
+        return Err(format!("GET {health_url} returned {health_status}"));
+    }
+
+    let models_url = format!("{root_url}/v1/models");
+    let models = client
+        .get(&models_url)
+        .send()
+        .await
+        .map_err(|error| format!("GET {models_url}: {error}"))?;
+    let models_status = models.status();
+    if !models_status.is_success() {
+        return Err(format!("GET {models_url} returned {models_status}"));
+    }
+    let payload = models
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("parse {models_url} JSON: {error}"))?;
+    Ok(extract_llama_model_ids(&payload))
+}
+
+fn extract_llama_model_ids(payload: &serde_json::Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(models) = payload.get("data").and_then(serde_json::Value::as_array) {
+        for model in models {
+            push_unique_model_id(
+                &mut ids,
+                model.get("id").and_then(serde_json::Value::as_str),
+            );
+        }
+    }
+    if let Some(models) = payload.get("models").and_then(serde_json::Value::as_array) {
+        for model in models {
+            let id = model
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| model.get("id").and_then(serde_json::Value::as_str))
+                .or_else(|| model.get("name").and_then(serde_json::Value::as_str));
+            push_unique_model_id(&mut ids, id);
+        }
+    }
+    ids
+}
+
+fn push_unique_model_id(ids: &mut Vec<String>, id: Option<&str>) {
+    let Some(trimmed) = id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let owned = trimmed.to_owned();
+    if !ids.contains(&owned) {
+        ids.push(owned);
+    }
+}
+
+fn select_shared_llama_model_id(
+    requested_model_id: &str,
+    explicit_model_id: bool,
+    advertised_model_ids: &[String],
+) -> String {
+    if explicit_model_id
+        || advertised_model_ids.is_empty()
+        || advertised_model_ids
+            .iter()
+            .any(|model_id| model_id == requested_model_id)
+    {
+        requested_model_id.to_owned()
+    } else {
+        advertised_model_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| requested_model_id.to_owned())
+    }
+}
+
 fn default_llama_model_source() -> Result<LlamaModelSource, String> {
     if let Some(model_gguf) = env_path("FAE_LLAMA_MODEL_GGUF") {
         if std::env::var("FAE_DEV").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
@@ -1305,7 +1445,10 @@ fn default_llama_model_source() -> Result<LlamaModelSource, String> {
 }
 
 async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
-    let model_id = env_path("FAE_MODEL_ID").unwrap_or_else(|| DEFAULT_LLAMA_ALIAS.to_owned());
+    let explicit_model_id = env_path("FAE_MODEL_ID");
+    let model_id = explicit_model_id
+        .clone()
+        .unwrap_or_else(|| DEFAULT_LLAMA_ALIAS.to_owned());
 
     if let Some(url) = env_path("FAE_LLAMA_SERVER_URL") {
         if !std::env::var("FAE_DEV").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
@@ -1316,6 +1459,14 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
         }
         println!("engine  : llama.cpp — attaching to dev server {url}");
         return Arc::new(LlamaServerAdapter::connect(url, model_id));
+    }
+
+    if let Some(shared) = resolve_shared_llama_server(&model_id, explicit_model_id.is_some()).await
+    {
+        return Arc::new(LlamaServerAdapter::connect(
+            shared.root_url,
+            shared.model_id,
+        ));
     }
 
     let binary = resolve_llama_server_binary()
@@ -1678,6 +1829,8 @@ mod tests {
             "FAE_LLAMA_ALIAS",
             "FAE_GEMMA_THINKING",
             "FAE_LLAMA_SERVER_URL",
+            "FAE_LLAMA_SHARED_SERVER_URL",
+            "FAE_LLAMA_SHARED_SERVER_TIMEOUT_MS",
             "FAE_MODELS_LOCK",
             "FAE_AUDIO_FALLBACK",
             "FAE_ASR_LLAMA_CACHE_DIR",
@@ -1972,6 +2125,63 @@ created_at = "test"
 
         let err = qwen3_asr_locked_artifacts().unwrap_err();
         assert!(err.contains("64-hex sha256"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn shared_llama_url_normalization_accepts_root_or_v1() {
+        assert_eq!(
+            normalize_shared_llama_root_url("http://127.0.0.1:8081").unwrap(),
+            "http://127.0.0.1:8081"
+        );
+        assert_eq!(
+            normalize_shared_llama_root_url("http://127.0.0.1:8081/v1/").unwrap(),
+            "http://127.0.0.1:8081"
+        );
+        assert!(normalize_shared_llama_root_url("127.0.0.1:8081").is_err());
+        assert!(normalize_shared_llama_root_url("   ").is_err());
+    }
+
+    #[test]
+    fn shared_llama_model_ids_parse_router_and_single_model_shapes() {
+        let router = serde_json::json!({
+            "data": [
+                { "id": "ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M" },
+                { "id": "" }
+            ]
+        });
+        assert_eq!(
+            extract_llama_model_ids(&router),
+            vec!["ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M".to_owned()]
+        );
+
+        let single = serde_json::json!({
+            "models": [
+                { "model": "gemma-4-e4b", "name": "ignored" },
+                { "name": "fallback-name" },
+                { "model": "gemma-4-e4b" }
+            ]
+        });
+        assert_eq!(
+            extract_llama_model_ids(&single),
+            vec!["gemma-4-e4b".to_owned(), "fallback-name".to_owned()]
+        );
+    }
+
+    #[test]
+    fn shared_llama_model_selection_respects_explicit_model() {
+        let advertised = vec!["actual-router-id".to_owned()];
+        assert_eq!(
+            select_shared_llama_model_id("gemma-4", false, &advertised),
+            "actual-router-id"
+        );
+        assert_eq!(
+            select_shared_llama_model_id("gemma-4", true, &advertised),
+            "gemma-4"
+        );
+        assert_eq!(
+            select_shared_llama_model_id("gemma-4", false, &[]),
+            "gemma-4"
+        );
     }
 
     #[test]

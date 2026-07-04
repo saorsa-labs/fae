@@ -69,7 +69,7 @@ Suggested screenshot root:
 - [ ] `just run-ui-shell` launches the Rust orb shell when UI shell behavior is in scope.
 - [ ] `just test-serve` exposes `/health` on `127.0.0.1:7433`.
 - [ ] The active local text model and configured vision model are visible in Settings without truncation.
-- [ ] The runtime reports the expected local text model, context size, and tool mode.
+- [ ] The runtime reports the expected local text model, context size, tool mode, and llama.cpp source (`FAE_LLAMA_SHARED_SERVER_URL` attached shared server vs Fae-owned sidecar).
 - [ ] The active local text model matches `FaeConfig.recommendedModel()`. Active (Qwen fallback — Gemma 4 pending mlx-swift-lm): `Qwen3.5-9B-Unsloth` (≥16 GB) / `Qwen3.5-4B` (8–15 GB) / `Qwen3.5-2B-OptiQ` (<8 GB). Target (Gemma 4, not yet available): `E4B` (16–31 GB) / `E2B` (<16 GB) / `26B-A4B` (≥32 GB).
 - [ ] On a cache-cleared or clean-install machine, first local text-model load completes without `Worker command timed out: load` while model download is in progress.
 - [ ] Any stale onboarding, memory, scheduler, or approval state needed for the scenario is reset intentionally through the test server.
