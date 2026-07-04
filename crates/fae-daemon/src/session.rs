@@ -1558,6 +1558,45 @@ pub fn run_authorized_skillhost_list(
     }
 }
 
+/// (Phase G3) The read-only `mcp.list` handler. Returns the namespaced external
+/// MCP tool catalog (`mcp:<server>:<tool>`) + per-server health so Swift can
+/// surface it later. Gated by the safe envelope scope (`ToolExecuteSafe`,
+/// mirroring `skillhost.list`); no invocation. A `None` catalog (MCP not
+/// configured) yields an empty listing, never an error.
+pub fn run_authorized_mcp_list(
+    record: &ClientRecord,
+    cmd: &Command,
+    mcp_catalog: Option<&crate::mcp::McpCatalog>,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => {
+            let payload = match mcp_catalog {
+                Some(catalog) => catalog.list(),
+                None => serde_json::json!({ "tools": [], "servers": [] }),
+            };
+            Response::ok(&cmd.request_id, payload)
+        }
+        AuthzDecision::ConfirmRequired | AuthzDecision::Deny(_) => {
+            Response::error(&cmd.request_id, "forbidden", "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
 /// The `skillhost.activate` handler (ADR-013 Vision A / A2.5). Returns the full
 /// post-frontmatter `SKILL.md` body for prompt injection. Executable skills are
 /// re-verified against disk before their body is released. Safe-scope gated.

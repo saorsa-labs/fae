@@ -2,6 +2,20 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Phase G commit 3 (MCP as a governed external tool tier)
+
+### New Features
+- **External MCP servers as a governed ToolHost tool source (`crates/fae-daemon/src/mcp/`)**: declared MCP (Model Context Protocol) servers become a THIRD tool source alongside the host + jailed fluers registries, exposed as `mcp:<server>:<tool>` names routed through `ToolHost::execute_governed`. **Honest trust model: MCP servers are external trusted subprocesses — the OS jail does NOT confine them.** The whole gate is *declaration + allowlist + scope + origin*: only servers named in `FAE_MCP_CONFIG` are spawned; only per-server `allowed_tools` enter the catalog; the ToolHost re-checks the new `Scope::McpInvoke` per call (inner gate behind the `toolhost.execute → ToolExecuteSafe` envelope); and only `OwnerInteractive`/`Delegated` origins may invoke (proactive/scheduler/auto-skill/script-block deny fail-closed — an autonomous loop must never reach an unconfined external process). Every decision writes an audit row stamped `isolation:"external"` (NOT `host`/`jailed`); an allowed call also records a mutation-style receipt naming the external server before invocation. Per-call timeout (30s); a server crash surfaces a typed `McpError::Invoke`.
+- **Wire client = vendored `mistralrs-mcp` (zero new external dependency)**: consumes only the low-level `ProcessMcpConnection` (stdio) + `list_tools`/`call_tool` primitives, NOT its automatic tool-call loop. `mistralrs-mcp` is already in the build graph (`mistralrs-core → mistralrs-mcp`, patched to `../vendor`), so the direct edge adds ZERO compilation. **No cargo feature gate**: the dep compiles unconditionally regardless, so the real (and stronger, always-tested) gate is runtime config presence — no `FAE_MCP_CONFIG` ⇒ `None` catalog ⇒ every `mcp:` call denies `mcp_not_configured`.
+- **`FAE_MCP_CONFIG` declaration file (TOML)**: `[servers.<name>] command = "...", args = [...], allowed_tools = ["..."]` (unknown fields rejected fail-closed). A missing/empty env var silently disables MCP; a malformed file is loud but never blocks daemon startup.
+- **`mcp.list` command**: read-only namespaced catalog + per-server health (for Swift to surface later), gated by the safe envelope scope (mirrors `skillhost.list`). An absent catalog returns an empty listing, never an error.
+- **`Scope::McpInvoke` (`mcp:invoke`)** added to `fae-control-plane`; `SwiftFrontend::default_scopes` gains it (owner opt-in, inert until servers are declared) following the F7a minimal-grant-extension pattern.
+
+### Testing
+- **Unit — catalog (`mcp/mod.rs`)**: config parse + `deny_unknown_fields`, allowlist filtering (a server-offered-but-unallowlisted tool never enters the catalog), invoke round trip via a mock `McpServerConnection`, undeclared-tool deny WITHOUT touching the server, and server-error → typed `McpError::Invoke`.
+- **Unit — governed gate (`toolhost/mod.rs`)**: owner-interactive invoke runs + records an `isolation:"external"` audit row and an external receipt; proactive origin denies `mcp_origin_forbidden` without invoking; missing `McpInvoke` scope denies `missing_scope`; non-allowlisted tool denies `mcp_tool_not_declared`; no-catalog host denies `mcp_not_configured`.
+- **Integration (`tests/mcp_stdio.rs`)**: a REAL stdio spawn → initialize → tools/list → tools/call round trip against an in-repo `mock_mcp_server` bin, via the vendored `ProcessMcpConnection` (the exact transport `McpCatalog::spawn` uses).
+
 ## Unreleased — Phase G commit 1 (context-compaction foundation)
 
 ### New Features

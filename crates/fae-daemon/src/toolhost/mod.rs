@@ -32,12 +32,17 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::conductor::ConductorStore;
-use crate::toolhost::audit::{AuditDecision, ConductorStoreAudit, ToolHostAudit};
-use crate::toolhost::confirm::{build_detail, ConfirmReply, ConfirmRequest, ToolConfirmation};
+use crate::mcp::{McpCatalog, MCP_INVOKE_COMMAND, MCP_ISOLATION_LABEL, MCP_TOOL_PREFIX};
+use crate::toolhost::audit::{
+    AuditDecision, ConductorStoreAudit, ToolHostAudit, ToolHostAuditRecord,
+};
+use crate::toolhost::confirm::{
+    build_detail, ConfirmDetail, ConfirmReply, ConfirmRequest, ToolConfirmation,
+};
 use crate::toolhost::egress::{DisabledGate, ToolEgressGate};
 use crate::toolhost::policy::{EvalDecision, FaeToolPolicy, ToolHostGovernance};
 use crate::toolhost::receipts::{ConductorStoreReceipts, MutationReceipt, ToolHostReceipts};
-use fae_control_plane::ClientRecord;
+use fae_control_plane::{authorize, AuthzDecision, ClientRecord, Command, PROTOCOL_VERSION};
 
 pub mod audit;
 pub mod confirm;
@@ -153,6 +158,10 @@ pub struct ToolHost {
     root_mode: crate::toolhost::policy::RootMode,
     /// (B3) Resolved home dir for the protected-path absolute-spelling scan.
     home: Option<String>,
+    /// (Phase G3) The declared external MCP tool catalog, if any. `mcp:`-prefixed
+    /// calls route here (NOT through the fluers registries / OS jail). `None` ⇒
+    /// no servers declared ⇒ every `mcp:` call denies `mcp_not_configured`.
+    mcp: Option<Arc<McpCatalog>>,
 }
 
 impl ToolHost {
@@ -257,7 +266,18 @@ impl ToolHost {
             clock,
             root_mode,
             home: resolve_home(),
+            mcp: None,
         })
+    }
+
+    /// (Phase G3) Attach the shared external MCP catalog. Built once at daemon
+    /// startup and threaded into each per-session host at construction, so
+    /// `mcp:<server>:<tool>` calls route to the governed MCP tier. A host without
+    /// a catalog denies every `mcp:` call `mcp_not_configured`.
+    #[must_use]
+    pub fn with_mcp_catalog(mut self, catalog: Arc<McpCatalog>) -> Self {
+        self.mcp = Some(catalog);
+        self
     }
 
     /// The static tool definitions for the named tools (filtered by `allowed`),
@@ -283,6 +303,12 @@ impl ToolHost {
     /// trap); [`ToolHostError::UnknownTool`] for a classified-but-unregistered
     /// tool; [`ToolHostError::Tool`] for an execution failure.
     pub async fn execute(&self, req: ToolHostRequest) -> Result<ToolHostResult, ToolHostError> {
+        // (Phase G3) `mcp:` tools are external subprocesses, not fluers registry
+        // tools — route them to the dedicated gate (scope/origin/allowlist), NOT
+        // the FaeToolPolicy path (which would classify them `unknown_tool`).
+        if req.tool.starts_with(MCP_TOOL_PREFIX) {
+            return self.execute_mcp(&req).await;
+        }
         let isolation = req.origin.required_isolation();
         let gov = Arc::new(ToolHostGovernance {
             client: req.client.clone(),
@@ -342,6 +368,11 @@ impl ToolHost {
         req: ToolHostRequest,
         confirmation: &dyn ToolConfirmation,
     ) -> Result<ToolHostResult, ToolHostError> {
+        // (Phase G3) External MCP tools never need the owner-confirm round-trip;
+        // route them to the dedicated gate before the native path builds.
+        if req.tool.starts_with(MCP_TOOL_PREFIX) {
+            return self.execute_mcp(&req).await;
+        }
         let isolation = req.origin.required_isolation();
         let gov = Arc::new(ToolHostGovernance {
             client: req.client.clone(),
@@ -583,6 +614,118 @@ impl ToolHost {
                 (Some(path.to_string()), None, Some("absent"))
             }
             Err(_) => (Some(path.to_string()), None, Some("unreadable")),
+        }
+    }
+
+    /// (Phase G3) The governed gate for an `mcp:<server>:<tool>` call. MCP servers
+    /// are external trusted subprocesses — the OS jail does NOT confine them — so
+    /// the entire gate is: catalog live, an `OwnerInteractive`/`Delegated` origin,
+    /// the `Scope::McpInvoke` scope, and a declared + allowlisted tool. Every
+    /// decision produces an audit row stamped `isolation:"external"` (honest: not
+    /// `host`/`jailed`); an allowed call also records a mutation-style receipt
+    /// naming the server BEFORE the external process is invoked.
+    async fn execute_mcp(&self, req: &ToolHostRequest) -> Result<ToolHostResult, ToolHostError> {
+        let now_ms = self.clock.now_ms();
+        let deny = |reason: &str| -> Result<ToolHostResult, ToolHostError> {
+            let _ = self.audit.record(ToolHostAuditRecord {
+                event_type: "tool_policy",
+                ts_ms: now_ms,
+                tool: req.tool.clone(),
+                call_id: req.call_id.clone(),
+                decision: AuditDecision::Denied,
+                reason: reason.into(),
+                risk_class: "Mcp",
+                isolation: MCP_ISOLATION_LABEL,
+            });
+            Err(ToolHostError::Denied(reason.into()))
+        };
+
+        // 1. Catalog must be live (owner declared servers).
+        let Some(catalog) = self.mcp.as_ref() else {
+            return deny("mcp_not_configured");
+        };
+        // 2. Origin: only an owner's interactive turn or a delegated loop. An
+        //    autonomous origin (proactive/scheduler/auto-skill/script-block) must
+        //    never reach an unconfined external process.
+        if !matches!(
+            req.origin,
+            ToolOrigin::OwnerInteractive | ToolOrigin::Delegated
+        ) {
+            return deny("mcp_origin_forbidden");
+        }
+        // 3. Scope: the inner `Scope::McpInvoke` re-check (behind the outer
+        //    `toolhost.execute -> ToolExecuteSafe` envelope).
+        let scope_cmd = Command {
+            v: PROTOCOL_VERSION,
+            request_id: req.call_id.clone(),
+            command: MCP_INVOKE_COMMAND.into(),
+            payload: Value::Null,
+        };
+        if !matches!(
+            authorize(&req.client, &scope_cmd, now_ms),
+            AuthzDecision::Allow
+        ) {
+            return deny("missing_scope");
+        }
+        // 4. The tool must be declared + allowlisted (the catalog only holds
+        //    allowlisted tools, so a lookup miss is a fail-closed deny).
+        let Some(mtool) = catalog.get(&req.tool) else {
+            return deny("mcp_tool_not_declared");
+        };
+
+        // 5. Fail-closed audit (allow) BEFORE any side effect.
+        if self
+            .audit
+            .record(ToolHostAuditRecord {
+                event_type: "tool_policy",
+                ts_ms: now_ms,
+                tool: req.tool.clone(),
+                call_id: req.call_id.clone(),
+                decision: AuditDecision::Allowed,
+                reason: "allowed".into(),
+                risk_class: "Mcp",
+                isolation: MCP_ISOLATION_LABEL,
+            })
+            .is_err()
+        {
+            return Err(ToolHostError::Denied("audit_write_failed".into()));
+        }
+        // 6. Fail-closed receipt naming the external server BEFORE the invoke.
+        let receipt = MutationReceipt {
+            event_type: "tool_mutation",
+            ts_ms: now_ms,
+            tool: req.tool.clone(),
+            call_id: req.call_id.clone(),
+            risk_class: "Mcp".into(),
+            path: None,
+            pre_image_sha256: None,
+            // No local pre-image: the side effect is external, not a file mutation.
+            pre_image_note: Some("external"),
+            detail: ConfirmDetail::Mcp {
+                server: mtool.server.clone(),
+                tool: mtool.tool.clone(),
+            },
+            outcome: "invoked",
+        };
+        if let Err(e) = self.receipts.record(receipt) {
+            tracing::warn!(
+                tool = %req.tool,
+                call_id = %req.call_id,
+                error = %e,
+                "toolhost MCP receipt write failed — denying invocation"
+            );
+            return Err(ToolHostError::Denied("receipt_write_failed".into()));
+        }
+
+        // 7. Invoke the external server (bounded by the catalog's per-call timeout).
+        match catalog.invoke(&req.tool, req.input.clone()).await {
+            Ok(text) => Ok(ToolHostResult {
+                output: ToolResult {
+                    content: vec![Value::String(text)],
+                    details: None,
+                },
+            }),
+            Err(e) => Err(ToolHostError::Tool(e.to_string())),
         }
     }
 }
@@ -1787,5 +1930,208 @@ mod tests {
     /// Quote a path for safe inclusion in a `sh -c` command (test helper).
     fn shell_quote(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase G3: external MCP tool tier (the declaration/allowlist/scope/origin gate)
+    // -----------------------------------------------------------------------
+
+    use crate::mcp::{catalog_from_mock, MockConn};
+
+    /// A host wired with an MCP catalog built from a single mock server exposing
+    /// `echo` (allowlisted) + `secret` (offered but NOT allowlisted).
+    async fn host_with_mcp(
+        audit: Arc<CapturingAudit>,
+        receipts: Arc<dyn ToolHostReceipts>,
+        conn: Arc<MockConn>,
+    ) -> (ToolHost, tempfile::TempDir) {
+        let catalog = Arc::new(catalog_from_mock("fs", conn, &["echo"]).await);
+        let (host, dir) = fresh_host_with_receipts(
+            audit,
+            receipts,
+            Arc::new(FakeEgressGate::allow()),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await;
+        (host.with_mcp_catalog(catalog), dir)
+    }
+
+    fn mcp_client() -> ClientRecord {
+        client(&[Scope::McpInvoke])
+    }
+
+    #[tokio::test]
+    async fn mcp_owner_interactive_invokes_and_records_external_receipt() {
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let conn = MockConn::new(
+            "fs",
+            vec![("echo", "echo"), ("secret", "no")],
+            "mcp-said-hi",
+        );
+        let (host, _dir) = host_with_mcp(
+            Arc::clone(&audit),
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::clone(&conn),
+        )
+        .await;
+        let conf = FakeConfirmation::approve();
+        let r = host
+            .execute_governed(
+                req_origin(
+                    mcp_client(),
+                    "mcp:fs:echo",
+                    json!({"msg": "hi"}),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect("owner-interactive mcp call runs");
+        assert_eq!(r.output.content, vec![Value::String("mcp-said-hi".into())]);
+        assert!(
+            !conf.was_called(),
+            "mcp never uses the owner-confirm channel"
+        );
+        assert_eq!(conn.call_count(), 1, "the external server was invoked once");
+        // Audit: allowed, honest external isolation label.
+        let row = &audit.snapshot()[0];
+        assert_eq!(row.decision, AuditDecision::Allowed);
+        assert_eq!(row.reason, "allowed");
+        assert_eq!(row.risk_class, "Mcp");
+        assert_eq!(row.isolation, "external");
+        // Receipt: names the external server, marks it external (not jailed).
+        let receipt = &receipts.snapshot()[0];
+        assert_eq!(receipt.tool, "mcp:fs:echo");
+        assert_eq!(receipt.outcome, "invoked");
+        assert_eq!(receipt.pre_image_note, Some("external"));
+    }
+
+    #[tokio::test]
+    async fn mcp_proactive_origin_denied_without_invoking() {
+        // Origin gate: an autonomous turn must never reach an unconfined external
+        // process. Deny BEFORE the server is touched.
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let conn = MockConn::new("fs", vec![("echo", "echo")], "x");
+        let (host, _dir) = host_with_mcp(
+            Arc::clone(&audit),
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::clone(&conn),
+        )
+        .await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req_origin(
+                    mcp_client(),
+                    "mcp:fs:echo",
+                    json!({}),
+                    ToolOrigin::Proactive,
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("proactive mcp must deny");
+        assert!(
+            matches!(&err, ToolHostError::Denied(r) if r == "mcp_origin_forbidden"),
+            "{err:?}"
+        );
+        assert_eq!(conn.call_count(), 0, "denied origin must not invoke");
+        assert!(
+            receipts.snapshot().is_empty(),
+            "no receipt on a denied call"
+        );
+        assert_eq!(audit.snapshot()[0].reason, "mcp_origin_forbidden");
+    }
+
+    #[tokio::test]
+    async fn mcp_missing_scope_denied() {
+        // A client WITHOUT McpInvoke is denied at the inner scope gate.
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let conn = MockConn::new("fs", vec![("echo", "echo")], "x");
+        let (host, _dir) = host_with_mcp(
+            Arc::clone(&audit),
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::clone(&conn),
+        )
+        .await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req_origin(
+                    client(&[Scope::ToolExecuteSafe]), // no McpInvoke
+                    "mcp:fs:echo",
+                    json!({}),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("missing McpInvoke must deny");
+        assert!(
+            matches!(&err, ToolHostError::Denied(r) if r == "missing_scope"),
+            "{err:?}"
+        );
+        assert_eq!(conn.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn mcp_non_allowlisted_tool_denied() {
+        // `secret` is offered by the server but not allowlisted => never in the
+        // catalog => a fail-closed `mcp_tool_not_declared` deny.
+        let audit = Arc::new(CapturingAudit::new());
+        let receipts = Arc::new(CapturingReceipts::new());
+        let conn = MockConn::new("fs", vec![("echo", "echo"), ("secret", "no")], "x");
+        let (host, _dir) = host_with_mcp(
+            Arc::clone(&audit),
+            Arc::clone(&receipts) as Arc<dyn ToolHostReceipts>,
+            Arc::clone(&conn),
+        )
+        .await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req_origin(
+                    mcp_client(),
+                    "mcp:fs:secret",
+                    json!({}),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("non-allowlisted tool must deny");
+        assert!(
+            matches!(&err, ToolHostError::Denied(r) if r == "mcp_tool_not_declared"),
+            "{err:?}"
+        );
+        assert_eq!(conn.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn mcp_no_catalog_denied() {
+        // A host with NO MCP catalog denies every `mcp:` call `mcp_not_configured`.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req_origin(
+                    mcp_client(),
+                    "mcp:fs:echo",
+                    json!({}),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("no catalog must deny");
+        assert!(
+            matches!(&err, ToolHostError::Denied(r) if r == "mcp_not_configured"),
+            "{err:?}"
+        );
+        assert_eq!(audit.snapshot()[0].reason, "mcp_not_configured");
     }
 }

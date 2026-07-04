@@ -11,6 +11,13 @@ repository.workspace = true
 name = "fae-daemon"
 path = "src/main.rs"
 
+# Phase G3: a minimal in-repo MCP server (newline-delimited JSON-RPC over stdio)
+# used only as the integration-test fixture for the real spawn->list->invoke
+# round trip. Tiny; no model, no network.
+[[bin]]
+name = "mock_mcp_server"
+path = "src/bin/mock_mcp_server.rs"
+
 [dependencies]
 fae-audio = { path = "../fae-audio" }
 fae-control-plane = { path = "../fae-control-plane" }
@@ -51,6 +58,18 @@ tracing-subscriber = { workspace = true }
 # A3: per-session ephemeral tool sandbox root (tempfile::TempDir guard).
 tempfile = "3"
 dirs = "2"
+# Phase G3: external MCP tool tier. `mistralrs-mcp` is ALREADY in the build graph
+# (mistralrs-core depends on it, patched to ../vendor), so this direct edge adds
+# ZERO new compilation — we consume only its low-level ProcessMcpConnection (stdio)
+# + list_tools/call_tool primitives, NOT its automatic tool-call loop. No cargo
+# feature gate: the dep is unconditionally compiled anyway, so the real gate is
+# runtime config presence (`FAE_MCP_CONFIG`). Declared via the same git URL +
+# rev as fae-engine's `mistralrs` (the workspace `[patch]` redirects the URL to
+# ../vendor/mistral.rs/*), so this resolves to the SAME already-built crate
+# instance as the transitive mistralrs-core -> mistralrs-mcp edge. `toml` parses
+# the declaration file.
+mistralrs-mcp = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "c22c2e2b622a815821e59056c2b5952b4cbbe010" }
+toml = { workspace = true }
 
 # B2: OS-level execution isolation. macOS uses `/usr/bin/sandbox-exec` (no
 # crate); Linux uses Landlock (pure syscalls, no daemon/root) applied in a
@@ -63,3 +82,8 @@ landlock = "0.4.5"
 # AcceptedEnvelopes for kinds the production FaeSenderVerifier refuses, so
 # handler dispatch guards can be probed independently of the verifier matrix.
 fae-envelope-gate = { path = "../fae-envelope-gate", features = ["test-util"] }
+# Phase G3: the MCP catalog tests implement the vendored `McpServerConnection`
+# trait (which returns `anyhow::Result`) with a mock; the stdio integration test
+# spawns the mock server via the vendored ProcessMcpConnection (already a normal
+# dependency above, so no separate dev entry for it is needed).
+anyhow = "1"

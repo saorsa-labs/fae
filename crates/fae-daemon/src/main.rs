@@ -63,6 +63,11 @@ mod headless_delegate_test;
 /// model, asserting on every output. CI (`ci-linux.yml`) runs it to prove the
 /// Landlock jail confines on the running kernel.
 mod headless_tool_test;
+/// Phase G3 — external MCP servers as a governed tool tier. Declared via
+/// `FAE_MCP_CONFIG`, spawned as stdio subprocesses, exposed as `mcp:<server>:<tool>`
+/// names routed through the governed ToolHost (scope + origin + allowlist gate;
+/// NOT OS-jailed — external trusted subprocesses). See `mcp/mod.rs`.
+mod mcp;
 mod offline_turn;
 /// Phase E — x0x peer messaging. Commit 1: `FAE_X0X_*` config + data-dir
 /// discovery, sender-tier `SignatureVerifier` (`session_handoff` = owner-fleet
@@ -476,6 +481,40 @@ async fn main() -> DaemonResult<()> {
     ));
     let skill_host = std::sync::Arc::new(skillhost::SkillHost::new(skills_dir, skill_audit));
 
+    // Phase G3: external MCP tool tier. Declared servers only (`FAE_MCP_CONFIG`).
+    // No env / no config => `None` (MCP silently absent). A malformed config is
+    // loud (a typo must not silently disable a declared server) but never blocks
+    // daemon startup. Spawned once here; the catalog is threaded into each
+    // session's ToolHost so `mcp:<server>:<tool>` calls route through the gate.
+    let mcp_catalog: Option<Arc<mcp::McpCatalog>> = match mcp::McpConfig::from_env() {
+        None => None,
+        Some(Ok(cfg)) => {
+            let catalog = mcp::McpCatalog::spawn(&cfg).await;
+            for h in catalog.health() {
+                if h.healthy {
+                    println!(
+                        "fae-daemon: MCP server '{}' ({} tools)",
+                        h.server, h.tool_count
+                    );
+                } else {
+                    eprintln!(
+                        "fae-daemon: MCP server '{}' unavailable: {}",
+                        h.server,
+                        h.note.as_deref().unwrap_or("unknown")
+                    );
+                }
+            }
+            if catalog.is_empty() {
+                eprintln!("fae-daemon: MCP configured but no tools registered (check allowlists)");
+            }
+            Some(Arc::new(catalog))
+        }
+        Some(Err(e)) => {
+            eprintln!("fae-daemon: MCP config error ({e}); MCP disabled");
+            None
+        }
+    };
+
     // ── Phase E: x0x peer ingress (opt-in via FAE_X0X_INGRESS) ──────────
     // The SINGLE governed inbound entry point for peer content. `from_env`
     // returns `None` (ingress off) on any missing/invalid config, so the daemon's
@@ -509,6 +548,7 @@ async fn main() -> DaemonResult<()> {
         conductor_runtime,
         toolhost_store,
         skill_host,
+        mcp_catalog,
         peer_outbound,
     )
     .await?;

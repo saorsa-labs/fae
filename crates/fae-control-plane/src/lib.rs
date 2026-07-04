@@ -219,6 +219,13 @@ pub enum Scope {
     /// Manage the loaded model at runtime — toggle the personal-LoRA scale
     /// (base ↔ personalized) or reload an adapter. Owner-level, non-destructive.
     ModelManagement,
+    /// (Phase G3) Invoke a tool exposed by a declared external MCP server
+    /// (`mcp:<server>:<tool>`, routed through the governed ToolHost). This is
+    /// the inner scope the ToolHost re-checks per call; the outer envelope is
+    /// `toolhost.execute → ToolExecuteSafe`. MCP servers are external trusted
+    /// subprocesses — NOT OS-jailed — so the gate is declaration + per-server
+    /// allowlist + this scope + an owner/delegated origin, nothing more.
+    McpInvoke,
     Admin,
 }
 
@@ -244,6 +251,7 @@ impl Scope {
             Scope::AgentExecute => "agent:execute",
             Scope::AgentDelegate => "agent:delegate",
             Scope::ModelManagement => "model:management",
+            Scope::McpInvoke => "mcp:invoke",
             Scope::Admin => "admin",
         }
     }
@@ -270,6 +278,7 @@ impl Scope {
             "agent:execute" => Scope::AgentExecute,
             "agent:delegate" => Scope::AgentDelegate,
             "model:management" => Scope::ModelManagement,
+            "mcp:invoke" => Scope::McpInvoke,
             "admin" => Scope::Admin,
             _ => return None,
         };
@@ -352,6 +361,17 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         // (MAJOR-2): this table runs before dispatch; the handlers are in
         // transport.rs (`run` spawns; `list`/`activate` inline).
         "skillhost.list" | "skillhost.activate" | "skillhost.run" => &[Scope::ToolExecuteSafe],
+        // Phase G3: external MCP tool tier. `mcp.list` is a read-only catalog +
+        // per-server health surface, so it takes the SAFE envelope scope (mirrors
+        // `skillhost.list`). `mcp.invoke` is NOT a wire command — the ToolHost
+        // calls `authorize` with it as the INNER per-call scope check when
+        // `toolhost.execute` routes an `mcp:<server>:<tool>` name (the outer
+        // envelope is `ToolExecuteSafe`). MCP servers are external subprocesses,
+        // not OS-jailed; the gate is declaration + allowlist + this scope +
+        // owner/delegated origin. Handler: `run_authorized_mcp_list` (transport.rs
+        // intercepts `mcp.list` like `skillhost.list`).
+        "mcp.list" => &[Scope::ToolExecuteSafe],
+        "mcp.invoke" => &[Scope::McpInvoke],
         "scheduler.list" => &[Scope::SchedulerRead],
         "scheduler.mutate" => &[Scope::SchedulerWrite],
         "agent.run" => &[Scope::AgentExecute],
@@ -441,6 +461,14 @@ impl ClientClass {
                     // per call, and the server-side opt-in stays here (a
                     // client-side toggle is never the boundary).
                     Scope::ToolExecuteDangerous,
+                    // Phase G3 (owner opt-in): the Swift frontend may invoke
+                    // tools from declared external MCP servers via the governed
+                    // ToolHost. Same minimal-grant-extension pattern as F7a: the
+                    // scope lets the invoke RUN, but MCP is inert unless the owner
+                    // declares servers in `FAE_MCP_CONFIG` (no config => no
+                    // catalog => every invoke denies `mcp_not_configured`), and
+                    // each tool must be per-server allowlisted. Not OS-jailed.
+                    Scope::McpInvoke,
                     // Phase E (2026-07-04, owner opt-in): the Swift frontend
                     // drives the outbound `peer.*` commands (send a direct
                     // message, hand a session to an owner-fleet node, record a
@@ -1484,6 +1512,9 @@ mod tests {
         // governed daemon ToolHost too — the per-call `tool.confirm` card is the
         // human boundary, not the scope (Q7b resolution, option a).
         assert!(frontend.contains(&Scope::ToolExecuteDangerous));
+        // Phase G3 (owner opt-in): the frontend may invoke declared external MCP
+        // tools; the scope is inert until the owner declares servers in config.
+        assert!(frontend.contains(&Scope::McpInvoke));
         // Memory stays server-side; the frontend never holds it.
         assert!(!frontend.contains(&Scope::MemoryWrite));
         // Phase E: the frontend drives the outbound `peer.*` commands.
