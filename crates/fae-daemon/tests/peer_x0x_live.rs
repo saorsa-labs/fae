@@ -26,6 +26,11 @@
 //! dispatch are unit-tested in-crate (`src/peer/x0x_client.rs`, `src/peer/mod.rs`,
 //! `src/peer/{verifier,handler}.rs`).
 
+// Test code is exempt from the production unwrap/expect/panic ban; ci-linux's
+// crate gate passes `-D clippy::{expect_used,unwrap_used,panic}` with
+// `--all-targets`, which sweeps integration-test targets in — allow here.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
