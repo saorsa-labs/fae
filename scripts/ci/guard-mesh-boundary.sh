@@ -67,11 +67,29 @@ cargo_violations=0
 #                        dep bypass: `mesh_symphony = { package = "x0x-..." }`.
 # The closing `"` anchor keeps this from false-positive on prose comments
 # (e.g. `// x0x-symphony is deferred` has no `"` right after the crate name).
+# SANCTIONED EXCEPTION (Phase F3, ADR-015): `crates/fae-symphony-runner` is the
+# deliberately QUARANTINED symphony client — a standalone binary that talks to
+# fae-daemon over its socket precisely so the daemon/conductor never link the
+# x0x family. It is the one Cargo.toml allowed to name x0x-symphony crates; the
+# daemon-side quarantine is enforced by the companion check below (fae-daemon
+# must not depend on the runner) plus the conductor import scan.
 while IFS= read -r line; do
   [ -z "$line" ] && continue
+  case "$line" in crates/fae-symphony-runner/Cargo.toml:*) continue ;; esac
   echo "[guard-mesh-boundary]   VIOLATION (Cargo): $line"
   cargo_violations=$((cargo_violations + 1))
 done < <(grep -rEn -e '^[[:space:]]*x0x(-compute|_compute|-symphony|_symphony|-symphony-core|_symphony_core)?[[:space:]]*=' -e 'x0x(-compute|_compute|-symphony|_symphony|-symphony-core|_symphony_core)?"' crates/Cargo.toml crates/*/Cargo.toml || true)
+
+# Companion check: the quarantine holds only if nothing links the runner crate
+# back into the daemon/conductor. A `fae-symphony-runner` dep anywhere else in
+# the workspace would launder the x0x family through the exception.
+# (Dep forms only: a `fae-symphony-runner = ...` key or the quoted crate name in
+# a package/path value. The bare workspace `members` array entry — a quoted name
+# with NO `=` on the line — is the legitimate registration and is not matched.)
+if grep -rEn -e '^[[:space:]]*fae[-_]symphony[-_]runner[[:space:]]*=' -e '=.*"fae[-_]symphony[-_]runner"' crates/Cargo.toml crates/*/Cargo.toml | grep -v '^crates/fae-symphony-runner/Cargo.toml:' | grep -q .; then
+  echo "[guard-mesh-boundary]   VIOLATION: another crate depends on fae-symphony-runner (quarantine laundering)."
+  cargo_violations=$((cargo_violations + 1))
+fi
 
 if [ "$cargo_violations" -gt 0 ]; then
   echo "[guard-mesh-boundary] $cargo_violations forbidden x0x-family Cargo dependency/dependencies (direct key OR renamed package/path/git)."
