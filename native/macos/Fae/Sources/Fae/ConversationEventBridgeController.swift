@@ -401,6 +401,15 @@ final class ConversationEventBridgeController: ObservableObject {
             let message = userInfo["message"] as? String ?? "unknown error"
             appendStatusMessage("Something went wrong: \(message)")
 
+        case "conductor.fallback":
+            // ADR-014 assumption: the daemon emits a `conductor.fallback` stage when
+            // a cloud-lane turn falls back to local (budget exhausted, PII membrane
+            // blocked it, or network error). The exact stage name is not yet
+            // finalised — update this case when the daemon contract is published.
+            let reason = userInfo["reason"] as? String ?? "cloud unavailable"
+            NSLog("ConversationEventBridgeController: cloud fallback — %@", reason)
+            subtitleState?.showToolMessage("Running locally (cloud request fell back: \(reason))")
+
         default:
             break
         }

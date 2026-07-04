@@ -798,6 +798,16 @@ actor DaemonLLMEngine: LLMEngine {
 
     var isLoaded: Bool { loadState.isLoaded }
 
+    // MARK: - Cloud lane (ADR-014)
+
+    /// Privacy lane resolved from `llm.privacyLane`. Set by FaeCore before load().
+    /// "local" → no cloud env vars injected; "fleet" / "all" → inject the five
+    /// cloud vars if a key is present in Keychain.
+    var cloudPrivacyLane: String = "local"
+
+    /// Daily budget cap passed as `FAE_CLOUD_DAILY_BUDGET_MICROS` to the daemon.
+    var cloudDailyBudgetUSD: Double = 2.0
+
     // MARK: - B-Swift Phase B: crash-supervisor state
     //
     // The supervisor owns the bounded-restart POLICY (pure, injectable clock).
@@ -926,6 +936,15 @@ actor DaemonLLMEngine: LLMEngine {
         if let process, process.isRunning {
             process.terminate()
         }
+    }
+
+    // MARK: - Cloud lane configuration (ADR-014)
+
+    /// Set the cloud privacy lane and daily budget before `load()` is called.
+    /// Called by FaeCore immediately after constructing the engine.
+    func setCloudLane(privacyLane: String, budgetUSD: Double) {
+        cloudPrivacyLane = privacyLane
+        cloudDailyBudgetUSD = min(max(budgetUSD, 0.01), 100.0)
     }
 
     // MARK: LLMEngine
@@ -1644,6 +1663,26 @@ actor DaemonLLMEngine: LLMEngine {
             // llama.cpp instead of failing over to the MLX lane.
             environment["FAE_LLAMACPP_RUNTIME_DIR"] = bundledRuntimeDir
         }
+
+        // Cloud lane (ADR-014): inject remote vars only when lane != "local" and
+        // a key is present in Keychain. The key value must never appear in logs.
+        let resolvedLane = ["local", "fleet", "all"].contains(cloudPrivacyLane)
+            ? cloudPrivacyLane : "local"
+        if resolvedLane != "local",
+           let apiKey = CredentialManager.retrieve(key: "openrouter.apiKey"),
+           !apiKey.isEmpty
+        {
+            let budgetMicros = UInt64(min(max(cloudDailyBudgetUSD, 0.01), 100.0) * 1_000_000)
+            environment["FAE_REMOTE_BASE_URL"] = "https://openrouter.ai/api/v1"
+            environment["FAE_REMOTE_MODEL"] = "openai/gpt-4.1-mini"
+            environment["FAE_PRIVACY_LANE"] = resolvedLane
+            environment["FAE_CLOUD_DAILY_BUDGET_MICROS"] = "\(budgetMicros)"
+            environment["FAE_OPENROUTER_API_KEY"] = apiKey
+            // Never log the key — only confirm the lane is active.
+            NSLog("DaemonLLMEngine: cloud lane active (lane=%@, budget=%.2f USD/day)",
+                  resolvedLane, cloudDailyBudgetUSD)
+        }
+
         daemonProcess.environment = environment
 
         let pipe = Pipe()

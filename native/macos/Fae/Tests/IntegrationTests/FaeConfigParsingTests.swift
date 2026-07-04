@@ -90,4 +90,102 @@ final class FaeConfigParsingTests: XCTestCase {
         let unescaped = FaeConfig.unescapeString("hello")
         XCTAssertEqual(unescaped, "hello")
     }
+
+    // MARK: - ADR-014 cloud lane: privacyLane round-trip
+
+    func testPrivacyLaneDefaultIsLocal() {
+        let config = FaeConfig()
+        XCTAssertEqual(config.llm.privacyLane, "local")
+        XCTAssertEqual(config.llm.resolvedPrivacyLane, "local")
+    }
+
+    func testPrivacyLaneRoundTripLocal() throws {
+        let toml = """
+        [llm]
+        privacyLane = "local"
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("priv-lane-local-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        XCTAssertEqual(config.llm.privacyLane, "local")
+        XCTAssertEqual(config.llm.resolvedPrivacyLane, "local")
+    }
+
+    func testPrivacyLaneRoundTripAll() throws {
+        let toml = """
+        [llm]
+        privacyLane = "all"
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("priv-lane-all-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        XCTAssertEqual(config.llm.privacyLane, "all")
+    }
+
+    func testPrivacyLaneUnknownFallsBackToLocal() throws {
+        let toml = """
+        [llm]
+        privacyLane = "unknown_value"
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("priv-lane-unknown-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        // Unknown value must silently resolve to "local".
+        XCTAssertEqual(config.llm.privacyLane, "local")
+        XCTAssertEqual(config.llm.resolvedPrivacyLane, "local")
+    }
+
+    // MARK: - ADR-014 cloud lane: cloudDailyBudgetUSD round-trip
+
+    func testCloudDailyBudgetUSDDefault() {
+        let config = FaeConfig()
+        XCTAssertEqual(config.llm.cloudDailyBudgetUSD, 2.0, accuracy: 0.001)
+    }
+
+    func testCloudDailyBudgetUSDRoundTrip() throws {
+        let toml = """
+        [llm]
+        cloudDailyBudgetUSD = 5.0
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("budget-5-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        XCTAssertEqual(config.llm.cloudDailyBudgetUSD, 5.0, accuracy: 0.01)
+    }
+
+    func testCloudDailyBudgetUSDClampsToMin() throws {
+        let toml = """
+        [llm]
+        cloudDailyBudgetUSD = 0.0
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("budget-zero-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        // Clamp floor: must be at least 0.01.
+        XCTAssertGreaterThanOrEqual(config.llm.cloudDailyBudgetUSD, 0.01)
+    }
+
+    func testCloudDailyBudgetUSDClampsToMax() throws {
+        let toml = """
+        [llm]
+        cloudDailyBudgetUSD = 999.0
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("budget-huge-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        // Clamp ceiling: must not exceed 100.0.
+        XCTAssertLessThanOrEqual(config.llm.cloudDailyBudgetUSD, 100.0)
+    }
 }

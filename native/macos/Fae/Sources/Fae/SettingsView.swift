@@ -37,6 +37,11 @@ struct SettingsView: View {
                         Label("Models & Performance", systemImage: "cpu")
                     }
 
+                SettingsModelsPrivacyTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Models & Privacy", systemImage: "lock.rectangle.stack")
+                    }
+
                 SettingsSkillsTab(commandSender: commandSender)
                     .tabItem {
                         Label("Skills", systemImage: "sparkles")

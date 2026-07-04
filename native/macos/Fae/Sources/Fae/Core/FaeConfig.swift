@@ -158,6 +158,25 @@ struct FaeConfig: Codable {
 
         /// Prefill chunk size. nil = auto-tune based on model size.
         var prefillStepSize: Int? = nil
+
+        // MARK: Cloud lane (ADR-014)
+
+        /// Privacy lane for cloud model routing.
+        /// - "local"  (default): all turns stay on-device; no cloud env vars injected.
+        /// - "fleet":  routes only to the user's own registered devices.
+        /// - "all":    allows cloud / OpenRouter models when the API key is set.
+        /// Unknown values fall back to "local".
+        var privacyLane: String = "local"
+
+        /// Daily spending cap for cloud model calls, in USD.
+        /// Converted to micros (USD × 1_000_000) before being passed to the daemon
+        /// as `FAE_CLOUD_DAILY_BUDGET_MICROS`. Clamped to [0.01, 100.0].
+        var cloudDailyBudgetUSD: Double = 2.0
+
+        /// Validated privacy lane — unknown values resolve to "local".
+        var resolvedPrivacyLane: String {
+            ["local", "fleet", "all"].contains(privacyLane) ? privacyLane : "local"
+        }
     }
 
     /// True when the effective LLM context window is at or below 16K tokens.
@@ -992,6 +1011,12 @@ struct FaeConfig: Codable {
                     config.llm.useDaemonEngine = v
                 case "daemonBinaryPath":
                     config.llm.daemonBinaryPath = rawValue == "nil" ? nil : parseString(rawValue)
+                case "privacyLane":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.privacyLane = ["local", "fleet", "all"].contains(v) ? v : "local"
+                case "cloudDailyBudgetUSD":
+                    guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.cloudDailyBudgetUSD = min(max(Double(v), 0.01), 100.0)
                 default: break
                 }
             case "tts":
@@ -1304,6 +1329,8 @@ struct FaeConfig: Codable {
         lines.append("thinkingLevel = \(encodeString(normalizedThinkingLevel.rawValue))")
         lines.append("useDaemonEngine = \(llm.useDaemonEngine ? "true" : "false")")
         lines.append("daemonBinaryPath = \(encodeStringOrNil(llm.daemonBinaryPath))")
+        lines.append("privacyLane = \(encodeString(llm.resolvedPrivacyLane))")
+        lines.append("cloudDailyBudgetUSD = \(formatFloat(Float(min(max(llm.cloudDailyBudgetUSD, 0.01), 100.0))))")
         lines.append("")
 
         lines.append("[tts]")
