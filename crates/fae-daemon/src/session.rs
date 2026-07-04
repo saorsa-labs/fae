@@ -58,6 +58,10 @@ pub struct SessionBackends<'a> {
     /// NOT an ACP-provider/routing abstraction: it only delegates to the concrete
     /// `fae_acp` calls and lets tests count spawn/start/submit attempts.
     pub acp_runner: &'a dyn AcpAgentRunner,
+    /// Phase E outbound peer surface (x0x). `Some` only when peer ingress is
+    /// enabled (`FAE_X0X_INGRESS` + a reachable x0xd); the `peer.*` commands
+    /// fail closed with `peer_ingress_disabled` when it is `None`.
+    pub peer: Option<&'a crate::peer::PeerOutbound>,
 }
 
 /// Thin delegation seam for native ACP calls.
@@ -462,6 +466,12 @@ async fn dispatch(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResul
         // M2-live §4: advisory reward snapshot (read-only; joins three isolated
         // reads). StatusRead-scoped aggregate — no conversation content.
         "conductor.reward_snapshot" => conductor_reward_snapshot(backends, cmd).await,
+        // Phase E outbound peer commands (x0x). Gated by X0xMessage / X0xAdmin
+        // in `required_scopes` (two registration points, MAJOR-2). Each fails
+        // closed with `peer_ingress_disabled` when the peer lane is off.
+        "peer.send" => peer_send(backends, cmd).await,
+        "peer.handoff_send" => peer_handoff_send(backends, cmd).await,
+        "peer.consent_respond" => peer_consent_respond(backends, cmd).await,
         "audio.transcribe_fallback" => transcribe_fallback(backends, cmd).await.map_err(Into::into),
         // Open this connection's server-push event stream (voice spine V2). The
         // ack is the signal the transport uses to register the connection's sink
@@ -2207,6 +2217,93 @@ async fn conductor_reward_snapshot(backends: &SessionBackends<'_>, cmd: &Command
     serde_json::to_value(&snapshot).map_err(|_| CommandFailure::from("snapshot_serialize_failed"))
 }
 
+/// Phase E `peer.send`: send a plain-text `direct_message` to a peer agent.
+/// Strict payload (`deny_unknown_fields`): exactly `to_agent_id` + non-empty
+/// `text`. Fails closed with `peer_ingress_disabled` when the peer lane is off.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeerSendPayload {
+    to_agent_id: String,
+    text: String,
+}
+
+async fn peer_send(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    let peer = backends
+        .peer
+        .ok_or_else(|| CommandFailure::from("peer_ingress_disabled"))?;
+    let payload: PeerSendPayload = serde_json::from_value(cmd.payload.clone())
+        .map_err(|_| CommandFailure::from("bad_request"))?;
+    if payload.text.trim().is_empty() || payload.to_agent_id.trim().is_empty() {
+        return Err(CommandFailure::from("bad_request"));
+    }
+    peer.send_direct_message(&payload.to_agent_id, &payload.text)
+        .await
+        .map_err(|error| {
+            tracing::warn!("peer.send failed: {error}");
+            CommandFailure::from("peer_send_failed")
+        })?;
+    Ok(serde_json::json!({ "sent": true }))
+}
+
+/// Phase E `peer.handoff_send`: hand a live session to an owner-fleet node.
+/// `snapshot` is the full [`crate::peer::handoff::SessionHandoffPayload`]
+/// (`deny_unknown_fields`). The target must be in the owner-fleet allowlist —
+/// [`crate::peer::PeerOutbound::send_handoff`] rejects otherwise.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeerHandoffPayload {
+    to_agent_id: String,
+    snapshot: crate::peer::handoff::SessionHandoffPayload,
+}
+
+async fn peer_handoff_send(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    let peer = backends
+        .peer
+        .ok_or_else(|| CommandFailure::from("peer_ingress_disabled"))?;
+    let payload: PeerHandoffPayload = serde_json::from_value(cmd.payload.clone())
+        .map_err(|_| CommandFailure::from("bad_request"))?;
+    peer.send_handoff(&payload.to_agent_id, payload.snapshot)
+        .await
+        .map_err(|error| {
+            tracing::warn!("peer.handoff_send failed: {error}");
+            CommandFailure::from("handoff_send_failed")
+        })?;
+    Ok(serde_json::json!({ "sent": true }))
+}
+
+/// Phase E `peer.consent_respond`: record an owner's accept/deny decision on a
+/// pending peer envelope. v1: appends the decision to the peer audit log and
+/// emits a `peer.consent_result` event — the allowlist itself is config-file
+/// based, so this is the durable, auditable record, not a live mutation.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeerConsentPayload {
+    envelope_id: String,
+    accept: bool,
+}
+
+async fn peer_consent_respond(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    let peer = backends
+        .peer
+        .ok_or_else(|| CommandFailure::from("peer_ingress_disabled"))?;
+    let payload: PeerConsentPayload = serde_json::from_value(cmd.payload.clone())
+        .map_err(|_| CommandFailure::from("bad_request"))?;
+    if payload.envelope_id.trim().is_empty() {
+        return Err(CommandFailure::from("bad_request"));
+    }
+    peer.record_consent(&payload.envelope_id, payload.accept)
+        .map_err(|error| {
+            tracing::warn!("peer.consent_respond audit failed: {error}");
+            CommandFailure::from("consent_audit_failed")
+        })?;
+    backends.events.publish(
+        "peer.consent_result",
+        Scope::ConversationRead,
+        serde_json::json!({ "envelope_id": payload.envelope_id, "accept": payload.accept }),
+    );
+    Ok(serde_json::json!({ "recorded": true }))
+}
+
 /// Core conversation turn: FAE_DUMP → parse → `assistant.generating` event
 /// pair → NaN-logits retry loop → `run_turn`. Extracted from `inject_text` so
 /// the conductor's `direct` arm can run the exact same code path (the M1
@@ -2796,6 +2893,7 @@ mod tests {
                 agents: &self.agents,
                 conductor: Some(&self.conductor.runtime),
                 acp_runner: &self.runner,
+                peer: None,
             }
         }
     }
@@ -3174,6 +3272,7 @@ mod tests {
             agents: &agents,
             conductor: None,
             acp_runner: &REAL_ACP_RUNNER,
+            peer: None,
         };
         super::handle_frame(registry, &backends, state, line, now_ms, event_id).await
     }
@@ -3969,6 +4068,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &REAL_ACP_RUNNER,
+            peer: None,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -4082,6 +4182,7 @@ mod tests {
                 agents: &self.agents,
                 conductor: Some(&self.runtime),
                 acp_runner: &REAL_ACP_RUNNER,
+                peer: None,
             }
         }
 
@@ -4234,6 +4335,7 @@ mod tests {
             agents: &agents,
             conductor: None,
             acp_runner: &REAL_ACP_RUNNER,
+            peer: None,
         };
         let err = record_feedback(
             &backends,
@@ -4307,6 +4409,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &REAL_ACP_RUNNER,
+            peer: None,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -4383,6 +4486,7 @@ mod tests {
             agents: &agents,
             conductor: None,
             acp_runner: &REAL_ACP_RUNNER,
+            peer: None,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -4434,6 +4538,7 @@ mod tests {
             agents: &agents,
             conductor: None,
             acp_runner: &REAL_ACP_RUNNER,
+            peer: None,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -4481,6 +4586,7 @@ mod tests {
             agents: &agents,
             conductor: None,
             acp_runner: &REAL_ACP_RUNNER,
+            peer: None,
         };
         // kind missing → bad_request, nothing published.
         let cmd = fae_control_plane::Command {

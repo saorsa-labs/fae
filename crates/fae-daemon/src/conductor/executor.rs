@@ -1864,6 +1864,7 @@ mod tests {
                 agents: &self.agents,
                 conductor: Some(&self.runtime),
                 acp_runner: &crate::session::REAL_ACP_RUNNER,
+                peer: None,
             }
         }
     }
@@ -2631,6 +2632,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
         // The user still gets an answer (fail-closed direct-local), but the turn
@@ -2708,6 +2710,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
         assert!(wire.is_ok(), "mesh turn must succeed: {:?}", wire.err());
@@ -2777,6 +2780,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
         assert!(wire.is_ok(), "fail-closed direct-local still answers");
@@ -2829,6 +2833,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
         assert!(wire.is_ok(), "fail-closed direct-local still answers");
@@ -2879,6 +2884,7 @@ mod tests {
                 agents: &agents,
                 conductor: Some(&runtime),
                 acp_runner: &crate::session::REAL_ACP_RUNNER,
+                peer: None,
             };
             let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
             assert!(wire.is_ok(), "{kind:?}: fail-closed must still answer");
@@ -3012,6 +3018,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
         assert!(wire.is_ok(), "fail-closed direct-local still answers");
@@ -3213,6 +3220,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let cmd = command("req-local", "hello");
         let local_decision = decision(
@@ -3643,6 +3651,7 @@ mod tests {
             agents: &agents,
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         // The mesh path is only reachable via run() with a hand-built OwnerFleet
         // decision: StaticDirectPolicy::decide always returns LocalOnly (M1-
@@ -3735,6 +3744,7 @@ mod tests {
             agents: &crate::agents::AgentSessionRegistry::new(),
             conductor: None,
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let wire = route_turn(&runtime, &backends, &cmd, &ctx).await;
         assert!(wire.is_ok());

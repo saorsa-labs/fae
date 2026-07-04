@@ -2,6 +2,17 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Phase E commit 2 (x0x SSE peer ingress + outbound commands)
+
+### New Features
+- **x0x peer-ingress supervisor (`fae-daemon` `peer::PeerIngress`)**: the SINGLE governed inbound entry point for peer content. An SSE task connects x0xd's `GET /direct/events` and, for every frame, (1) transport-pre-checks `verified == true`, (2) runs the base64-decoded envelope through `fae_envelope_gate::gate_and_audit` — THE GATE RUNS BEFORE ANY OTHER PROCESSING — writing accept/reject rows to `<fae data dir>/peer_envelope_audit.jsonl`, (3) cross-checks the signed `sender_id` against the transport-attested sender (case-insensitive; a mismatch appends a clearly-marked rejected audit row and drops), then (4) dispatches via commit 1's `handler::dispatch` onto the daemon event bus as `peer.*` events (`ConversationRead`-scoped, the orb host's existing subscribe grant). Reconnects with jittered exponential backoff (base 2s, cap 60s). Spawned at startup only when `PeerConfig::from_env()` is `Some` (opt-in via `FAE_X0X_INGRESS`) and x0xd answers `/health`; fully fail-quiet otherwise.
+- **x0xd REST/SSE client (`peer::x0x_client::X0xPeerClient`)**: `own_agent_id()` (`GET /agent`), `direct_send()` (base64-wraps the raw envelope into `POST /direct/send`), `direct_events()` (an async `Stream` of decoded `DirectEventFrame`s parsed from the SSE `bytes_stream`, filtering `event: direct_message`, joining multi-line `data:`, skipping keepalives), and `health()`. Bearer-token auth only; every call timeout-bounded except the long-lived event stream; zero retries inside the client (the supervisor owns backoff).
+- **Optional auto-reply**: with `FAE_X0X_AUTO_REPLY=1`, an accepted `direct_message` is answered as a tool-less GUEST turn through the exact governed `inject_text_core` path (an inject payload with no `tools` key ⇒ zero tool access), and the reply is sent back wrapped in a `direct_message` envelope. Best-effort — any failure warns and drops; default off.
+- **Outbound `peer.*` control-plane commands** (`session.rs`): `peer.send {to_agent_id, text}` (→ `direct_message` envelope), `peer.handoff_send {to_agent_id, snapshot}` (→ `session_handoff` envelope via commit 1's builder; the target MUST be in the owner-fleet allowlist — rejected otherwise), and `peer.consent_respond {envelope_id, accept}` (appends an owner decision to the peer audit log + emits a `peer.consent_result` event; the allowlist itself is config-file based in v1). Gated by new `x0x:message` / `x0x:admin` scope registrations; the `SwiftFrontend` client class now holds both (same minimal grant-extension pattern as F7a).
+
+### Testing
+- **`crates/fae-daemon/tests/peer_x0x_live.rs`** (`#[ignore]`d): drives two live x0xd daemons end-to-end — A→B `direct_message` (gated + accepted + audited), B→A `session_handoff` (owner-fleet accepted + payload decoded), plus deterministic gate negatives (non-allowlisted sender → `SignatureRejected`, unknown kind → `InvalidJson`, >64 KiB → `TooLarge`). Skips cleanly when x0xd is absent. Deterministic unit tests cover the SSE line-parser, backoff sequence, transport pre-check, sender cross-check, and the outbound envelope builders (round-tripped through the real gate).
+
 ## Unreleased — Production readiness Phase C (governed execution proven headlessly)
 
 ### New Features

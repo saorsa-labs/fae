@@ -48,12 +48,12 @@ mod events;
 /// Landlock jail confines on the running kernel.
 mod headless_tool_test;
 mod offline_turn;
-/// Phase E — x0x peer-messaging trust core (commit 1): `FAE_X0X_*` config +
-/// data-dir discovery, sender-tier `SignatureVerifier` (`session_handoff` =
-/// owner-fleet only), `session_handoff` payload schema + 64 KiB-capped
-/// builder, and pure per-kind dispatch. Dormant until commit 2 wires the x0xd
-/// SSE ingress task + EventBus (after Phase D folds) — staged like `toolhost`.
-#[allow(dead_code)]
+/// Phase E — x0x peer messaging. Commit 1: `FAE_X0X_*` config + data-dir
+/// discovery, sender-tier `SignatureVerifier` (`session_handoff` = owner-fleet
+/// only), `session_handoff` payload schema + 64 KiB-capped builder, pure
+/// per-kind dispatch. Commit 2: the x0xd SSE client + the `PeerIngress`
+/// supervisor (the single governed inbound entry point) + `PeerOutbound` for the
+/// `peer.*` commands. Spawned below behind `PeerConfig::from_env`.
 mod peer;
 mod server_request;
 mod session;
@@ -438,6 +438,24 @@ async fn main() -> DaemonResult<()> {
     ));
     let skill_host = std::sync::Arc::new(skillhost::SkillHost::new(skills_dir, skill_audit));
 
+    // ── Phase E: x0x peer ingress (opt-in via FAE_X0X_INGRESS) ──────────
+    // The SINGLE governed inbound entry point for peer content. `from_env`
+    // returns `None` (ingress off) on any missing/invalid config, so the daemon's
+    // behavior is unchanged unless the owner opts in. Discovery of our own agent
+    // id + a reachable x0xd are required; any failure disables the lane loudly
+    // but never blocks daemon startup. Returns the outbound handle threaded into
+    // the socket serve (the `peer.*` commands need it).
+    let peer_outbound = setup_peer_ingress(PeerIngressBackends {
+        data_dir: conductor_data_dir.clone(),
+        engine: Arc::clone(&engine),
+        tts: Arc::clone(&tts),
+        audio: Arc::clone(&audio),
+        events: events.clone(),
+        playbacks: playbacks.clone(),
+        agents: agents.clone(),
+    })
+    .await;
+
     // Serves until the process is killed. Fails closed on bind/permission error.
     transport::serve_unix(
         socket_path,
@@ -453,9 +471,79 @@ async fn main() -> DaemonResult<()> {
         conductor_runtime,
         toolhost_store,
         skill_host,
+        peer_outbound,
     )
     .await?;
     Ok(())
+}
+
+/// Backends the peer ingress needs, cloned before `serve_unix` consumes the
+/// originals.
+struct PeerIngressBackends {
+    data_dir: std::path::PathBuf,
+    engine: Arc<dyn ProviderAdapter>,
+    tts: Arc<dyn TtsAdapter>,
+    audio: Arc<AudioManager>,
+    events: events::EventBus,
+    playbacks: events::PlaybackRegistry,
+    agents: agents::AgentSessionRegistry,
+}
+
+/// Resolve `PeerConfig::from_env`, discover our agent id, spawn the ingress
+/// supervisor, and return the outbound handle for the `peer.*` commands. Fully
+/// fail-quiet: `None` ⇒ peer lane off, daemon proceeds normally.
+async fn setup_peer_ingress(b: PeerIngressBackends) -> Option<Arc<peer::PeerOutbound>> {
+    let cfg = peer::PeerConfig::from_env()?;
+    let client = match peer::X0xPeerClient::new(cfg.base_url.clone(), cfg.token.clone()) {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!("peer ingress disabled: client build failed: {error}");
+            return None;
+        }
+    };
+    // Reachability gate: if x0xd is not answering /health, do not spawn the
+    // ingress (it would just backoff-loop). Fail-quiet — the owner can start
+    // x0xd and restart the daemon.
+    if !client.health().await {
+        tracing::warn!(
+            "peer ingress disabled: x0xd health probe failed ({})",
+            cfg.base_url
+        );
+        return None;
+    }
+    let own_agent_id = match client.own_agent_id().await {
+        Ok(id) => id,
+        Err(error) => {
+            tracing::warn!("peer ingress disabled: GET /agent failed: {error}");
+            return None;
+        }
+    };
+    let audit_path = b.data_dir.join("peer_envelope_audit.jsonl");
+    let outbound = Arc::new(peer::PeerOutbound::new(
+        client,
+        own_agent_id.clone(),
+        cfg.owner_fleet.clone(),
+        audit_path.clone(),
+    ));
+    let deps = peer::PeerIngressDeps {
+        engine: b.engine,
+        tts: b.tts,
+        audio: b.audio,
+        events: b.events,
+        playbacks: b.playbacks,
+        agents: b.agents,
+        audit_path,
+    };
+    // A never-cancelled token: the daemon runs the ingress for its whole life
+    // (the process exit tears it down). The handle mirrors the toolhost cancel
+    // pattern so a graceful-shutdown path can cancel it later.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    peer::PeerIngress::spawn(cfg, deps, Arc::clone(&outbound), cancel);
+    let short: String = own_agent_id.chars().take(12).collect();
+    println!(
+        "peer    : x0x ingress ENABLED (agent {short}…, auto-reply gated by FAE_X0X_AUTO_REPLY)"
+    );
+    Some(outbound)
 }
 
 fn init_tracing() {

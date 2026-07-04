@@ -475,6 +475,7 @@ async fn ws_message_loop(
             agents,
             conductor: Some(conductor),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
+            peer: None,
         };
         let outcome = handle_frame(registry, &backends, &mut session, line, now, event_id).await;
 

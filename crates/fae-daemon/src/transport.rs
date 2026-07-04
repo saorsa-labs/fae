@@ -73,6 +73,7 @@ pub async fn serve_unix(
     conductor: Arc<crate::conductor::ConductorRuntime>,
     conductor_store: Arc<ConductorStore>,
     skill_host: Arc<SkillHost>,
+    peer_outbound: Option<Arc<crate::peer::PeerOutbound>>,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
     match std::fs::remove_file(&socket_path) {
@@ -107,6 +108,7 @@ pub async fn serve_unix(
         let conductor = Arc::clone(&conductor);
         let conductor_store = Arc::clone(&conductor_store);
         let skill_host = Arc::clone(&skill_host);
+        let peer_outbound = peer_outbound.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
@@ -122,6 +124,7 @@ pub async fn serve_unix(
                 conductor,
                 conductor_store,
                 skill_host,
+                peer_outbound.as_deref(),
             )
             .await
             {
@@ -147,6 +150,7 @@ async fn handle_connection(
     conductor: Arc<crate::conductor::ConductorRuntime>,
     conductor_store: Arc<ConductorStore>,
     skill_host: Arc<SkillHost>,
+    peer_outbound: Option<&crate::peer::PeerOutbound>,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -704,6 +708,7 @@ async fn handle_connection(
                 agents,
                 conductor: Some(conductor.as_ref()),
                 acp_runner: &crate::session::REAL_ACP_RUNNER,
+                peer: peer_outbound,
             };
             let outcome =
                 handle_frame(registry, &backends, &mut state, trimmed, now, event_id).await;
