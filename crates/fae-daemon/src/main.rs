@@ -48,6 +48,13 @@ mod events;
 /// Landlock jail confines on the running kernel.
 mod headless_tool_test;
 mod offline_turn;
+/// Phase E — x0x peer-messaging trust core (commit 1): `FAE_X0X_*` config +
+/// data-dir discovery, sender-tier `SignatureVerifier` (`session_handoff` =
+/// owner-fleet only), `session_handoff` payload schema + 64 KiB-capped
+/// builder, and pure per-kind dispatch. Dormant until commit 2 wires the x0xd
+/// SSE ingress task + EventBus (after Phase D folds) — staged like `toolhost`.
+#[allow(dead_code)]
+mod peer;
 mod server_request;
 mod session;
 /// ADR-013 Vision A (A2.5) — the daemon governed skill-execution host. Discovers

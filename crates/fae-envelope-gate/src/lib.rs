@@ -59,6 +59,15 @@ pub enum EnvelopeKind {
     /// behavior for a forward-rolling fleet). The gate stays schema-agnostic;
     /// fae-daemon owns the payload schema and deserialization.
     ConductorGateReceiptPrior,
+    /// Phase E (2026-07-04): a device-handoff offer — one owned Fae node hands
+    /// its live conversation tail (+ optional pending turn) to another node in
+    /// the same owner fleet. Backwards-compatible enum extension, same
+    /// forward-roll contract as [`ConductorGateReceiptPrior`]: old nodes that
+    /// don't know this variant reject it as `InvalidJson` (the desired
+    /// fail-closed behavior for a forward-rolling fleet). The gate stays
+    /// schema-agnostic; fae-daemon owns the payload schema
+    /// (`SessionHandoffPayload`, `deny_unknown_fields`) and deserialization.
+    SessionHandoff,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,12 +82,47 @@ pub struct PeerEnvelope {
     signature: SignatureProof,
 }
 
+/// Phase E (2026-07-04): narrow read-only accessors so a downstream
+/// [`SignatureVerifier`] impl (which receives `&PeerEnvelope` pre-acceptance)
+/// can enforce algorithm, key/signature shape, and sender-tier-by-kind policy.
+/// Same pattern as the M6-Intel accessors on [`AcceptedEnvelope`]: expose the
+/// minimum surface, keep fields private, never a constructor — the only way to
+/// mint an accepted envelope remains [`gate_and_audit`].
+impl PeerEnvelope {
+    pub fn kind(&self) -> &EnvelopeKind {
+        &self.kind
+    }
+
+    pub fn sender_id(&self) -> &str {
+        &self.sender_id
+    }
+
+    pub fn signature(&self) -> &SignatureProof {
+        &self.signature
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignatureProof {
     algorithm: String,
     public_key_id: String,
     signature_b64: String,
+}
+
+/// Read-only accessors for verifier impls (see [`PeerEnvelope`] accessor note).
+impl SignatureProof {
+    pub fn algorithm(&self) -> &str {
+        &self.algorithm
+    }
+
+    pub fn public_key_id(&self) -> &str {
+        &self.public_key_id
+    }
+
+    pub fn signature_b64(&self) -> &str {
+        &self.signature_b64
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -478,6 +522,73 @@ mod tests {
             .prior_payload()
             .map(|v| v.get("text").and_then(|t| t.as_str()).unwrap_or(""));
         assert_eq!(payload, Some("hello"));
+        Ok(())
+    }
+
+    // ── Phase E (2026-07-04): the new SessionHandoff kind ──
+
+    fn handoff_envelope_json(payload: serde_json::Value) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&PeerEnvelope {
+            schema_version: SUPPORTED_SCHEMA_VERSION,
+            kind: EnvelopeKind::SessionHandoff,
+            envelope_id: "handoff-1".to_owned(),
+            sender_id: "fleet-peer-1".to_owned(),
+            created_at_ms: 1_700_000_000_000,
+            payload,
+            signature: SignatureProof {
+                algorithm: "ml-dsa-65".to_owned(),
+                public_key_id: "pk-1".to_owned(),
+                signature_b64: "placeholder".to_owned(),
+            },
+        })
+    }
+
+    #[test]
+    fn session_handoff_kind_round_trips_through_parse_and_gate(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // SessionHandoff is a first-class EnvelopeKind: serde emits
+        // "session_handoff", the gate accepts it (signature permitting), and
+        // the accessors read back the carrier verbatim.
+        let payload = serde_json::json!({
+            "source_machine": "study-mac",
+            "conversation_tail": [{ "role": "user", "text": "hello" }],
+            "pending_turn": null,
+            "created_at_ms": 1_700_000_000_000_i64
+        });
+        let raw = handoff_envelope_json(payload.clone())?;
+        assert!(raw.contains("\"kind\":\"session_handoff\""));
+        let (accepted, audit) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
+        assert_eq!(accepted.kind(), &EnvelopeKind::SessionHandoff);
+        assert_eq!(accepted.sender_id(), "fleet-peer-1");
+        assert_eq!(accepted.prior_payload(), Some(&payload));
+        assert_eq!(audit.kind, Some(EnvelopeKind::SessionHandoff));
+        Ok(())
+    }
+
+    #[test]
+    fn session_handoff_kind_round_trips_through_gate_and_audit(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let raw = handoff_envelope_json(serde_json::json!({ "source_machine": "study-mac" }))?;
+        let path = unique_audit_path()?;
+        let accepted = gate_and_audit(&raw, &AcceptAllSignatureVerifier, &path)?;
+        assert_eq!(accepted.kind(), &EnvelopeKind::SessionHandoff);
+
+        let content = fs::read_to_string(&path)?;
+        fs::remove_file(&path)?;
+        assert!(content.contains("session_handoff"));
+        assert!(content.contains("accepted"));
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_kind_near_session_handoff_still_rejected() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // Forward-roll guarantee holds after the enum extension: a kind this
+        // node doesn't know (e.g. a FUTURE handoff v2) is still InvalidJson.
+        let raw = handoff_envelope_json(serde_json::json!({}))?
+            .replace("session_handoff", "session_handoff_v2");
+        let result = parse_and_gate(&raw, &AcceptAllSignatureVerifier);
+        assert!(matches!(result, Err(GateError::InvalidJson(_))));
         Ok(())
     }
 

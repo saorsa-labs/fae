@@ -57,3 +57,7 @@ dirs = "2"
 landlock = "0.4.5"
 
 [dev-dependencies]
+# Phase E peer tests: AcceptAllSignatureVerifier (test-util, test-only) mints
+# AcceptedEnvelopes for kinds the production FaeSenderVerifier refuses, so
+# handler dispatch guards can be probed independently of the verifier matrix.
+fae-envelope-gate = { path = "../fae-envelope-gate", features = ["test-util"] }
