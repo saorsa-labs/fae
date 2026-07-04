@@ -40,6 +40,8 @@ tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 futures-util = { workspace = true }
+# Phase E: the x0x `/direct/events` SSE stream is assembled with `stream!`.
+async-stream = { workspace = true }
 async-trait.workspace = true
 base64 = { workspace = true }
 # NFKC normalization for the M3 prompt-mutation lint (§5.1 canonicalization).

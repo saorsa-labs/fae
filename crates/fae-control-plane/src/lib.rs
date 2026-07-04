@@ -280,6 +280,14 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         // content (runtime.status, agent.list). Two registration points (§4.3):
         // this table runs before dispatch; the handler arm is in session.rs.
         "conductor.reward_snapshot" => &[Scope::StatusRead],
+        // Phase E outbound peer commands (x0x). `peer.send` is a chat-tier action
+        // (X0xMessage); `peer.handoff_send` and `peer.consent_respond` are
+        // owner-fleet / consent administration (X0xAdmin). Two registration
+        // points (MAJOR-2): this table runs before dispatch; the handler arms are
+        // in fae-daemon `session.rs::dispatch`. The SwiftFrontend holds both x0x
+        // scopes (see `default_scopes`).
+        "peer.send" => &[Scope::X0xMessage],
+        "peer.handoff_send" | "peer.consent_respond" => &[Scope::X0xAdmin],
         "conversation.subscribe" => &[Scope::ConversationRead],
         "audio.capture_start"
         | "audio.capture_stop"
@@ -398,6 +406,18 @@ impl ClientClass {
                     // per call, and the server-side opt-in stays here (a
                     // client-side toggle is never the boundary).
                     Scope::ToolExecuteDangerous,
+                    // Phase E (2026-07-04, owner opt-in): the Swift frontend
+                    // drives the outbound `peer.*` commands (send a direct
+                    // message, hand a session to an owner-fleet node, record a
+                    // consent decision). `X0xMessage` gates chat-tier sends;
+                    // `X0xAdmin` gates owner-fleet handoff + consent. The daemon
+                    // still fails closed (`peer_ingress_disabled`) when the x0x
+                    // lane is off, and the receiving node's envelope gate
+                    // re-checks sender tier — the scope lets the command RUN, it
+                    // is not the trust boundary. Same minimal-grant-extension
+                    // pattern as F7a flipping the dangerous-tool default.
+                    Scope::X0xMessage,
+                    Scope::X0xAdmin,
                 ]
             }
             ClientClass::CliDiagnostic | ClientClass::BrowserDiagnostic => vec![Scope::StatusRead],
@@ -1430,6 +1450,40 @@ mod tests {
         assert!(frontend.contains(&Scope::ToolExecuteDangerous));
         // Memory stays server-side; the frontend never holds it.
         assert!(!frontend.contains(&Scope::MemoryWrite));
+        // Phase E: the frontend drives the outbound `peer.*` commands.
+        assert!(frontend.contains(&Scope::X0xMessage));
+        assert!(frontend.contains(&Scope::X0xAdmin));
+    }
+
+    #[test]
+    fn peer_commands_require_the_x0x_scopes() {
+        // Phase E (MAJOR-2 gate 1): the outbound peer commands resolve to their
+        // x0x scopes here, BEFORE dispatch. `peer.send` is chat-tier; handoff +
+        // consent are owner-fleet/consent administration.
+        assert_eq!(required_scopes("peer.send"), Some(&[Scope::X0xMessage][..]));
+        assert_eq!(
+            required_scopes("peer.handoff_send"),
+            Some(&[Scope::X0xAdmin][..])
+        );
+        assert_eq!(
+            required_scopes("peer.consent_respond"),
+            Some(&[Scope::X0xAdmin][..])
+        );
+        // A frontend token (holds both x0x scopes) is authorized; a token
+        // lacking X0xAdmin is denied MissingScope on handoff.
+        let full = client(&[Scope::X0xMessage, Scope::X0xAdmin], 1000, None);
+        let handoff = Command {
+            v: PROTOCOL_VERSION,
+            request_id: "r1".to_owned(),
+            command: "peer.handoff_send".to_owned(),
+            payload: serde_json::Value::Null,
+        };
+        assert_eq!(authorize(&full, &handoff, 0), AuthzDecision::Allow);
+        let chat_only = client(&[Scope::X0xMessage], 1000, None);
+        assert_eq!(
+            authorize(&chat_only, &handoff, 0),
+            AuthzDecision::Deny(DenyReason::MissingScope)
+        );
     }
 
     #[test]
