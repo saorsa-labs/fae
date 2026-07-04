@@ -150,6 +150,20 @@ fail-closed in a sandboxed integration test.
 **Note:** `OpenRouterAdapter` is committed unreferenced in `fae-engine`. The conductor wiring and
 V2 profile are the remaining work for this phase.
 
+### PF — Phase F: native delegation loop + group-of-Fae symphony runner  ✅ F1–F4 DONE (ADR-015 Proposed)
+**Objective:** let a GROUP of Fae claim, work, and return x0x-symphony tasks with signed proofs.
+- **F1 ✅** — `conversation.delegate`: the daemon's native jailed agentic loop (`ToolOrigin::Delegated`, OS jail,
+  hard iteration/token budgets, mutation receipts). Headless proof `--headless-delegate-test`.
+- **F2 ✅** — orchestrator fan-out: parallel leaf batches, leaf-only permit (deadlock-free at cap 1),
+  engine-permit serialization (single-engine throughput honesty), receipt `parent_id`/`child_ids`.
+- **F3 ✅** — `fae-symphony-runner`: a quarantined `Runner` over the daemon socket (only crate depending on
+  any `x0x-symphony-*`; `fae-daemon` stays symphony-clean). Proven against a mock socket + in-memory tracker.
+- **F4 ✅** — LIVE group-of-Fae proof: two REAL spawned daemons (`FAE_ENGINE=mock` dev substrate) + two runners
+  sharing one x0xd task list — no double-claim, isolated workspaces mutated, ML-DSA-signed handoffs, tasks left
+  the pool, proofs written (`live_group_of_fae.rs`, `#[ignore]`, verified live against x0xd :12700).
+**ADR:** ADR-015 (Proposed). **Owner follow-up:** two-identity no-double-claim across two replicated x0x nodes
+(the single-node harness proves lease-level no-double-claim under one shared x0xd identity).
+
 ### XC — Release-validation real-audio phase  (cross-cutting gate)
 Before ANY user-facing release of the orb-host / V3b-playback / llama.cpp series, the
 `docs/checklists/app-release-validation.md` **real-audio phase** (physical mic + loopback, not text

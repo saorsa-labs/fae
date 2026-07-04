@@ -186,10 +186,22 @@ impl DaemonClient {
             if trimmed.is_empty() {
                 continue;
             }
-            // Defensively skip an unsolicited server-push event frame (has an
-            // `event` field, no `request_id`/`ok`) rather than mis-decoding it.
+            // Classify the frame before decoding it as a command response.
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                // Server-push event frame (has `event`, no `request_id`): skip.
                 if value.get("event").is_some() && value.get("request_id").is_none() {
+                    continue;
+                }
+                // Server-INITIATED request (`{server_request_id, method, params}`).
+                // During `conversation.delegate` the daemon round-trips a
+                // `tool.confirm` before running a dangerous (write/edit/bash) tool
+                // in the jailed loop. An autonomous symphony worker PRE-AUTHORIZES
+                // its own delegation and answers it — see `answer_server_request`.
+                if let (Some(sr_id), Some(method)) = (
+                    value.get("server_request_id").and_then(|v| v.as_str()),
+                    value.get("method").and_then(|v| v.as_str()),
+                ) {
+                    self.answer_server_request(sr_id, method).await?;
                     continue;
                 }
             }
@@ -216,6 +228,53 @@ impl DaemonClient {
             }
             return Ok(response.result.unwrap_or(serde_json::Value::Null));
         }
+    }
+
+    /// Answer a daemon-initiated `{server_request_id, method, params}` request.
+    ///
+    /// The only such request a `conversation.delegate` turn raises is
+    /// `tool.confirm`: the jailed loop is about to run a dangerous (write / edit /
+    /// bash) tool and the daemon asks the client to approve it. An autonomous
+    /// symphony worker **pre-authorizes its own delegation** — it already pinned a
+    /// conservative leaf toolset in the request, and the daemon confines every
+    /// mutation to the issue workspace via the OS jail (a write outside the root
+    /// is denied WITHOUT any prompt). The jail, not an interactive owner card, is
+    /// the boundary here, so the runner replies `{approved: true}`.
+    ///
+    /// Any OTHER method is answered `{approved: false}` so an unexpected
+    /// round-trip fails closed rather than hanging the turn.
+    async fn answer_server_request(
+        &mut self,
+        server_request_id: &str,
+        method: &str,
+    ) -> Result<(), DaemonError> {
+        let approved = method == "tool.confirm";
+        if approved {
+            tracing::debug!(
+                server_request_id,
+                method,
+                "runner auto-approving delegated tool confirm"
+            );
+        } else {
+            tracing::warn!(
+                server_request_id,
+                method,
+                "runner denying unexpected server request"
+            );
+        }
+        let reply = json!({
+            "v": PROTOCOL_VERSION,
+            "server_request_id": server_request_id,
+            "result": { "approved": approved },
+        });
+        let mut line = serde_json::to_string(&reply).map_err(|source| DaemonError::Decode {
+            command: method.to_owned(),
+            reason: format!("failed to encode server-request reply: {source}"),
+        })?;
+        line.push('\n');
+        self.writer.write_all(line.as_bytes()).await?;
+        self.writer.flush().await?;
+        Ok(())
     }
 
     /// Establish the session: send `session.authenticate` with `client_id` +
