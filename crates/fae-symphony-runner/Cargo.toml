@@ -1,0 +1,66 @@
+[package]
+name = "fae-symphony-runner"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Standalone x0x-symphony Runner: claims a TaskItem from x0xd (trust-gated, ML-DSA-signed) and executes it by driving fae-daemon's conversation.delegate over its Unix socket, then publishes a signed handoff + proofs. Phase F3."
+
+[[bin]]
+name = "fae-symphony-runner"
+path = "src/main.rs"
+
+[lib]
+name = "fae_symphony_runner"
+path = "src/lib.rs"
+
+[dependencies]
+# ── Fae workspace: the daemon WIRE CONTRACT only ─────────────────────────────
+# fae-control-plane carries the Command/Response NDJSON envelope the daemon
+# speaks. We deliberately do NOT depend on `fae-daemon` — the runner is a pure
+# socket client of the daemon's EXISTING protocol (conversation.delegate as
+# landed in Phase F1). This keeps `cargo tree -i x0x-symphony-core` clean:
+# fae-daemon never pulls a symphony crate, the quarantine lives here.
+fae-control-plane = { path = "../fae-control-plane" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# `signal` (on top of the workspace features) backs graceful Ctrl-C shutdown.
+tokio = { workspace = true, features = ["signal"] }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# ── x0x-symphony: quarantined git-rev deps ───────────────────────────────────
+# Pinned to the sibling's pushed HEAD. git-rev (not path) is deliberate: this
+# crate is developed inside a git WORKTREE whose depth under `projects/` differs
+# from the folded `projects/fae/` checkout, so a fixed *relative* path dep would
+# resolve to two different places. A git-rev pin is location-independent and
+# survives the worktree→main fold unchanged. It also matches the roadmap's
+# "no crates.io consumption — git-rev pin until symphony publishes".
+#
+# dev override (local sibling checkout, if you prefer editing symphony in-tree):
+#   x0x-symphony-core            = { path = "../../../x0x-symphony/crates/x0x-symphony-core" }
+#   x0x-symphony-orchestrator    = { path = "../../../x0x-symphony/crates/x0x-symphony-orchestrator" }
+#   x0x-symphony-tracker-x0x-crdt = { path = "../../../x0x-symphony/crates/x0x-symphony-tracker-x0x-crdt" }
+#   x0x-symphony-signing         = { path = "../../../x0x-symphony/crates/x0x-symphony-signing" }
+#   x0x-symphony-workspace       = { path = "../../../x0x-symphony/crates/x0x-symphony-workspace" }
+# (relative form above is for the *folded* projects/fae/crates/ layout.)
+#
+# TODO(publish): once x0x-symphony publishes to crates.io (or CI is granted a
+# read deploy key for the private repo), switch to `version = "…"` crates.io
+# pins. Until then a `just check` on a machine without repo access must export
+# CARGO_NET_GIT_FETCH_WITH_CLI=true so cargo reuses the CLI ssh credential.
+x0x-symphony-core = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-orchestrator = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-tracker-x0x-crdt = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-signing = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+x0x-symphony-workspace = { git = "ssh://git@github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+
+[dev-dependencies]
+tempfile = "3"
+chrono = { version = "0.4", features = ["clock"] }

@@ -2,6 +2,19 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Phase F commit 3 (`fae-symphony-runner` — symphony Runner over the daemon socket)
+
+### New Features
+- **`fae-symphony-runner` crate (`crates/fae-symphony-runner`)**: a standalone binary that lets a Fae instance join a group-of-Fae task swarm. It implements x0x-symphony's `Runner` trait over the local `fae-daemon` control socket — claiming a `TaskItem` from x0xd (trust-gated, ML-DSA-signed by x0xd), executing the work by driving `fae-daemon`'s native jailed agentic loop (`conversation.delegate`, Phase F1) inside an isolated workspace, and letting the stock `x0x-symphony-orchestrator` publish a signed handoff + proof artefacts.
+- **`FaeRunner` (`Runner` impl)**: `start_session` verifies the daemon socket + token (fail fast); `run_turn` opens an authenticated connection and delegates the issue description into the daemon's jailed loop rooted at the issue workspace (leaf role, depth 0, conservative default toolset `[read, write, edit, bash, glob, grep]`), mapping `completed` → `Succeeded` and `budget_exhausted` → `Failed`; `stream_events` is `stream::empty` for v1 (structured-event fidelity is a documented fast-follow); `stop_session` returns an empty usage report. The orchestrator derives `files_changed` from `git diff` in the workspace and assembles the signed handoff verbatim (`ProofRun` + `build_success_handoff`) — no custom handoff format.
+- **`DaemonClient` (authenticated NDJSON socket client)**: connects to the daemon Unix socket, sends `session.authenticate` (`{ client_id, token }`), then `conversation.delegate`, decoding the `{ text, status, receipt_id, iterations, tokens }` result. Uses the internal `fae-control-plane` `Command`/`Response` envelope; it does **not** depend on `fae-daemon` — the runner is a pure client of the daemon's existing wire protocol (verified via `cargo tree -i x0x-symphony-core`: only `fae-symphony-runner` depends on any `x0x-symphony-*` crate; `fae-daemon` stays symphony-clean).
+- **Fail-closed startup**: the binary constructs the x0xd signer and calls `/agent` before claiming any work; if x0xd is unreachable it refuses to start (no unsigned handoffs). Configuration comes from environment variables or a TOML file (`FAE_SYMPHONY_CONFIG`).
+- **Dependency mechanics**: the `x0x-symphony-*` crates are consumed as **git-rev deps pinned to the sibling's pushed HEAD**, quarantined in this crate. git-rev (not path) is deliberate — the crate is developed in a git worktree whose depth differs from the folded checkout, so a relative path dep would resolve to two different places; a git-rev pin is location-independent. A `dev override` path form and a `TODO(publish)` crates.io pin are documented in `Cargo.toml`.
+
+### Testing
+- **Headless (CI-safe, no x0xd, no model)**: `runner_headless.rs` drives (a) `FaeRunner` directly against a MOCK daemon Unix-socket server speaking the real `session.authenticate` + `conversation.delegate` NDJSON shapes (asserts the turn authenticates, delegates, and mutates the workspace), and (b) the SAME runner through `x0x-symphony-orchestrator` with an in-memory tracker + a git-backed workspace — asserting task→claim→delegate→workspace-mutated→`files_changed` (non-empty, contains `tracked.txt`)→handoff published with a proof dir.
+- **Live (`#[ignore]`, env-gated)**: `live_x0xd.rs` proves the signer leg (`/agent` reachable + ML-DSA identity), the tracker leg (`X0xCrdtTracker` with `required_signing` fetching trust-gated candidates), and — when a candidate is present — the signed-handoff leg (claim → heartbeat → signed `handoff`). The runner leg (real fae-daemon + model) is the documented manual two-Fae live path.
+
 ## Unreleased — Phase F commit 1 (`fae.delegate` — native jailed agentic loop)
 
 ### New Features
