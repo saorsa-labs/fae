@@ -260,6 +260,21 @@ impl ToolHost {
         })
     }
 
+    /// The static tool definitions for the named tools (filtered by `allowed`),
+    /// in the allowlist's order. Unknown names are skipped. Used by the native
+    /// delegation loop (Phase F1) to build a RESTRICTED set of model tool
+    /// schemas — the worker only sees the tools its `toolset` permits. The
+    /// host/jailed registries carry identical definitions (only `exec` differs),
+    /// so the host registry is authoritative here.
+    #[must_use]
+    pub fn tool_definitions(&self, allowed: &[String]) -> Vec<fluers_core::tool::ToolDefinition> {
+        allowed
+            .iter()
+            .filter_map(|name| self.registry.get(name))
+            .map(|tool| tool.definition())
+            .collect()
+    }
+
     /// The governed entry point. Runs the policy; on `Allow` dispatches the
     /// tool. This is the ONLY public path to tool execution.
     ///

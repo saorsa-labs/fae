@@ -131,6 +131,18 @@ jobs:
           target/debug/fae-daemon --headless-tool-test \
             --skills fae-daemon/test-fixtures/skills
 
+      - name: Headless native-delegation proof (jailed agentic loop, Phase F1)
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          # Phase F1 gate: the daemon's native jailed agentic loop generates →
+          # executes a tool (jailed, ToolOrigin::Delegated) → feeds the result
+          # back → finishes, under hard budgets. Proves the jailed write lands,
+          # the receipt links its mutation receipt, an out-of-root write is
+          # blocked by the OS jail, and the budget-exhaustion path trips.
+          # Exits nonzero on ANY failed assertion → fails the job.
+          target/debug/fae-daemon --headless-delegate-test
+
       - name: Build fae-ui-shell (native)
         working-directory: native/rust/fae-ui-shell
         run: env -u RUSTFLAGS cargo build

@@ -1166,6 +1166,88 @@ pub async fn run_authorized_toolhost_execute(
     }
 }
 
+/// Phase F1: `conversation.delegate` — run the native jailed agentic loop.
+///
+/// Authorizes on `AgentDelegate`, parses the payload into a
+/// [`DelegationRequest`](crate::delegate::DelegationRequest), and runs
+/// [`run_delegation`](crate::delegate::run_delegation) (which validates the
+/// workspace root, builds the ephemeral jailed ToolHost, loops under the hard
+/// budgets, and records the receipt). SPAWNED off the transport read loop (a
+/// delegation runs many turns and a dangerous tool may round-trip a
+/// `tool.confirm` to the owner), so the read loop keeps routing confirm replies.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_authorized_delegate(
+    record: &ClientRecord,
+    cmd: &Command,
+    engine: &dyn ProviderAdapter,
+    confirmation: &dyn crate::toolhost::confirm::ToolConfirmation,
+    store: Arc<crate::conductor::ConductorStore>,
+    home_dir: Option<std::path::PathBuf>,
+    cancel: tokio_util::sync::CancellationToken,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => {
+            match serde_json::from_value::<crate::delegate::DelegationRequest>(cmd.payload.clone())
+            {
+                Ok(request) => {
+                    let deps = crate::delegate::DelegationDeps {
+                        engine,
+                        confirmation,
+                        store,
+                        client: record.clone(),
+                        home_dir,
+                        cancel,
+                        now_ms,
+                    };
+                    match crate::delegate::run_delegation(&deps, request).await {
+                        Ok(outcome) => Response::ok(
+                            &cmd.request_id,
+                            serde_json::json!({
+                                "text": outcome.text,
+                                "status": outcome.status.as_str(),
+                                "receipt_id": outcome.receipt.id,
+                                "iterations": outcome.receipt.iterations_used,
+                                "tokens": outcome.receipt.tokens_used,
+                            }),
+                        ),
+                        Err(err) => Response::error(&cmd.request_id, err.code(), &err.to_string()),
+                    }
+                }
+                Err(error) => Response::error(
+                    &cmd.request_id,
+                    "bad_request",
+                    &format!("invalid conversation.delegate payload: {error}"),
+                ),
+            }
+        }
+        // AgentDelegate is not the dangerous scope, so ConfirmRequired is not
+        // expected here; fail closed regardless.
+        AuthzDecision::ConfirmRequired => Response::error(
+            &cmd.request_id,
+            "confirm_required",
+            "conversation.delegate does not require confirmation",
+        ),
+        AuthzDecision::Deny(reason) => {
+            Response::error(&cmd.request_id, reason.code(), "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
 /// Map an optional wire `origin` string to a [`ToolOrigin`](crate::toolhost::isolation::ToolOrigin).
 /// Backward-compatible: a MISSING origin (`None`) is the owner's interactive turn
 /// (host tier). Autonomous callers name a non-interactive origin that REQUIRES
@@ -1180,6 +1262,7 @@ fn parse_tool_origin(
         Some("scheduler") => Ok(ToolOrigin::Scheduler),
         Some("auto_skill") => Ok(ToolOrigin::AutoSkill),
         Some("script_block") => Ok(ToolOrigin::ScriptBlock),
+        Some("delegated") => Ok(ToolOrigin::Delegated),
         Some(other) => Err(format!("unknown origin: {other}")),
     }
 }

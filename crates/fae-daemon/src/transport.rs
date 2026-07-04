@@ -25,9 +25,9 @@ use crate::conductor::ConductorStore;
 use crate::events::{ConnSink, EventBus, EventSink, PlaybackRegistry};
 use crate::server_request::{ServerReply, ServerRequester};
 use crate::session::{
-    handle_frame, run_authorized_agent_prompt, run_authorized_skillhost_activate,
-    run_authorized_skillhost_list, run_authorized_skillhost_run, run_authorized_toolhost_execute,
-    SessionBackends, SessionState,
+    handle_frame, run_authorized_agent_prompt, run_authorized_delegate,
+    run_authorized_skillhost_activate, run_authorized_skillhost_list, run_authorized_skillhost_run,
+    run_authorized_toolhost_execute, SessionBackends, SessionState,
 };
 use crate::skillhost::SkillHost;
 use crate::toolhost::confirm::ServerRequestConfirmation;
@@ -113,7 +113,7 @@ pub async fn serve_unix(
             if let Err(error) = handle_connection(
                 stream,
                 &registry_snapshot,
-                engine.as_ref(),
+                engine,
                 asr_fallback.as_deref(),
                 tts.as_ref(),
                 audio.as_ref(),
@@ -139,7 +139,9 @@ pub async fn serve_unix(
 async fn handle_connection(
     stream: UnixStream,
     registry: &ClientRegistry,
-    engine: &dyn ProviderAdapter,
+    // (F1) Owned `Arc` (not a borrow): `conversation.delegate` spawns a
+    // long-running task that must hold the engine for the whole jailed loop.
+    engine: Arc<dyn ProviderAdapter>,
     asr_fallback: Option<&dyn ProviderAdapter>,
     tts: &dyn TtsAdapter,
     audio: &AudioManager,
@@ -523,6 +525,53 @@ async fn handle_connection(
                         }
                         continue;
                     }
+                    // F1: `conversation.delegate` — the native jailed agentic
+                    // loop. SPAWNED like `agent.prompt`/`toolhost.execute`
+                    // (BLOCKER-1): a delegation runs many turns and a dangerous
+                    // tool may round-trip a `tool.confirm`, so it must not block
+                    // the read loop (which routes the confirm reply). Tracked in
+                    // `tool_tasks` so close cancels + drains it (the ephemeral
+                    // ToolHost is rooted at the caller-supplied workspace, not the
+                    // temp sandbox, so nothing here depends on `tool_root`).
+                    if cmd.command == "conversation.delegate" {
+                        let record = record.clone();
+                        let engine = Arc::clone(&engine);
+                        let confirm = Arc::clone(&confirm);
+                        let store = Arc::clone(&conductor_store);
+                        let home_dir = home_dir.clone();
+                        let cancel = session_cancel.clone();
+                        let audit_path_t = audit_path.to_path_buf();
+                        let sink_t = Arc::clone(&sink);
+                        tool_tasks.spawn(async move {
+                            let outcome = run_authorized_delegate(
+                                &record,
+                                &cmd,
+                                engine.as_ref(),
+                                confirm.as_ref(),
+                                store,
+                                home_dir,
+                                cancel,
+                                now,
+                                event_id,
+                            )
+                            .await;
+                            if append_audit_jsonl(&audit_path_t, &outcome.audit).is_err() {
+                                let response = Response::error(
+                                    &outcome.response.request_id,
+                                    "audit_error",
+                                    "audit write failed",
+                                );
+                                if let Ok(line) = response_line(&response) {
+                                    sink_t.send_line(line);
+                                }
+                                return;
+                            }
+                            if let Ok(line) = response_line(&outcome.response) {
+                                sink_t.send_line(line);
+                            }
+                        });
+                        continue;
+                    }
                     // A2.5: `skillhost.list` / `skillhost.activate` — read-only
                     // (discovery metadata + SKILL.md body). Handled inline (no
                     // confirm round-trip, so they cannot block the read loop).
@@ -699,7 +748,7 @@ async fn handle_connection(
             }
 
             let backends = SessionBackends {
-                engine,
+                engine: engine.as_ref(),
                 asr_fallback,
                 tts,
                 audio,
