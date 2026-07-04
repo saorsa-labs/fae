@@ -2,6 +2,20 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Phase F commit 2 (`fae.delegate` — parallel leaf batches + orchestrator role)
+
+### New Features
+- **Engine serialization (process-global permit = 1)**: all delegation generations now acquire a shared `tokio::sync::Semaphore` (`delegate::engine_permit()`) held ONLY across the `run_turn` generation call — never across tool execution. On the single local engine, generation cannot run concurrently, but parallel leaves DO overlap tool-exec / jail I/O (not token throughput — documented honestly). Wired into every top-level delegation and shared across the whole fan-out tree.
+- **Delegation-concurrency cap (default 3, clamped ≤ 8)**: a second process-global semaphore (`delegate::leaf_permit()`) bounds live LEAF loops. Only leaves consume a permit (for their whole run); an orchestrator holds NONE while it awaits children. Because a permit holder (a leaf) can never fan out, the wait graph is acyclic — deadlock-free even at cap = 1 (proven by `orchestrator_fan_out_no_deadlock_at_cap_one` + the headless `fanout.no_deadlock_at_cap_1` step with a single permit and a timeout guard).
+- **Orchestrator fan-out (`role: Orchestrator` at depth 0)**: an orchestrator's restricted schema gains a synthetic `delegate` TOOL (never exposed to a leaf). Its input is a `batch` of up to `MAX_BATCH_SIZE` (4) child specs `{prompt, toolset, max_iterations, max_output_tokens}`. Each child runs as a `Leaf` at depth + 1 in the SAME `workspace_root`; its toolset must be a SUBSET of the parent's (and may not contain `delegate`); its budgets are clamped ≤ the parent's remaining. Children are `tokio::spawn`ed (real parallelism) and joined; their combined tokens debit the parent's budget. The batch is fully validated up front — a malformed batch, an oversized batch, or a subset violation is fed back to the model as a tool error and spawns NO child.
+- **Receipt linkage**: `DelegationReceipt` gains `parent_id` (a spawned child's link to its orchestrator; omitted for top-level) and `child_ids` (an orchestrator's record of the batch it spawned; omitted for leaves). Both are `skip_serializing_if`-empty so a leaf receipt is unchanged on the wire.
+- **Depth**: `MAX_DEPTH` raised to 1 — an orchestrator at depth 0 may spawn leaves at depth 1; anything at depth ≥ 1 is a leaf with no `delegate` tool in its schema AND a runtime rejection if it emits one (defense in depth). Depth 2+ is rejected with `delegation_depth_exceeded`.
+- **API**: `DelegationDeps` is now owned (`Arc<dyn ProviderAdapter>` + `Arc<dyn ToolConfirmation>` + the two semaphores + `parent_id`) and `Clone`, so an orchestrator builds each child's deps from its own — sharing one engine, confirmation channel, store, and both permits across the tree. `run_authorized_delegate` + the transport spawn pass the owned Arcs.
+
+### Testing
+- **Headless proof extended (`--headless-delegate-test`)**: two new scenarios on the running kernel's OS jail — a fan-out where an orchestrator's 2-leaf batch writes two files (both land jailed, both leaf receipts carry `parent_id`, the orchestrator receipt records both children) and the orchestrator then answers; plus a cap = 1 run (no deadlock, timeout-guarded) and a leaf that emits `delegate` being rejected. 16 PASS lines total.
+- **Unit tests (`delegate.rs`)**: subset-toolset violation + nested-`delegate` rejection, oversized-batch rejection, bare-array acceptance, child-budget clamp to parent remaining, depth-2 rejection, depth-1 leaf cannot delegate, no-deadlock at cap = 1, and `engine_permit_serializes_generation` (two concurrent delegations against a timestamp-recording adapter — asserts the generation intervals do NOT overlap).
+
 ## Unreleased — Phase F commit 1 (`fae.delegate` — native jailed agentic loop)
 
 ### New Features
