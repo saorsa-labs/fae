@@ -2,6 +2,16 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Production readiness Phase C (governed execution proven headlessly)
+
+### New Features
+- **Headless governed-execution proof (`fae-daemon --headless-tool-test`)**: a new CLI mode that builds the same governed `ToolHost`/`SkillHost` the protocol path builds and, WITHOUT a socket or a model, runs read → write → edit → bash on the host tier (asserting every output plus that fail-closed mutation receipts landed), then the jailed tier — a jailed write INSIDE the workspace root succeeds while a jailed write OUTSIDE it is REJECTED by the OS sandbox (Landlock on Linux, seatbelt on macOS), proving the jail actually confines. Finally it discovers → activates → `prepare_run`s a fixture skill and executes its `uv run --script` command through the governed bash path under the jail, asserting the deterministic marker survives. Exits nonzero on any failed assertion.
+- **`ci-linux.yml` Phase C gate**: the `build-linux` matrix (amd64 + arm64) now installs `uv` and runs `--headless-tool-test` against the committed fixture skills after the daemon build, so the DONE criterion — "a Linux daemon build actually executes read/write/edit/bash + a run_skill end-to-end, through the governed host" — is enforced per-PR on the real Landlock kernel.
+- **`ci-proof` test-fixture skill** (`crates/fae-daemon/test-fixtures/skills/ci-proof/`): a minimal executable skill (`SKILL.md` + `MANIFEST.json` with real SHA-256 checksums + a stdlib-only `scripts/hello.py`) used only by the headless proof — kept out of the app's bundled Resources.
+
+### Changed
+- **Autonomous origin wiring (Phase C)**: `toolhost.execute` and `skillhost.run` now accept an optional `origin` field. A missing origin defaults to `owner_interactive` (host tier) — backward-compatible with existing callers — while an autonomous origin (`proactive`/`scheduler`/`auto_skill`/`script_block`) maps to a jail-requiring tier, so a scheduler/proactive skill run can never inherit the daemon's ambient host authority. Closes the "wired in Phase C" placeholders in `session.rs`.
+
 ## Unreleased — Production readiness Phase A (green board)
 
 ### Fixed
