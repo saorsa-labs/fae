@@ -41,6 +41,12 @@ mod agents;
 mod conductor;
 mod diagnostic;
 mod events;
+/// Phase C — headless ToolHost + SkillHost execution proof (`--headless-tool-test`).
+/// Builds the same governed host the protocol path builds, then runs
+/// read/write/edit/bash + a jailed `run_skill` end-to-end WITHOUT a socket or a
+/// model, asserting on every output. CI (`ci-linux.yml`) runs it to prove the
+/// Landlock jail confines on the running kernel.
+mod headless_tool_test;
 mod offline_turn;
 mod server_request;
 mod session;
@@ -101,6 +107,27 @@ async fn main() -> DaemonResult<()> {
         };
         offline_turn::run(parsed, engine, asr_fallback, tts).await?;
         return Ok(());
+    }
+
+    // Phase C headless governed-execution proof (`--headless-tool-test`): builds
+    // the same governed ToolHost/SkillHost the protocol path builds, exercises
+    // read/write/edit/bash + a jailed run_skill end-to-end, and asserts on every
+    // output — NO socket, NO model. Exits nonzero (fails CI) on any failed step.
+    {
+        let argv: Vec<String> = std::env::args().skip(1).collect();
+        if argv.first().is_some_and(|s| s == "--headless-tool-test") {
+            let parsed = headless_tool_test::HeadlessToolTestArgs::parse(argv.into_iter().skip(1))?;
+            match headless_tool_test::run(parsed).await {
+                Ok(()) => {
+                    println!("[headless-tool-test] ALL STEPS PASSED");
+                    return Ok(());
+                }
+                Err(msg) => {
+                    eprintln!("[headless-tool-test] FAILED: {msg}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     // M3-C4: offline recipe-mutation CLI (`conductor metaopt-run --recipe ...`).

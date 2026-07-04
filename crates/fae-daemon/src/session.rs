@@ -1114,18 +1114,19 @@ pub async fn run_authorized_toolhost_execute(
     );
     let response = match &decision {
         AuthzDecision::Allow => match parse_toolhost_payload(&cmd.payload) {
-            Ok((tool, input)) => {
+            Ok((tool, input, origin)) => {
                 let req = crate::toolhost::ToolHostRequest {
                     client: record.clone(),
                     tool,
                     input,
                     call_id: cmd.request_id.clone(),
                     cancel,
-                    // The `toolhost.execute` protocol path IS the owner's
-                    // interactive Swift-loop turn — host tier. Autonomous
-                    // origins (proactive/scheduler/script) that require the OS
-                    // jail are wired in Phase C when those callers land.
-                    origin: crate::toolhost::isolation::ToolOrigin::OwnerInteractive,
+                    // (Phase C) The origin drives the isolation tier. A missing
+                    // origin defaults to the owner's interactive Swift-loop turn
+                    // (host tier); an autonomous caller (proactive/scheduler/
+                    // auto_skill/script_block) names a non-interactive origin
+                    // that REQUIRES the OS jail (fail-closed if unavailable).
+                    origin,
                 };
                 match toolhost.execute_governed(req, confirmation).await {
                     Ok(result) => Response::ok(
@@ -1155,19 +1156,49 @@ pub async fn run_authorized_toolhost_execute(
     }
 }
 
-/// Parse the `toolhost.execute` payload `{tool, input}` (reject unknown fields).
+/// Map an optional wire `origin` string to a [`ToolOrigin`](crate::toolhost::isolation::ToolOrigin).
+/// Backward-compatible: a MISSING origin (`None`) is the owner's interactive turn
+/// (host tier). Autonomous callers name a non-interactive origin that REQUIRES
+/// the OS jail (`execute_governed` fails closed if no backend is present). Phase C.
+fn parse_tool_origin(
+    origin: Option<&str>,
+) -> Result<crate::toolhost::isolation::ToolOrigin, String> {
+    use crate::toolhost::isolation::ToolOrigin;
+    match origin {
+        None | Some("owner_interactive") => Ok(ToolOrigin::OwnerInteractive),
+        Some("proactive") => Ok(ToolOrigin::Proactive),
+        Some("scheduler") => Ok(ToolOrigin::Scheduler),
+        Some("auto_skill") => Ok(ToolOrigin::AutoSkill),
+        Some("script_block") => Ok(ToolOrigin::ScriptBlock),
+        Some(other) => Err(format!("unknown origin: {other}")),
+    }
+}
+
+/// Parse the `toolhost.execute` payload `{tool, input, origin?}` (reject unknown
+/// fields). `origin` is optional and defaults to owner-interactive (host tier);
+/// a non-interactive origin selects the OS jail. Phase C.
 fn parse_toolhost_payload(
     payload: &serde_json::Value,
-) -> Result<(String, serde_json::Value), String> {
+) -> Result<
+    (
+        String,
+        serde_json::Value,
+        crate::toolhost::isolation::ToolOrigin,
+    ),
+    String,
+> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ToolhostPayload {
         tool: String,
         input: serde_json::Value,
+        #[serde(default)]
+        origin: Option<String>,
     }
     let parsed: ToolhostPayload = serde_json::from_value(payload.clone())
         .map_err(|e| format!("invalid toolhost.execute payload: {e}"))?;
-    Ok((parsed.tool, parsed.input))
+    let origin = parse_tool_origin(parsed.origin.as_deref())?;
+    Ok((parsed.tool, parsed.input, origin))
 }
 
 /// Map a [`ToolHostError`](crate::toolhost::ToolHostError) to a wire response.
@@ -1435,7 +1466,7 @@ pub async fn run_authorized_skillhost_run(
     );
     let response = match &decision {
         AuthzDecision::Allow => match parse_skill_run_payload(&cmd.payload) {
-            Ok((skill, script)) => {
+            Ok((skill, script, origin)) => {
                 match skillhost.prepare_run(&skill, script.as_deref(), &cmd.request_id) {
                     Ok(plan) => {
                         // Route the built command through the SAME governed bash
@@ -1447,10 +1478,11 @@ pub async fn run_authorized_skillhost_run(
                             input: serde_json::json!({ "command": plan.command }),
                             call_id: cmd.request_id.clone(),
                             cancel,
-                            // Owner-driven protocol call, like `toolhost.execute`.
-                            // Autonomous skill runs (proactive/scheduler) thread
-                            // their own origin — and inherit the jail — in Phase C.
-                            origin: crate::toolhost::isolation::ToolOrigin::OwnerInteractive,
+                            // (Phase C) An interactive owner skill run defaults to
+                            // the host tier; an autonomous skill run (proactive/
+                            // scheduler/auto_skill) names a non-interactive origin
+                            // and INHERITS the OS jail (fail-closed if absent).
+                            origin,
                         };
                         match toolhost.execute_governed(req, confirmation).await {
                             Ok(result) => Response::ok(
@@ -1495,25 +1527,37 @@ fn parse_skill_name_payload(payload: &serde_json::Value) -> Result<String, Strin
     Ok(parsed.name)
 }
 
-/// Parse the `skillhost.run` payload `{skill, script?}` (reject unknown fields).
-/// `script` is the bare script stem (`scripts/<script>.py` is resolved against
-/// the manifest); absent ⇒ the first declared script.
+/// Parse the `skillhost.run` payload `{skill, script?, origin?}` (reject unknown
+/// fields). `script` is the bare script stem (`scripts/<script>.py` is resolved
+/// against the manifest); absent ⇒ the first declared script. `origin` is
+/// optional and defaults to owner-interactive (host tier); an autonomous origin
+/// selects the OS jail. Phase C.
 fn parse_skill_run_payload(
     payload: &serde_json::Value,
-) -> Result<(String, Option<String>), String> {
+) -> Result<
+    (
+        String,
+        Option<String>,
+        crate::toolhost::isolation::ToolOrigin,
+    ),
+    String,
+> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct RunPayload {
         skill: String,
         #[serde(default)]
         script: Option<String>,
+        #[serde(default)]
+        origin: Option<String>,
     }
     let parsed: RunPayload = serde_json::from_value(payload.clone())
         .map_err(|e| format!("invalid skillhost.run payload: {e}"))?;
     if parsed.skill.trim().is_empty() {
         return Err("skill must not be empty".into());
     }
-    Ok((parsed.skill, parsed.script))
+    let origin = parse_tool_origin(parsed.origin.as_deref())?;
+    Ok((parsed.skill, parsed.script, origin))
 }
 
 /// Map a [`SkillHostError`](crate::skillhost::SkillHostError) to a wire response.
@@ -2453,6 +2497,75 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    // ── Phase C: origin wiring (autonomous skill/tool runs inherit the jail) ──
+
+    #[test]
+    fn tool_origin_missing_defaults_to_owner_interactive() {
+        use crate::toolhost::isolation::{IsolationMode, ToolOrigin};
+        // Backward-compat contract: an absent origin is the owner's interactive
+        // turn (host tier), so pre-Phase-C clients keep working unchanged.
+        let origin = parse_tool_origin(None).expect("missing origin ok");
+        assert_eq!(origin, ToolOrigin::OwnerInteractive);
+        assert_eq!(origin.required_isolation(), IsolationMode::Host);
+    }
+
+    #[test]
+    fn tool_origin_autonomous_requires_the_jail() {
+        use crate::toolhost::isolation::{IsolationMode, ToolOrigin};
+        // The load-bearing Phase C intent: an autonomous origin MUST map to a
+        // jail-requiring tier — a scheduler/proactive skill run can never inherit
+        // the daemon's ambient host authority.
+        for (wire, expected) in [
+            ("proactive", ToolOrigin::Proactive),
+            ("scheduler", ToolOrigin::Scheduler),
+            ("auto_skill", ToolOrigin::AutoSkill),
+            ("script_block", ToolOrigin::ScriptBlock),
+        ] {
+            let origin = parse_tool_origin(Some(wire)).expect("known origin");
+            assert_eq!(origin, expected);
+            assert_eq!(origin.required_isolation(), IsolationMode::Jailed, "{wire}");
+        }
+        assert!(parse_tool_origin(Some("owner_interactive")).is_ok());
+        assert!(parse_tool_origin(Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn skill_run_payload_threads_origin_backward_compatibly() {
+        use crate::toolhost::isolation::ToolOrigin;
+        // No origin field ⇒ owner-interactive (existing callers unaffected).
+        let (skill, script, origin) =
+            parse_skill_run_payload(&serde_json::json!({ "skill": "forge" })).expect("ok");
+        assert_eq!(skill, "forge");
+        assert!(script.is_none());
+        assert_eq!(origin, ToolOrigin::OwnerInteractive);
+        // Explicit autonomous origin threads through to the jail tier.
+        let (_, _, origin) = parse_skill_run_payload(
+            &serde_json::json!({ "skill": "forge", "origin": "scheduler" }),
+        )
+        .expect("ok");
+        assert_eq!(origin, ToolOrigin::Scheduler);
+        // An unknown origin is rejected at the wire (fail closed).
+        assert!(parse_skill_run_payload(
+            &serde_json::json!({ "skill": "forge", "origin": "root" })
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn toolhost_payload_threads_origin_backward_compatibly() {
+        use crate::toolhost::isolation::ToolOrigin;
+        let (tool, _input, origin) =
+            parse_toolhost_payload(&serde_json::json!({ "tool": "read", "input": {} }))
+                .expect("ok");
+        assert_eq!(tool, "read");
+        assert_eq!(origin, ToolOrigin::OwnerInteractive);
+        let (_, _, origin) = parse_toolhost_payload(
+            &serde_json::json!({ "tool": "bash", "input": {}, "origin": "proactive" }),
+        )
+        .expect("ok");
+        assert_eq!(origin, ToolOrigin::Proactive);
+    }
 
     fn mock() -> MockAdapter {
         MockAdapter::new("test")

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "capabilities": ["execute"],
+  "allowedTools": ["run_skill"],
+  "timeoutSeconds": 120,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "c04492777d7d8f83245049a9f04d633a927e156678dba4f5bfc80a0d6d5df506",
+      "scripts/hello.py": "5206220fdcffb86f63eb847d598cfc1458919b91d3c431b5e290527825477a06"
+    },
+    "signature": null
+  }
+}

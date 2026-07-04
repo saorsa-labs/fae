@@ -111,6 +111,24 @@ jobs:
         working-directory: crates
         run: env -u RUSTFLAGS cargo build -p fae-daemon --all-features
 
+      - name: Install uv (skill script runner)
+        run: |
+          set -euo pipefail
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Headless ToolHost + SkillHost governed-exec proof (Landlock jail)
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          # Phase C gate: the built daemon EXECUTES read/write/edit/bash + a
+          # run_skill end-to-end through the governed host, and proves the OS
+          # jail (Landlock on this kernel) confines a jailed write to the root.
+          # Exits nonzero on ANY failed assertion → fails the job.
+          uv --version
+          target/debug/fae-daemon --headless-tool-test \
+            --skills fae-daemon/test-fixtures/skills
+
       - name: Build fae-ui-shell (native)
         working-directory: native/rust/fae-ui-shell
         run: env -u RUSTFLAGS cargo build
