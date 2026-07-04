@@ -203,6 +203,19 @@ pub enum Scope {
     /// the native ACP client. Dangerous: the agent runs autonomously and can
     /// edit files within its working directory.
     AgentExecute,
+    /// (Phase F1) Run a native jailed agentic loop inside the daemon
+    /// (`conversation.delegate`): the daemon itself generates → executes tools
+    /// (through the governed ToolHost, `ToolOrigin::Delegated`, always jailed) →
+    /// feeds results back, under hard iteration + token budgets. A single scope
+    /// authorizes both running the loop AND rooting its ephemeral jailed ToolHost
+    /// at the caller-supplied workspace path: the caller is the same trusted
+    /// SwiftFrontend orchestrator already granted `ToolWorkspaceGrant`, and the
+    /// workspace-root validation (absolute/exists/dir/not-protected) + the
+    /// mandatory OS jail provide the blast-radius containment the interactive
+    /// `workspace.confirm_root` card provides on the `toolhost.set_root` path.
+    /// A second ephemeral-root scope would be redundant granularity for the same
+    /// principal.
+    AgentDelegate,
     /// Manage the loaded model at runtime — toggle the personal-LoRA scale
     /// (base ↔ personalized) or reload an adapter. Owner-level, non-destructive.
     ModelManagement,
@@ -229,6 +242,7 @@ impl Scope {
             Scope::X0xMessage => "x0x:message",
             Scope::X0xAdmin => "x0x:admin",
             Scope::AgentExecute => "agent:execute",
+            Scope::AgentDelegate => "agent:delegate",
             Scope::ModelManagement => "model:management",
             Scope::Admin => "admin",
         }
@@ -254,6 +268,7 @@ impl Scope {
             "x0x:message" => Scope::X0xMessage,
             "x0x:admin" => Scope::X0xAdmin,
             "agent:execute" => Scope::AgentExecute,
+            "agent:delegate" => Scope::AgentDelegate,
             "model:management" => Scope::ModelManagement,
             "admin" => Scope::Admin,
             _ => return None,
@@ -343,6 +358,14 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "agent.cancel" => &[Scope::AgentExecute],
         "agent.close" => &[Scope::AgentExecute],
         "agent.session_list" => &[Scope::StatusRead],
+        // Phase F1: the native jailed agentic loop. `AgentDelegate` is the
+        // envelope permission to run the loop AND root its ephemeral jailed
+        // ToolHost at the caller-supplied workspace (one scope suffices — see the
+        // `Scope::AgentDelegate` doc comment). The inner per-tool FaeToolPolicy
+        // still re-checks tool.execute_safe / dangerous per call under the
+        // mandatory OS jail. Two registration points (MAJOR-2): this table runs
+        // before dispatch; the handler spawns in transport.rs.
+        "conversation.delegate" => &[Scope::AgentDelegate],
         // Runtime personal-LoRA scale toggle (gap B3b): base ↔ personalized.
         "engine.set_adapter_scale" => &[Scope::ModelManagement],
         // Deploy: restart the serving sidecar with a freshly-trained adapter.
@@ -389,6 +412,13 @@ impl ClientClass {
                     // delegation at the Fae tool layer before it reaches here
                     // (gap A1).
                     Scope::AgentExecute,
+                    // Phase F1 (2026-07-04, owner opt-in): the Swift frontend
+                    // drives `conversation.delegate` — the daemon's native jailed
+                    // agentic loop. Same minimal-grant-extension pattern as F7a
+                    // (dangerous-tool default) and Phase E (`x0x.*`): the scope
+                    // lets the command RUN; the mandatory OS jail + per-tool
+                    // FaeToolPolicy remain the trust boundary.
+                    Scope::AgentDelegate,
                     // A3-Swift Q7a: the governed daemon ToolHost is reachable from
                     // the live Swift client. Safe portable tools (read/glob/grep,
                     // path-contained + read-only) run in the per-session daemon
@@ -1157,6 +1187,7 @@ mod tests {
             Scope::X0xMessage,
             Scope::X0xAdmin,
             Scope::AgentExecute,
+            Scope::AgentDelegate,
             Scope::ModelManagement,
             Scope::Admin,
         ];
@@ -1482,6 +1513,35 @@ mod tests {
         let chat_only = client(&[Scope::X0xMessage], 1000, None);
         assert_eq!(
             authorize(&chat_only, &handoff, 0),
+            AuthzDecision::Deny(DenyReason::MissingScope)
+        );
+    }
+
+    #[test]
+    fn delegate_command_requires_agent_delegate_scope() {
+        // Phase F1 (MAJOR-2 gate 1): `conversation.delegate` resolves to
+        // `AgentDelegate` BEFORE dispatch. A frontend token holds it; a token
+        // lacking it is denied MissingScope.
+        assert_eq!(
+            required_scopes("conversation.delegate"),
+            Some(&[Scope::AgentDelegate][..])
+        );
+        assert!(ClientClass::SwiftFrontend
+            .default_scopes()
+            .contains(&Scope::AgentDelegate));
+        let cmd = Command {
+            v: PROTOCOL_VERSION,
+            request_id: "d1".to_owned(),
+            command: "conversation.delegate".to_owned(),
+            payload: serde_json::Value::Null,
+        };
+        // AgentDelegate is not the dangerous scope, so authorize returns Allow
+        // (the OS jail + per-tool policy are the boundary, not a confirm card).
+        let holder = client(&[Scope::AgentDelegate], 1000, None);
+        assert_eq!(authorize(&holder, &cmd, 0), AuthzDecision::Allow);
+        let without = client(&[Scope::ConversationWrite], 1000, None);
+        assert_eq!(
+            authorize(&without, &cmd, 0),
             AuthzDecision::Deny(DenyReason::MissingScope)
         );
     }

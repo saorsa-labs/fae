@@ -36,6 +36,11 @@ const TOOLHOST_RECEIPTS_FILE: &str = "toolhost_receipts.jsonl";
 /// (`skill_loaded`/`skill_quarantined`/`skill_executed`). Sibling to the
 /// ToolHost audit; SAME private store dir, NEVER `fae.db`/`MemoryOrchestrator`.
 const SKILLHOST_AUDIT_FILE: &str = "skillhost_audit.jsonl";
+/// Phase F1: the native jailed agentic loop's per-delegation receipts
+/// (`fae.delegate`). Sibling to the ToolHost/SkillHost audit; SAME private store
+/// dir, NEVER `fae.db`/`MemoryOrchestrator` (storage-isolation invariant). The
+/// receipt records `prompt_sha256`, NEVER the raw delegated prompt.
+const DELEGATION_RECEIPTS_FILE: &str = "delegation_receipts.jsonl";
 const RECIPES_DIR: &str = "recipes";
 
 /// Append-only store. Cheap to clone (holds only a path).
@@ -167,6 +172,19 @@ impl ConductorStore {
         record: &impl serde::Serialize,
     ) -> Result<(), ConductorError> {
         append_jsonl(&self.dir.join(TOOLHOST_RECEIPTS_FILE), record)
+    }
+
+    /// Append one native-delegation receipt (Phase F1, `fae.delegate`).
+    ///
+    /// Generic over the record type so the conductor store keeps its one-way
+    /// boundary (delegate → conductor, never the reverse). The caller serializes
+    /// a `DelegationReceipt` — which carries `prompt_sha256`, never the raw
+    /// prompt.
+    pub fn append_delegation_receipt(
+        &self,
+        record: &impl serde::Serialize,
+    ) -> Result<(), ConductorError> {
+        append_jsonl(&self.dir.join(DELEGATION_RECEIPTS_FILE), record)
     }
 
     /// Append one governed-SkillHost lifecycle-audit row (ADR-013 Vision A, A2.5).

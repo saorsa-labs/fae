@@ -39,8 +39,18 @@ use fae_engine::{
 
 mod agents;
 mod conductor;
+/// Phase F1 — the native jailed agentic loop (`conversation.delegate`). The
+/// daemon runs its own generate → execute-tool (jailed, `ToolOrigin::Delegated`)
+/// → feed-back loop under hard iteration + token budgets, rooted at an ephemeral
+/// jailed ToolHost. See `delegate.rs`.
+mod delegate;
 mod diagnostic;
 mod events;
+/// Phase F1 — headless delegation proof (`--headless-delegate-test`). Drives the
+/// native loop against a scripted MockAdapter with NO socket + NO real model,
+/// asserting the jailed write lands, the receipt links its mutation receipt, an
+/// out-of-root write is rejected, and the budget-exhaustion path trips.
+mod headless_delegate_test;
 /// Phase C — headless ToolHost + SkillHost execution proof (`--headless-tool-test`).
 /// Builds the same governed host the protocol path builds, then runs
 /// read/write/edit/bash + a jailed `run_skill` end-to-end WITHOUT a socket or a
@@ -131,6 +141,28 @@ async fn main() -> DaemonResult<()> {
                 }
                 Err(msg) => {
                     eprintln!("[headless-tool-test] FAILED: {msg}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // Phase F1 headless delegation proof (`--headless-delegate-test`): drives the
+    // native jailed agentic loop against a scripted MockAdapter — NO socket, NO
+    // model. Exits nonzero (fails CI) on any failed assertion.
+    {
+        let argv: Vec<String> = std::env::args().skip(1).collect();
+        if argv
+            .first()
+            .is_some_and(|s| s == "--headless-delegate-test")
+        {
+            match headless_delegate_test::run().await {
+                Ok(()) => {
+                    println!("[headless-delegate-test] ALL STEPS PASSED");
+                    return Ok(());
+                }
+                Err(msg) => {
+                    eprintln!("[headless-delegate-test] FAILED: {msg}");
                     std::process::exit(1);
                 }
             }

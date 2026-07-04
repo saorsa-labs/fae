@@ -89,6 +89,10 @@ pub enum ToolOrigin {
     AutoSkill,
     /// A `<tool_program>` script block.
     ScriptBlock,
+    /// (Phase F1) A tool call issued by the daemon's native jailed agentic loop
+    /// (`fae.delegate`). The LLM drives it with no human in the loop, so — like
+    /// every other autonomous origin — it MUST run under the OS jail.
+    Delegated,
 }
 
 impl ToolOrigin {
@@ -100,7 +104,8 @@ impl ToolOrigin {
             ToolOrigin::Proactive
             | ToolOrigin::Scheduler
             | ToolOrigin::AutoSkill
-            | ToolOrigin::ScriptBlock => IsolationMode::Jailed,
+            | ToolOrigin::ScriptBlock
+            | ToolOrigin::Delegated => IsolationMode::Jailed,
         }
     }
 }
@@ -458,6 +463,7 @@ mod tests {
             ToolOrigin::Scheduler,
             ToolOrigin::AutoSkill,
             ToolOrigin::ScriptBlock,
+            ToolOrigin::Delegated,
         ] {
             assert_eq!(
                 origin.required_isolation(),
