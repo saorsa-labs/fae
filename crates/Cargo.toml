@@ -13,6 +13,10 @@ members = [
   "fae-audio",
   "fae-acp",
   "fae-daemon",
+  # Phase F3: x0x-symphony Runner over the daemon socket. QUARANTINES every
+  # x0x-symphony-* dependency (fae-daemon stays symphony-clean; verify with
+  # `cargo tree -i x0x-symphony-core`).
+  "fae-symphony-runner",
 ]
 
 [workspace.package]

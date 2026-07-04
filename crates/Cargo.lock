@@ -2014,6 +2014,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "fae-symphony-runner"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "fae-control-plane",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "x0x-symphony-core",
+ "x0x-symphony-orchestrator",
+ "x0x-symphony-signing",
+ "x0x-symphony-tracker-x0x-crdt",
+ "x0x-symphony-workspace",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3943,7 +3966,7 @@ dependencies = [
  "itoa",
  "landlock",
  "libc",
- "nix",
+ "nix 0.31.3",
  "seccompiler",
  "serde",
  "thiserror 2.0.18",
@@ -4130,6 +4153,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
 dependencies = [
  "smallvec 1.15.1",
+]
+
+[[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.12.1",
+ "cfg-if 1.0.4",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -8315,6 +8350,86 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "x0x-symphony-core"
+version = "0.1.0"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "x0x-symphony-orchestrator"
+version = "0.1.0"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "x0x-symphony-core",
+ "x0x-symphony-signing",
+ "x0x-symphony-workspace",
+]
+
+[[package]]
+name = "x0x-symphony-signing"
+version = "0.1.0"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "reqwest 0.12.28",
+ "serde",
+ "thiserror 2.0.18",
+ "x0x-symphony-core",
+]
+
+[[package]]
+name = "x0x-symphony-tracker-x0x-crdt"
+version = "0.1.0"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "x0x-symphony-core",
+ "x0x-symphony-signing",
+]
+
+[[package]]
+name = "x0x-symphony-workspace"
+version = "0.1.0"
+source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+dependencies = [
+ "async-trait",
+ "nix 0.30.1",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "x0x-symphony-core",
+]
 
 [[package]]
 name = "y4m"
