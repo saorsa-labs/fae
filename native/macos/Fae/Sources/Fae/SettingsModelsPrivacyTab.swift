@@ -9,6 +9,7 @@ struct SettingsModelsPrivacyTab: View {
     enum Section: String, CaseIterable, Identifiable {
         case privacy = "Privacy"
         case cloud = "Cloud Models"
+        case x0x = "x0x Connections"
 
         var id: String { rawValue }
 
@@ -16,6 +17,7 @@ struct SettingsModelsPrivacyTab: View {
             switch self {
             case .privacy: return "lock.shield"
             case .cloud: return "cloud"
+            case .x0x: return "network"
             }
         }
     }
@@ -35,6 +37,11 @@ struct SettingsModelsPrivacyTab: View {
     @State private var remoteModel: String = "openai/gpt-4.1-mini"
     @State private var cloudDailyBudgetUSD: Double = 2.0
     @State private var cloudDailyBudgetText: String = "2.0"
+
+    // MARK: - x0x peer lane
+    @State private var x0xEnabled: Bool = false
+    @State private var x0xOwnerFleet: String = ""
+    @State private var x0xAllowList: String = ""
 
     // MARK: - API key (Keychain — never stored in config)
     @State private var apiKeyInput: String = ""
@@ -58,6 +65,8 @@ struct SettingsModelsPrivacyTab: View {
                         privacySection
                     case .cloud:
                         cloudSection
+                    case .x0x:
+                        x0xSection
                     }
                 }
                 .padding(.horizontal, 16)
@@ -436,5 +445,68 @@ struct SettingsModelsPrivacyTab: View {
                 cloudDailyBudgetText = String(format: "%.2f", budget)
             }
         }
+
+        // x0x: read directly from disk config (no daemon command yet for this section).
+        let cfg = FaeConfig.load()
+        x0xEnabled = cfg.x0x.enabled
+        x0xOwnerFleet = cfg.x0x.ownerFleet.joined(separator: "\n")
+        x0xAllowList = cfg.x0x.allowList.joined(separator: "\n")
+    }
+
+    // MARK: - x0x Section
+
+    private var x0xSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("x0x Connections")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            Toggle("Enable x0x peer ingress", isOn: $x0xEnabled)
+                .onChange(of: x0xEnabled) { _, enabled in
+                    guard !hydratingFromConfig else { return }
+                    patchConfig("x0x.enabled", value: enabled)
+                }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Owner fleet (one agent ID per line)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                TextEditor(text: $x0xOwnerFleet)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 60)
+                    .border(Color(NSColor.separatorColor))
+                    .onChange(of: x0xOwnerFleet) { _, value in
+                        guard !hydratingFromConfig else { return }
+                        let ids = value
+                            .components(separatedBy: .newlines)
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                        patchConfig("x0x.ownerFleet", value: ids)
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Allow list (one agent ID per line)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                TextEditor(text: $x0xAllowList)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 60)
+                    .border(Color(NSColor.separatorColor))
+                    .onChange(of: x0xAllowList) { _, value in
+                        guard !hydratingFromConfig else { return }
+                        let ids = value
+                            .components(separatedBy: .newlines)
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                        patchConfig("x0x.allowList", value: ids)
+                    }
+            }
+
+            Text("Requires restart to take effect.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.top, 8)
     }
 }

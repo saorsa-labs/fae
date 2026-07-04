@@ -188,4 +188,78 @@ final class FaeConfigParsingTests: XCTestCase {
         // Clamp ceiling: must not exceed 100.0.
         XCTAssertLessThanOrEqual(config.llm.cloudDailyBudgetUSD, 100.0)
     }
+
+    // MARK: - x0x peer lane (Phase E)
+
+    func testX0xEnabledDefaultIsFalse() {
+        let config = FaeConfig()
+        XCTAssertFalse(config.x0x.enabled)
+        XCTAssertTrue(config.x0x.ownerFleet.isEmpty)
+        XCTAssertTrue(config.x0x.allowList.isEmpty)
+    }
+
+    func testX0xEnabledRoundTrip() throws {
+        let toml = """
+        [x0x]
+        enabled = true
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("x0x-enabled-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        XCTAssertTrue(config.x0x.enabled)
+    }
+
+    func testX0xOwnerFleetRoundTrip() throws {
+        let toml = """
+        [x0x]
+        enabled = true
+        ownerFleet = ["agent-abc", "agent-def"]
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("x0x-fleet-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        XCTAssertEqual(config.x0x.ownerFleet, ["agent-abc", "agent-def"])
+    }
+
+    func testX0xAllowListRoundTrip() throws {
+        let toml = """
+        [x0x]
+        allowList = ["peer-111", "peer-222"]
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("x0x-allow-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = FaeConfig.load(from: url)
+        XCTAssertEqual(config.x0x.allowList, ["peer-111", "peer-222"])
+    }
+
+    func testX0xSerializationRoundTrip() throws {
+        var config = FaeConfig()
+        config.x0x.enabled = true
+        config.x0x.ownerFleet = ["fleet-a", "fleet-b"]
+        config.x0x.allowList = ["allow-x"]
+
+        // Save to a temp file and reload — verifies [x0x] is emitted and re-parsed.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("x0x-serial-\(UUID().uuidString).toml")
+        try config.save(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Confirm the raw TOML contains expected text.
+        let toml = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(toml.contains("[x0x]"), "serialized TOML must include [x0x] section")
+        XCTAssertTrue(toml.contains("fleet-a"))
+        XCTAssertTrue(toml.contains("allow-x"))
+
+        // Re-parse and verify values survive the round-trip.
+        let reloaded = FaeConfig.load(from: url)
+        XCTAssertTrue(reloaded.x0x.enabled)
+        XCTAssertEqual(reloaded.x0x.ownerFleet, ["fleet-a", "fleet-b"])
+        XCTAssertEqual(reloaded.x0x.allowList, ["allow-x"])
+    }
 }

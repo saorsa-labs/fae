@@ -280,6 +280,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         privacyLane: runtimeConfig.llm.resolvedPrivacyLane,
                         budgetUSD: runtimeConfig.llm.cloudDailyBudgetUSD
                     )
+                    // x0x peer lane (Phase E)
+                    await daemonEngine.setX0xConfig(
+                        enabled: runtimeConfig.x0x.enabled,
+                        ownerFleet: runtimeConfig.x0x.ownerFleet,
+                        allowList: runtimeConfig.x0x.allowList
+                    )
                     // B-Swift Phase B: wire the supervisor callbacks. The engine
                     // owns process supervision; FaeCore owns the downstream
                     // effects of endpoint changes (DaemonEndpointStore + TTS
@@ -1304,6 +1310,23 @@ final class FaeCore: ObservableObject, HostCommandSender {
     nonisolated func sendCommand(name: String, payload: [String: Any]) {
         Task { @MainActor in
             self.handleCommand(name: name, payload: payload)
+        }
+    }
+
+    /// Forward a peer command to the daemon (Phase E — x0x peer lane).
+    /// No-ops loudly if the daemon engine is not active.
+    func sendPeerCommand(_ command: String, payload: [String: Any]) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let daemonEngine = self.llmEngine as? DaemonLLMEngine else {
+                NSLog("FaeCore: sendPeerCommand — daemon engine not active, dropping %@", command)
+                return
+            }
+            do {
+                try await daemonEngine.sendPeerCommand(command, payload: payload)
+            } catch {
+                NSLog("FaeCore: sendPeerCommand %@ failed: %@", command, error.localizedDescription)
+            }
         }
     }
 

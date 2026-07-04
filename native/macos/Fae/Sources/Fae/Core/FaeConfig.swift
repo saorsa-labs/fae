@@ -23,6 +23,7 @@ struct FaeConfig: Codable {
     var agents = AgentConfig()
     var privacy: PrivacyConfig = PrivacyConfig()
     var voice: VoiceConfig = VoiceConfig()
+    var x0x: X0xConfig = X0xConfig()
     var userName: String?
     var licenseAccepted: Bool = false
     var startupIntroSeen: Bool = false
@@ -470,6 +471,17 @@ struct FaeConfig: Codable {
         /// local_preferred: local-first with optional connected features.
         /// connected: enable connected features when allowed by tool mode.
         var mode: String = "local_preferred"
+    }
+
+    // MARK: - x0x Peer Lane (Phase E)
+
+    struct X0xConfig: Codable {
+        /// Enable x0x peer ingress (FAE_X0X_INGRESS=1).
+        var enabled: Bool = false
+        /// Agent IDs of trusted owner-fleet Fae instances for handoff.
+        var ownerFleet: [String] = []
+        /// Allow-list of agent IDs permitted to send peer messages.
+        var allowList: [String] = []
     }
 
     static func recommendedTrainingTarget() -> String {
@@ -1191,6 +1203,19 @@ struct FaeConfig: Codable {
                     config.channels.imessage.allowedSenders = v
                 default: break
                 }
+            case "x0x":
+                switch key {
+                case "enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.x0x.enabled = v
+                case "ownerFleet":
+                    guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.x0x.ownerFleet = v
+                case "allowList":
+                    guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.x0x.allowList = v
+                default: break
+                }
             case "vision":
                 switch key {
                 case "enabled":
@@ -1439,6 +1464,12 @@ struct FaeConfig: Codable {
         lines.append("[channels.imessage]")
         lines.append("enabled = \(channels.imessage.enabled ? "true" : "false")")
         lines.append("allowedSenders = \(encodeStringArray(channels.imessage.allowedSenders))")
+
+        lines.append("")
+        lines.append("[x0x]")
+        lines.append("enabled = \(x0x.enabled ? "true" : "false")")
+        lines.append("ownerFleet = \(encodeStringArray(x0x.ownerFleet))")
+        lines.append("allowList = \(encodeStringArray(x0x.allowList))")
 
         return lines.joined(separator: "\n") + "\n"
     }

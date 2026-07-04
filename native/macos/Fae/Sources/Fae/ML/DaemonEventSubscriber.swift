@@ -227,7 +227,18 @@ final class DaemonEventSubscriber: @unchecked Sendable {
             let reason = (payload["reason"] as? String) ?? "completed"
             delivered = .ended(playbackID: playbackID, reason: reason)
         default:
-            delivered = nil  // unknown event — forward-compatible ignore
+            // Forward peer.* events to BackendEventRouter via .faeBackendEvent
+            // so Phase E handlers can decode them (peer.message / peer.consent /
+            // peer.handoff_offer / peer.presence).
+            if event.hasPrefix("peer.") {
+                let userInfo: [String: Any] = ["event": event, "payload": payload]
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .faeBackendEvent, object: nil, userInfo: userInfo)
+                }
+            }
+            // All other unknown events: forward-compatible ignore.
+            delivered = nil
         }
         guard let event = delivered else { return }
         // Deliver on the caller-supplied queue, not this read-loop queue, so a
