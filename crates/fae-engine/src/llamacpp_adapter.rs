@@ -1096,7 +1096,7 @@ impl ProviderAdapter for LlamaServerAdapter {
     }
 }
 
-fn role_str(role: Role) -> &'static str {
+pub(crate) fn role_str(role: Role) -> &'static str {
     match role {
         Role::System => "system",
         Role::User => "user",
@@ -1174,12 +1174,14 @@ fn build_chat_body(
 }
 
 #[derive(Default)]
-struct PendingToolCall {
+pub(crate) struct PendingToolCall {
     name: String,
     arguments: String,
 }
 
-fn finish_pending_tool_calls(pending: &mut BTreeMap<usize, PendingToolCall>) -> Vec<ChatEvent> {
+pub(crate) fn finish_pending_tool_calls(
+    pending: &mut BTreeMap<usize, PendingToolCall>,
+) -> Vec<ChatEvent> {
     let drained = std::mem::take(pending);
     drained
         .into_values()
@@ -1191,7 +1193,7 @@ fn finish_pending_tool_calls(pending: &mut BTreeMap<usize, PendingToolCall>) -> 
         .collect()
 }
 
-fn events_from_chunk_with_pending_tools(
+pub(crate) fn events_from_chunk_with_pending_tools(
     value: &serde_json::Value,
     pending_tool_calls: &mut BTreeMap<usize, PendingToolCall>,
 ) -> Vec<ChatEvent> {
