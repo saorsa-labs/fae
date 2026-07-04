@@ -32,9 +32,9 @@ use fae_control_plane::{
     Scope, TicketStore, PROTOCOL_VERSION,
 };
 use fae_engine::{
-    kill_all_registered_sidecars, LazyLlamaServerAdapter, LlamaModelSource, LlamaServerAdapter,
-    LlamaServerConfig, MockTtsAdapter, ModelsLock, ProviderAdapter, RemoteModelArtifact,
-    TtsAdapter,
+    kill_all_registered_sidecars, ChatEvent, LazyLlamaServerAdapter, LlamaModelSource,
+    LlamaServerAdapter, LlamaServerConfig, MockAdapter, MockTtsAdapter, ModelsLock,
+    ProviderAdapter, RemoteModelArtifact, TtsAdapter,
 };
 
 mod agents;
@@ -999,7 +999,57 @@ async fn build_engine() -> Arc<dyn ProviderAdapter> {
     if let Err(detail) = engine_selection() {
         exit_fatal("engine_selection", &detail);
     }
+    // Dev/test-only: `FAE_ENGINE=mock` (validated FAE_DEV-gated in
+    // `engine_selection`) swaps the real llama.cpp engine for a deterministic
+    // scripted `MockAdapter` so a REAL daemon can serve the socket with NO model
+    // — the substrate the Phase F live group-of-Fae proof spawns two of. Mirrors
+    // `FAE_MODELS_LOCK=off`'s FAE_DEV gating: a production build fails closed in
+    // `engine_selection` before reaching here, so it can never run a mock brain.
+    if mock_engine_requested() {
+        eprintln!(
+            "fae-daemon: WARNING: FAE_DEV allows FAE_ENGINE=mock; serving a scripted \
+             MockAdapter (NO model) — dev/test only"
+        );
+        return build_mock_engine();
+    }
     build_llamacpp_engine().await
+}
+
+/// True when `FAE_ENGINE=mock` is requested. Gating (FAE_DEV) is enforced in
+/// [`engine_selection`]; this only tests the value.
+fn mock_engine_requested() -> bool {
+    std::env::var("FAE_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("mock"))
+}
+
+/// A deterministic scripted engine for the `FAE_ENGINE=mock` dev lane. Each
+/// delegation loop consumes two scripted turns: (1) a `write` tool call that
+/// overwrites the pre-committed `tracked.txt` inside the jailed workspace (so a
+/// `git diff --name-only` in the workspace surfaces the mutation), then (2) a
+/// final answer. Several pairs are queued so one daemon can serve multiple
+/// sequential delegations before falling back to echo.
+fn build_mock_engine() -> Arc<dyn ProviderAdapter> {
+    const DELEGATIONS: usize = 8;
+    let mut scripts: Vec<Vec<ChatEvent>> = Vec::with_capacity(DELEGATIONS * 2);
+    for _ in 0..DELEGATIONS {
+        scripts.push(vec![
+            ChatEvent::ToolCall {
+                name: "write".to_owned(),
+                arguments:
+                    "{\"path\":\"tracked.txt\",\"content\":\"changed by fae (mock delegate)\\n\"}"
+                        .to_owned(),
+            },
+            ChatEvent::Done {
+                finish_reason: "tool_calls".to_owned(),
+            },
+        ]);
+        scripts.push(vec![
+            ChatEvent::Token("delegated work complete".to_owned()),
+            ChatEvent::Done {
+                finish_reason: "stop".to_owned(),
+            },
+        ]);
+    }
+    Arc::new(MockAdapter::scripted("mock-delegate", scripts))
 }
 
 /// Build the optional daemon-owned Qwen3-ASR sidecar. It is lazy: the ~2.5 GB
@@ -1826,13 +1876,27 @@ fn engine_selection() -> Result<(), String> {
         .as_deref()
     {
         None | Some("") | Some("llamacpp") => Ok(()),
+        // Dev/test-only scripted engine (Phase F live group-of-Fae proof). Fails
+        // closed outside FAE_DEV so a production release can never run a mock
+        // brain, mirroring `FAE_MODELS_LOCK=off`.
+        Some("mock") => {
+            if dev_mode() {
+                Ok(())
+            } else {
+                Err(
+                    "FAE_ENGINE=mock is a dev/test-only escape hatch; it requires FAE_DEV=1"
+                        .to_owned(),
+                )
+            }
+        }
         Some("mistralrs") => Err(
             "FAE_ENGINE=mistralrs was removed from the runtime path; Fae now uses \
              bundled llama.cpp + on-demand Unsloth Gemma 4 downloads only"
                 .to_owned(),
         ),
         Some(other) => Err(format!(
-            "unknown FAE_ENGINE={other:?} — valid value is 'llamacpp' (default)"
+            "unknown FAE_ENGINE={other:?} — valid values are 'llamacpp' (default) \
+             and 'mock' (FAE_DEV only)"
         )),
     }
 }

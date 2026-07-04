@@ -2,6 +2,16 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Phase F commit 4 (live group-of-Fae proof + ADR-015)
+
+### New Features
+- **`FAE_ENGINE=mock` — dev-gated scripted engine (`fae-daemon`)**: `build_engine` now recognises `FAE_ENGINE=mock`, which swaps the real llama.cpp engine for a deterministic scripted `MockAdapter` (a `write tracked.txt` tool call → final answer, several pairs queued) so a REAL daemon can serve its control socket with NO model download. Gated exactly like `FAE_MODELS_LOCK=off`: valid only under `FAE_DEV=1`; `engine_selection` fails closed (exit 78) if requested without it, so a production build can never run a mock brain. This is the substrate the live group-of-Fae proof spawns two of.
+- **Runner answers the delegation's `tool.confirm` (`fae-symphony-runner`)**: `DaemonClient` now recognises daemon-initiated `{server_request_id, method, params}` frames. During `conversation.delegate` the daemon round-trips a `tool.confirm` before running a dangerous (write/edit/bash) tool inside the jailed loop; an autonomous symphony worker **pre-authorizes its own delegation** (it pinned a conservative leaf toolset and the daemon confines every mutation to the issue workspace via the OS jail — the jail, not an interactive owner card, is the boundary) and replies `{approved: true}`. Any other server-initiated method fails closed (`{approved: false}`).
+
+### Testing
+- **Live group-of-Fae proof (`crates/fae-symphony-runner/tests/live_group_of_fae.rs`, `#[ignore]`, SKIP-not-fail)**: the Phase F gate. Spawns TWO real `fae-daemon` processes (each with `FAE_ENGINE=mock` on its own isolated `HOME` → its own run dir / socket / token / store), stands up TWO `FaeRunner`s over them, and shares ONE self-seeded x0xd TaskList (2 tasks) between two required-signing `X0xCrdtTracker`s. Asserts: **no double-claim** (a claimed task leaves the todo pool and is never offered to the second runner; the two runners claim DISTINCT tasks), **worked by a group of Fae** (each runner drives its OWN daemon's jailed delegation, mutating its OWN isolated git workspace — `git diff --name-only` surfaces `tracked.txt`), **signed handoffs** (ML-DSA-signed via x0xd `/agent/sign`), **tasks left the todo pool**, and **proof artifacts written**. Verified live against x0xd :12700. Locates the daemon via `FAE_SYMPHONY_DAEMON_BIN` or the sibling binary next to the test's target profile dir. Honest scope: a single x0xd node exposes one identity, so no-double-claim is proven at the task-lease level under one shared signing identity — two-identity claiming across two replicated x0x nodes is a documented multi-node follow-up (ADR-015).
+- **ADR-015 (Proposed)**: records the `conversation.delegate` native-loop placement + jailed `Delegated` origin + budget model, the runner as a separate quarantined binary, x0xd-signs-everything (no Fae keys), the leaf-only-permit no-starvation design, single-engine throughput honesty, and the F4 `FAE_ENGINE=mock` substrate + runner confirm pre-authorization.
+
 ## Unreleased — Phase F commit 2 (`fae.delegate` — parallel leaf batches + orchestrator role)
 
 ### New Features
