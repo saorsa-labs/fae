@@ -32,6 +32,33 @@ actor ConversationStateTracker {
     private var recentTools: Set<String> = []
     private var recentToolsAt: Date?
 
+    // MARK: - Phase G2 pinned-summary compression
+
+    /// Caller-side hysteresis floor, mirroring the daemon's
+    /// `compaction::RECOMPUTE_EVICTION_THRESHOLD`: once a summary exists, at least
+    /// this many further turns must be evicted before it is RE-computed, so we do
+    /// not re-summarize on every trimmed turn. The FIRST summary is not gated (we
+    /// never silently drop the first evicted turns).
+    static let recomputeEvictionThreshold = 8
+
+    /// Cap on the buffered-eviction backlog so a persistently-failing summarizer
+    /// cannot grow it without bound. Oldest buffered turns are dropped past this.
+    private static let maxPendingEviction = 200
+
+    /// The pinned summary of turns evicted from the kept window, resent each turn
+    /// so the model keeps long-horizon context. `nil` until the first compaction.
+    private(set) var pinnedSummary: String?
+
+    /// How many evicted messages `pinnedSummary` currently covers (telemetry).
+    private(set) var pinnedSummaryCoveredCount: Int = 0
+
+    /// Turns evicted (dropped from the front of `history`) but not yet folded into
+    /// `pinnedSummary`. The compaction caller drains these after a turn completes.
+    private var pendingEviction: [LLMMessage] = []
+
+    /// Evicted-message count since the last recompute — the caller-side watermark.
+    private var turnsSinceSummary: Int = 0
+
     // MARK: - Configuration
 
     /// Set the maximum history message count (called by FaeCore after pipeline setup).
@@ -165,6 +192,7 @@ actor ConversationStateTracker {
         lastAssistantMessageAt = nil
         recentTools.removeAll()
         recentToolsAt = nil
+        resetCompactionState()
     }
 
     /// Replace the current history with external messages and return the old history.
@@ -179,14 +207,52 @@ actor ConversationStateTracker {
         lastAssistantMessageAt = nil
         recentTools.removeAll()
         recentToolsAt = nil
+        // A swapped-in session (e.g. a channel sender) has its own compaction
+        // lineage — the previous session's summary must not leak into it.
+        resetCompactionState()
         return old
     }
+
+    // MARK: - Phase G2 compaction API
+
+    /// The evicted turns to fold into the pinned summary this cycle, plus the
+    /// prior summary to fold them on top of — or `nil` when there is nothing to
+    /// do OR the caller-side hysteresis watermark has not been reached. The FIRST
+    /// summary is never gated (so evicted turns are not silently dropped); a
+    /// RE-compaction waits until `recomputeEvictionThreshold` further turns evict.
+    func pendingCompaction() -> (evicted: [LLMMessage], priorSummary: String?)? {
+        guard !pendingEviction.isEmpty else { return nil }
+        let isFirstSummary = pinnedSummary == nil
+        guard isFirstSummary || turnsSinceSummary >= Self.recomputeEvictionThreshold else {
+            return nil
+        }
+        return (pendingEviction, pinnedSummary)
+    }
+
+    /// Install a freshly-computed pinned summary that covered `covered` evicted
+    /// turns, drop those from the backlog, and reset the watermark. An
+    /// all-whitespace summary is ignored (the caller then hard-truncates).
+    func applyCompactionResult(summary: String, covered: Int) {
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        pinnedSummary = trimmed
+        pinnedSummaryCoveredCount += covered
+        let drop = min(max(covered, 0), pendingEviction.count)
+        pendingEviction.removeFirst(drop)
+        turnsSinceSummary = 0
+    }
+
+    /// Test/inspection hook: how many evicted turns are buffered awaiting a fold.
+    func pendingEvictionCount() -> Int { pendingEviction.count }
 
     // MARK: - Private
 
     private func trimHistory() {
-        // First pass: message-count cap.
+        // First pass: message-count cap. Phase G2: the dropped prefix is the
+        // evicted turns — buffer them for compaction instead of losing them.
         if history.count > maxHistoryMessages {
+            let dropCount = history.count - maxHistoryMessages
+            recordEviction(Array(history.prefix(dropCount)))
             history = Array(history.suffix(maxHistoryMessages))
         }
 
@@ -196,14 +262,34 @@ actor ConversationStateTracker {
         if available <= 0 {
             // Budget exhausted by system prompt — keep only the most recent pair.
             while history.count > 2 {
-                history.removeFirst()
+                recordEviction([history.removeFirst()])
             }
             return
         }
 
         while history.count > 2, estimateTokenCount() > available {
-            history.removeFirst()
+            recordEviction([history.removeFirst()])
         }
+    }
+
+    /// Phase G2: buffer turns evicted from the kept window and advance the
+    /// caller-side watermark. The backlog is capped so a persistently-failing
+    /// summarizer cannot grow it without bound (oldest buffered turns drop first).
+    private func recordEviction(_ evicted: [LLMMessage]) {
+        guard !evicted.isEmpty else { return }
+        pendingEviction.append(contentsOf: evicted)
+        turnsSinceSummary += evicted.count
+        if pendingEviction.count > Self.maxPendingEviction {
+            pendingEviction.removeFirst(pendingEviction.count - Self.maxPendingEviction)
+        }
+    }
+
+    /// Drop all pinned-summary compression state (on `clear`/`swapHistory`).
+    private func resetCompactionState() {
+        pinnedSummary = nil
+        pinnedSummaryCoveredCount = 0
+        pendingEviction.removeAll()
+        turnsSinceSummary = 0
     }
 
     /// Lightweight token estimate: characters / 3.5 for English text.

@@ -252,6 +252,14 @@ enum DaemonWire {
         if !tools.isEmpty {
             payload["tools"] = tools
         }
+        // Phase G2: carry the pinned conversation summary when the caller has one.
+        // The daemon folds it into a stable `system ++ pinned_summary` prefix; an
+        // absent (or all-whitespace) value omits the key entirely so a
+        // non-compacted turn is byte-identical to today's payload.
+        if let pinned = options.pinnedSummary,
+           !pinned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["pinned_summary"] = pinned
+        }
         return payload
     }
 
@@ -1076,6 +1084,10 @@ actor DaemonLLMEngine: LLMEngine {
         var transcribeOptions = options
         transcribeOptions.tools = nil
         transcribeOptions.turnContextPrefix = nil
+        // Phase G2: the pinned summary is reasoning context, never transcription
+        // context — folding it into the transcribe system prompt would only
+        // distract pass 1. Pass 2 (reasoning) keeps it.
+        transcribeOptions.pinnedSummary = nil
         transcribeOptions.suppressThinking = true
         // Scale the pass-1 cap with duration (~12 tokens/sec ≈ the
         // duration*25-char gate with headroom) so a 30s clip isn't truncated
@@ -1146,6 +1158,46 @@ actor DaemonLLMEngine: LLMEngine {
     func shutdown() async {
         internalShutdown()
         loadState = .notStarted
+    }
+
+    // MARK: - Compaction (Phase G2)
+
+    /// Fold the evicted turns (optionally on top of a prior pinned summary) into
+    /// one compact summary via the daemon's `conversation.compact` (G1). The
+    /// prior summary is prepended as an assistant note so re-compaction is
+    /// cumulative — earlier context is never dropped. Returns `nil` when there is
+    /// nothing to summarize or the daemon yields an empty summary; a transport /
+    /// daemon error throws so the caller can hard-truncate + log loudly (it never
+    /// blocks the turn — this runs after the turn completes).
+    func compactConversation(
+        evicted: [LLMMessage],
+        priorSummary: String?
+    ) async throws -> String? {
+        guard isLoaded, let connection else { return nil }
+        var wire: [[String: Any]] = []
+        if let prior = priorSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !prior.isEmpty {
+            wire.append(["role": "assistant", "content": "[summary of earlier turns] \(prior)"])
+        }
+        for message in evicted {
+            wire.append(["role": message.role.rawValue, "content": message.content])
+        }
+        guard !wire.isEmpty else { return nil }
+
+        let requestID = nextRequestID()
+        let frame = try DaemonWire.encodeFrame(
+            requestID: requestID,
+            command: "conversation.compact",
+            payload: ["messages": wire])
+        let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
+        let response = try DaemonWire.unwrapResponse(raw)
+        let result = (response["result"] as? [String: Any]) ?? [:]
+        guard let summary = result["summary"] as? String,
+              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return summary
     }
 
     // MARK: - Personal adapter API (P3/C3)
