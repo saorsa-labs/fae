@@ -1366,6 +1366,7 @@ mod tests {
     #[test]
     fn pinned_hf_preflights_and_materializes_from_verified_cache(
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile_dir("ok")?;
         let root = dir.join("test--repo/rev");
         std::fs::create_dir_all(&root)?;
@@ -1398,6 +1399,7 @@ mod tests {
 
     #[test]
     fn pinned_hf_fails_closed_on_tampered_cached_gguf() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile_dir("tamper")?;
         let root = dir.join("test--repo/rev");
         std::fs::create_dir_all(&root)?;
@@ -1544,11 +1546,16 @@ mod tests {
         assert_eq!(base.current_scale(), None);
     }
 
+    // LlamaServerAdapter::reload_adapter on a connect adapter returns Err at the
+    // sidecar check before any internal .await, so the sync MutexGuard is never
+    // held across a real yield point. The lint is suppressed on this function only.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn reload_without_managed_sidecar_errors() {
         // An attached (connect) adapter owns no child/config, so reload is rejected
         // — it cannot restart a server it does not manage. Use a confined path so
         // the failure is the managed-sidecar check, not the Stage-4 path gate.
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("fae-adapter-{}", uuid_like()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
@@ -1619,6 +1626,7 @@ mod tests {
 
     #[test]
     fn validate_personal_adapter_accepts_confined_file() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("fae-conf-{}", uuid_like()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
@@ -1635,6 +1643,7 @@ mod tests {
 
     #[test]
     fn validate_personal_adapter_rejects_missing_file() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("fae-miss-{}", uuid_like()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
@@ -1648,6 +1657,7 @@ mod tests {
 
     #[test]
     fn validate_personal_adapter_rejects_out_of_confinement_path() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         // An attacker-supplied absolute path OUTSIDE the personal-adapters dir
         // (the remotely-reachable injection this gate exists to stop) is rejected
         // even though the file exists and is readable.
@@ -1672,6 +1682,7 @@ mod tests {
 
     #[test]
     fn validate_personal_adapter_rejects_directory() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("fae-dir-{}", uuid_like()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
