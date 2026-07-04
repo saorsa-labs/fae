@@ -1179,8 +1179,8 @@ pub async fn run_authorized_toolhost_execute(
 pub async fn run_authorized_delegate(
     record: &ClientRecord,
     cmd: &Command,
-    engine: &dyn ProviderAdapter,
-    confirmation: &dyn crate::toolhost::confirm::ToolConfirmation,
+    engine: Arc<dyn ProviderAdapter>,
+    confirmation: Arc<dyn crate::toolhost::confirm::ToolConfirmation>,
     store: Arc<crate::conductor::ConductorStore>,
     home_dir: Option<std::path::PathBuf>,
     cancel: tokio_util::sync::CancellationToken,
@@ -1208,6 +1208,9 @@ pub async fn run_authorized_delegate(
                         home_dir,
                         cancel,
                         now_ms,
+                        engine_permit: crate::delegate::engine_permit(),
+                        leaf_permit: crate::delegate::leaf_permit(),
+                        parent_id: None,
                     };
                     match crate::delegate::run_delegation(&deps, request).await {
                         Ok(outcome) => Response::ok(

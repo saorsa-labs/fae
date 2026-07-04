@@ -536,7 +536,12 @@ async fn handle_connection(
                     if cmd.command == "conversation.delegate" {
                         let record = record.clone();
                         let engine = Arc::clone(&engine);
-                        let confirm = Arc::clone(&confirm);
+                        // Coerce the concrete confirmation Arc to a trait object so
+                        // an orchestrator can share it across spawned children
+                        // (unsized coercion applies on the plain `let` binding).
+                        let confirm_concrete = Arc::clone(&confirm);
+                        let confirm: Arc<dyn crate::toolhost::confirm::ToolConfirmation> =
+                            confirm_concrete;
                         let store = Arc::clone(&conductor_store);
                         let home_dir = home_dir.clone();
                         let cancel = session_cancel.clone();
@@ -544,14 +549,7 @@ async fn handle_connection(
                         let sink_t = Arc::clone(&sink);
                         tool_tasks.spawn(async move {
                             let outcome = run_authorized_delegate(
-                                &record,
-                                &cmd,
-                                engine.as_ref(),
-                                confirm.as_ref(),
-                                store,
-                                home_dir,
-                                cancel,
-                                now,
+                                &record, &cmd, engine, confirm, store, home_dir, cancel, now,
                                 event_id,
                             )
                             .await;

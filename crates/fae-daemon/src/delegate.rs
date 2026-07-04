@@ -15,16 +15,37 @@
 //!   and the cumulative output-token budget to [`TOKEN_CEILING`]. Tripping
 //!   either yields a `budget_exhausted` status with a PARTIAL receipt.
 //!
-//! Commit-1 scope: `role` (Leaf/Orchestrator) is CARRIED into the receipt but
-//! Leaf and Orchestrator behave identically here — fan-out lands in commit 2,
-//! which is also why `depth > 0` is rejected for now.
+//! Commit-2 (Phase F2) adds **parallel leaf batches + orchestrator fan-out**:
+//!
+//! * a process-global **engine permit** ([`Semaphore`], permit = 1) serializes
+//!   ALL delegation generations on the single local engine — held ONLY across
+//!   the `run_turn` generation call, never across tool execution, so parallel
+//!   leaves overlap tool-exec / jail I/O (NOT token throughput);
+//! * a **delegation-concurrency cap** ([`DEFAULT_DELEGATION_CONCURRENCY`] = 3,
+//!   clamped ≤ [`MAX_DELEGATION_CONCURRENCY`] = 8) bounds live LEAF loops via a
+//!   second semaphore. Only leaves consume a slot; an orchestrator (which merely
+//!   awaits its children) holds NO slot, so the wait graph is acyclic —
+//!   deadlock-free even at cap = 1 (a permit holder never waits on a permit,
+//!   because a leaf cannot fan out);
+//! * an `Orchestrator`-role delegation at depth 0 sees a synthetic `delegate`
+//!   TOOL (exposed ONLY in the orchestrator's schema — never a leaf's). Its
+//!   input is a BATCH (≤ [`MAX_BATCH_SIZE`] = 4) of child specs; each child runs
+//!   as a `Leaf` at depth + 1 in the SAME `workspace_root`, with a toolset that
+//!   must be a SUBSET of the parent's and budgets clamped ≤ the parent's
+//!   remaining. Each child is `tokio::spawn`ed and joined; child receipts link
+//!   `parent_id`;
+//! * depth: an orchestrator at depth 0 may spawn leaves at depth 1; anything at
+//!   depth ≥ 1 is a leaf (no `delegate` tool in schema AND runtime-rejected —
+//!   defense in depth). Depth > [`MAX_DEPTH`] (i.e. 2+) is rejected.
 //!
 //! The receipt records `prompt_sha256`, **never the raw prompt**, and lands in
 //! the conductor store's isolated JSONL (`delegation_receipts.jsonl`), never
 //! `fae.db`.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use fae_control_plane::ClientRecord;
@@ -33,6 +54,7 @@ use fluers_core::tool::ToolResult;
 use fluers_runtime::Limits;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::conductor::ConductorStore;
@@ -59,16 +81,68 @@ pub const TOKEN_CEILING: u32 = 32_768;
 /// and the delegation's remaining token budget.
 const PER_TURN_MAX_TOKENS: usize = 4096;
 
-/// Whether a delegated agent fans out to child workers. Commit-1 carries this
-/// into the receipt but treats both identically (fan-out = commit 2).
+/// Maximum nesting depth. An orchestrator at depth 0 spawns leaves at depth 1;
+/// depth 2+ (a leaf spawning children) is rejected — leaves cannot fan out.
+pub const MAX_DEPTH: u8 = 1;
+
+/// Default cap on concurrent LIVE leaf loops (the delegation-concurrency
+/// semaphore's permit count). Bounds jailed-ToolHost / tool-exec resource use.
+pub const DEFAULT_DELEGATION_CONCURRENCY: usize = 3;
+
+/// Hard ceiling on the delegation-concurrency cap (clamped daemon-side).
+pub const MAX_DELEGATION_CONCURRENCY: usize = 8;
+
+/// Maximum children in one orchestrator fan-out batch.
+pub const MAX_BATCH_SIZE: usize = 4;
+
+/// The synthetic fan-out tool name — exposed ONLY in an orchestrator's schema,
+/// never a leaf's, and never a real [`ToolHost`] tool.
+const DELEGATE_TOOL: &str = "delegate";
+
+/// Process-global **engine permit** (permit = 1): serializes ALL delegation
+/// generations on the single local engine. Held ONLY across the `run_turn`
+/// generation call — NOT across tool execution — so parallel leaves overlap
+/// tool-exec / jail I/O, not token throughput.
+static ENGINE_PERMIT: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(1)));
+
+/// Process-global **delegation-concurrency** semaphore (default cap
+/// [`DEFAULT_DELEGATION_CONCURRENCY`]). Only LEAF loops consume a permit.
+static LEAF_PERMIT: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(DEFAULT_DELEGATION_CONCURRENCY)));
+
+/// The process-global engine permit (permit = 1). The daemon wires this into
+/// every top-level delegation so the whole fan-out tree shares one gate.
+#[must_use]
+pub fn engine_permit() -> Arc<Semaphore> {
+    Arc::clone(&ENGINE_PERMIT)
+}
+
+/// The process-global delegation-concurrency semaphore (default cap 3).
+#[must_use]
+pub fn leaf_permit() -> Arc<Semaphore> {
+    Arc::clone(&LEAF_PERMIT)
+}
+
+/// A fresh delegation-concurrency semaphore with an explicit cap, clamped to
+/// `[1, MAX_DELEGATION_CONCURRENCY]`. Used by tests to prove the no-deadlock
+/// invariant at cap = 1.
+#[must_use]
+pub fn leaf_permit_with_cap(cap: usize) -> Arc<Semaphore> {
+    Arc::new(Semaphore::new(cap.clamp(1, MAX_DELEGATION_CONCURRENCY)))
+}
+
+/// Whether a delegated agent fans out to child workers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DelegationRole {
-    /// A leaf worker: runs tools, returns a result. No children.
+    /// A leaf worker: runs tools, returns a result. No children, no `delegate`
+    /// tool in its schema, and a runtime-rejected `delegate` call (defense in
+    /// depth). Consumes a delegation-concurrency permit for its whole run.
     #[default]
     Leaf,
-    /// An orchestrator: (commit 2) fans out to child delegations. Commit-1
-    /// behaves identically to [`Leaf`](DelegationRole::Leaf).
+    /// An orchestrator: at depth 0 it sees the synthetic `delegate` tool and may
+    /// fan out to a batch of child leaves (`tokio::spawn` + join). It holds NO
+    /// concurrency permit while awaiting children (keeps the wait graph acyclic).
     Orchestrator,
 }
 
@@ -78,7 +152,7 @@ pub enum DelegationRole {
 pub struct DelegationRequest {
     /// The task for the delegated worker.
     pub prompt: String,
-    /// Leaf vs Orchestrator (identical in commit 1).
+    /// Leaf vs Orchestrator. An `Orchestrator` at depth 0 may fan out.
     #[serde(default)]
     pub role: DelegationRole,
     /// The tools the worker is permitted to call (names). A tool call naming a
@@ -93,7 +167,8 @@ pub struct DelegationRequest {
     pub max_iterations: u32,
     /// Requested cumulative output-token budget (clamped to [`TOKEN_CEILING`]).
     pub max_output_tokens: u32,
-    /// Nesting depth. Commit-1 rejects anything `> 0` (commit 2 raises it).
+    /// Nesting depth. An orchestrator is submitted at depth 0; its children run
+    /// at depth 1. Anything `> `[`MAX_DEPTH`] (i.e. 2+) is rejected.
     #[serde(default)]
     pub depth: u8,
 }
@@ -183,8 +258,16 @@ pub struct DelegationReceipt {
     pub id: String,
     /// Receipt time, ms since UNIX epoch.
     pub ts_ms: u64,
-    /// Leaf vs Orchestrator (identical behaviour in commit 1).
+    /// Leaf vs Orchestrator.
     pub role: DelegationRole,
+    /// The parent orchestrator's delegation id when this is a spawned child
+    /// leaf; `None` for a top-level delegation. Links a child to its parent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// For an orchestrator that fanned out: the delegation ids of the children
+    /// it spawned (records the batch). Empty for a leaf / a non-fan-out run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub child_ids: Vec<String>,
     /// SHA-256 hex of the delegated prompt — the raw prompt is NEVER stored.
     pub prompt_sha256: String,
     /// The permitted toolset (names).
@@ -215,12 +298,17 @@ pub struct DelegationOutcome {
 /// A fail-closed delegation rejection (nothing ran, no receipt).
 #[derive(Debug, thiserror::Error)]
 pub enum DelegationError {
-    /// `depth > 0` — fan-out lands in commit 2.
-    #[error("delegation depth {0} exceeds the commit-1 maximum of 0 (fan-out lands in commit 2)")]
+    /// `depth > MAX_DEPTH` — a leaf cannot fan out.
+    #[error("delegation depth {0} exceeds the maximum of {max} (a leaf cannot fan out)", max = MAX_DEPTH)]
     DepthExceeded(u8),
     /// The prompt was empty/whitespace.
     #[error("delegation prompt is empty")]
     EmptyPrompt,
+    /// A process concurrency semaphore was closed (never happens in normal
+    /// operation — the daemon never closes the engine/leaf permits — but we
+    /// fail closed rather than `unwrap`).
+    #[error("delegation concurrency permit unavailable (semaphore closed)")]
+    PermitUnavailable,
     /// The workspace root failed validation (absolute/exists/dir/not-protected).
     #[error("workspace root rejected: {0}")]
     InvalidWorkspace(String),
@@ -239,6 +327,7 @@ impl DelegationError {
         match self {
             DelegationError::DepthExceeded(_) => "delegation_depth_exceeded",
             DelegationError::EmptyPrompt => "bad_request",
+            DelegationError::PermitUnavailable => "delegation_unavailable",
             DelegationError::InvalidWorkspace(_) => "unsafe_root",
             DelegationError::JailUnavailable => "jail_unavailable",
             DelegationError::ToolHostBuild(_) => "sandbox_error",
@@ -246,13 +335,16 @@ impl DelegationError {
     }
 }
 
-/// The backends a delegation needs. Borrowed for the duration of the loop.
-pub struct DelegationDeps<'a> {
+/// The backends a delegation needs. Owned (shared via `Arc`) so an orchestrator
+/// can `tokio::spawn` children that share the SAME engine, confirmation channel,
+/// store, and BOTH semaphores. `Clone` builds a child's deps from the parent's.
+#[derive(Clone)]
+pub struct DelegationDeps {
     /// The inference engine (drives each iteration's turn).
-    pub engine: &'a dyn ProviderAdapter,
+    pub engine: Arc<dyn ProviderAdapter>,
     /// The tool-confirmation channel (dangerous ops still round-trip to the
     /// owner; the caller spawns delegation off the read loop so the reply routes).
-    pub confirmation: &'a dyn ToolConfirmation,
+    pub confirmation: Arc<dyn ToolConfirmation>,
     /// The shared conductor store — the ephemeral ToolHost's audit/receipts AND
     /// the delegation receipt land here (isolated JSONL, never `fae.db`).
     pub store: Arc<ConductorStore>,
@@ -264,17 +356,26 @@ pub struct DelegationDeps<'a> {
     pub cancel: CancellationToken,
     /// Per-request wall clock (the receipt timestamp).
     pub now_ms: u64,
+    /// The process-global engine permit (permit = 1) serializing ALL generation.
+    /// Shared across the whole fan-out tree.
+    pub engine_permit: Arc<Semaphore>,
+    /// The delegation-concurrency semaphore bounding live LEAF loops. Shared
+    /// across the whole fan-out tree.
+    pub leaf_permit: Arc<Semaphore>,
+    /// The parent orchestrator's delegation id when THIS run is a spawned child;
+    /// `None` at the top level. Recorded on the receipt to link child → parent.
+    pub parent_id: Option<String>,
 }
 
 /// Run one native jailed delegation. Validation failures fail closed with
 /// `Err` (nothing ran); a delegation that RAN — whether it completed, exhausted
 /// its budget, or the engine failed mid-loop — returns `Ok` with a receipt.
 pub async fn run_delegation(
-    deps: &DelegationDeps<'_>,
+    deps: &DelegationDeps,
     request: DelegationRequest,
 ) -> Result<DelegationOutcome, DelegationError> {
     // ── 1. Validate (fail closed BEFORE building anything) ────────────────────
-    if request.depth > 0 {
+    if request.depth > MAX_DEPTH {
         return Err(DelegationError::DepthExceeded(request.depth));
     }
     let prompt = request.prompt.trim().to_owned();
@@ -288,6 +389,30 @@ pub async fn run_delegation(
     if !jail_backend_available() {
         return Err(DelegationError::JailUnavailable);
     }
+
+    // Fan-out is enabled ONLY for an orchestrator submitted at depth 0. A leaf
+    // (or anything at depth ≥ 1) never gets the `delegate` tool in its schema
+    // AND is runtime-rejected if it emits one — defense in depth.
+    let fan_out_enabled = request.role == DelegationRole::Orchestrator && request.depth == 0;
+
+    // ── 1b. Delegation-concurrency cap ────────────────────────────────────────
+    // A LEAF loop holds one permit for its WHOLE run; an orchestrator holds NONE
+    // (it only awaits children). Because a permit holder (a leaf) can never fan
+    // out, the wait graph is acyclic — this is deadlock-free even at cap = 1: the
+    // orchestrator waits on children, each child waits only on the leaf permit,
+    // and the leaf permit is released by OTHER leaves that wait on nothing. We
+    // never close the semaphore, so `acquire_owned` failing is unreachable in
+    // practice; fail closed rather than `unwrap`.
+    let _leaf_guard: Option<OwnedSemaphorePermit> = if fan_out_enabled {
+        None
+    } else {
+        Some(
+            Arc::clone(&deps.leaf_permit)
+                .acquire_owned()
+                .await
+                .map_err(|_| DelegationError::PermitUnavailable)?,
+        )
+    };
 
     // ── 2. Budget (clamped daemon-side) ───────────────────────────────────────
     let mut budget = DelegationBudget::clamped(request.max_iterations, request.max_output_tokens);
@@ -303,9 +428,13 @@ pub async fn run_delegation(
     .await
     .map_err(|error| DelegationError::ToolHostBuild(error.to_string()))?;
 
-    // ── 4. Child history + RESTRICTED tool schemas (only the toolset's tools) ─
+    // ── 4. Child history + RESTRICTED tool schemas (only the toolset's tools;
+    //       an orchestrator ALSO sees the synthetic `delegate` fan-out tool). ─
     let prompt_sha256 = sha256_hex(prompt.as_bytes());
-    let tool_specs = build_tool_specs(&host, &request.toolset);
+    let mut tool_specs = build_tool_specs(&host, &request.toolset);
+    if fan_out_enabled {
+        tool_specs.push(delegate_tool_spec());
+    }
     let system = delegated_worker_system_prompt();
     let mut history: Vec<ChatMessage> = vec![ChatMessage::text(Role::User, prompt.clone())];
 
@@ -314,6 +443,8 @@ pub async fn run_delegation(
     let hash_prefix_len = prompt_sha256.len().min(12);
     let id = format!("del-{}-{}", deps.now_ms, &prompt_sha256[..hash_prefix_len]);
     let mut tool_events: Vec<DelegationToolEvent> = Vec::new();
+    // The delegation ids of children this run spawned (orchestrator fan-out).
+    let mut child_ids: Vec<String> = Vec::new();
     let mut final_text = String::new();
     // Default status if the loop hits its iteration cap without a final answer.
     let mut status = DelegationStatus::BudgetExhausted;
@@ -332,7 +463,20 @@ pub async fn run_delegation(
             tools: tool_specs.clone(),
             max_tokens: per_turn,
         };
-        let turn = match crate::session::run_turn(deps.engine, req).await {
+        // The engine permit (permit = 1) is held ONLY across this generation
+        // call — dropped at the end of this block, BEFORE tool execution — so a
+        // parallel leaf can run its jailed tools while this one generates.
+        let turn = {
+            let _gen = match Arc::clone(&deps.engine_permit).acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    status = DelegationStatus::Failed;
+                    break;
+                }
+            };
+            crate::session::run_turn(deps.engine.as_ref(), req).await
+        };
+        let turn = match turn {
             Ok(value) => value,
             Err(detail) => {
                 eprintln!("fae-daemon: delegation turn failed: {detail}");
@@ -375,6 +519,64 @@ pub async fn run_delegation(
                 .to_owned();
             let call_id = format!("{id}-i{iteration}-t{idx}");
 
+            // The synthetic `delegate` fan-out tool is intercepted BEFORE the
+            // ToolHost path (it is not a real tool). Available ONLY to an
+            // orchestrator at depth 0; a leaf emitting it is runtime-rejected.
+            if name == DELEGATE_TOOL {
+                if fan_out_enabled {
+                    let remaining_iters =
+                        budget.max_iterations.saturating_sub(budget.iterations_used);
+                    let args = parse_tool_arguments(call);
+                    match run_fan_out(
+                        deps,
+                        &id,
+                        &request.toolset,
+                        &request.workspace_root,
+                        request.depth + 1,
+                        remaining_iters,
+                        budget.tokens_remaining(),
+                        &args,
+                    )
+                    .await
+                    {
+                        Ok(fan) => {
+                            history.push(ChatMessage::text(Role::Tool, fan.result_text));
+                            // Children's output tokens count against the parent's
+                            // remaining budget so an orchestrator cannot spawn
+                            // unbounded work.
+                            budget.tokens_used =
+                                budget.tokens_used.saturating_add(fan.child_tokens);
+                            child_ids.extend(fan.child_ids);
+                            tool_events.push(DelegationToolEvent {
+                                tool: name,
+                                mutation_receipt_id: None,
+                                status: "ok".to_owned(),
+                            });
+                        }
+                        Err(reason) => {
+                            history.push(ChatMessage::text(Role::Tool, format!("error: {reason}")));
+                            tool_events.push(DelegationToolEvent {
+                                tool: name,
+                                mutation_receipt_id: None,
+                                status: "denied_batch".to_owned(),
+                            });
+                        }
+                    }
+                } else {
+                    history.push(ChatMessage::text(
+                        Role::Tool,
+                        "error: the `delegate` tool is only available to an orchestrator at depth 0"
+                            .to_owned(),
+                    ));
+                    tool_events.push(DelegationToolEvent {
+                        tool: name,
+                        mutation_receipt_id: None,
+                        status: "denied_leaf_cannot_delegate".to_owned(),
+                    });
+                }
+                continue;
+            }
+
             if !tool_allowed(&request.toolset, &name) {
                 history.push(ChatMessage::text(
                     Role::Tool,
@@ -397,7 +599,10 @@ pub async fn run_delegation(
                 cancel: deps.cancel.clone(),
                 origin: ToolOrigin::Delegated,
             };
-            match host.execute_governed(tool_req, deps.confirmation).await {
+            match host
+                .execute_governed(tool_req, deps.confirmation.as_ref())
+                .await
+            {
                 Ok(result) => {
                     history.push(ChatMessage::text(Role::Tool, content_text(&result.output)));
                     let mutation_receipt_id = if is_mutating_tool(&name) {
@@ -434,6 +639,8 @@ pub async fn run_delegation(
         id,
         ts_ms: deps.now_ms,
         role: request.role,
+        parent_id: deps.parent_id.clone(),
+        child_ids,
         prompt_sha256,
         toolset: request.toolset,
         iterations_used: budget.iterations_used,
@@ -484,6 +691,214 @@ fn build_tool_specs(host: &ToolHost, toolset: &[String]) -> Vec<ToolSpec> {
 /// Is `name` in the delegated toolset?
 fn tool_allowed(toolset: &[String], name: &str) -> bool {
     toolset.iter().any(|tool| tool == name)
+}
+
+/// One child spec inside an orchestrator's `delegate` batch. Deserialized from
+/// the model's tool-call arguments (never trusted for the workspace root, which
+/// is inherited from the parent).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DelegationBatchSpec {
+    /// The child leaf's task.
+    prompt: String,
+    /// The child's toolset. Must be a SUBSET of the parent orchestrator's.
+    #[serde(default)]
+    toolset: Vec<String>,
+    /// Requested child iteration cap (clamped ≤ parent remaining, then daemon
+    /// ceiling).
+    max_iterations: u32,
+    /// Requested child token budget (clamped ≤ parent remaining, then ceiling).
+    max_output_tokens: u32,
+}
+
+/// The aggregate result of one orchestrator fan-out.
+struct FanOutResult {
+    /// A JSON summary of each child's status + final text, fed back to the
+    /// orchestrator as the `delegate` tool result.
+    result_text: String,
+    /// The spawned children's delegation ids (recorded on the orchestrator
+    /// receipt as the batch).
+    child_ids: Vec<String>,
+    /// The children's combined approximate output tokens (debited from the
+    /// parent's remaining budget).
+    child_tokens: u32,
+}
+
+/// The synthetic fan-out tool schema, exposed ONLY in an orchestrator's tool
+/// set. Its input is a `batch` array of child specs (bounded to
+/// [`MAX_BATCH_SIZE`] at execution time).
+fn delegate_tool_spec() -> ToolSpec {
+    ToolSpec {
+        name: DELEGATE_TOOL.to_owned(),
+        description: format!(
+            "Fan out to a batch of up to {MAX_BATCH_SIZE} child worker(s) that run in \
+             parallel in the same workspace. Each child's `toolset` must be a subset of \
+             yours. Use this to split independent sub-tasks; wait for all results, then \
+             give your final answer."
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "batch": {
+                    "type": "array",
+                    "maxItems": MAX_BATCH_SIZE,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": { "type": "string", "description": "the child's task" },
+                            "toolset": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "tools the child may use (subset of yours)"
+                            },
+                            "max_iterations": { "type": "integer" },
+                            "max_output_tokens": { "type": "integer" }
+                        },
+                        "required": ["prompt", "max_iterations", "max_output_tokens"]
+                    }
+                }
+            },
+            "required": ["batch"]
+        }),
+    }
+}
+
+/// Parse the `delegate` tool arguments into a validated batch of child specs.
+/// Accepts either `{ "batch": [...] }` or a bare array. Returns `Err(reason)`
+/// (fed back to the model, NOT a hard delegation failure) on any shape,
+/// batch-size, subset, or empty-prompt violation — validated up front so NO
+/// child is spawned when the batch is malformed.
+fn parse_batch(
+    args: &Value,
+    parent_toolset: &[String],
+) -> Result<Vec<DelegationBatchSpec>, String> {
+    let raw = match args.get("batch") {
+        Some(value) => value.clone(),
+        None if args.is_array() => args.clone(),
+        None => return Err("delegate requires a `batch` array".to_owned()),
+    };
+    let batch: Vec<DelegationBatchSpec> = serde_json::from_value(raw)
+        .map_err(|error| format!("malformed delegate batch: {error}"))?;
+    if batch.is_empty() {
+        return Err("delegate batch is empty".to_owned());
+    }
+    if batch.len() > MAX_BATCH_SIZE {
+        return Err(format!(
+            "delegate batch size {} exceeds the maximum of {MAX_BATCH_SIZE}",
+            batch.len()
+        ));
+    }
+    for spec in &batch {
+        if spec.prompt.trim().is_empty() {
+            return Err("a delegate child has an empty prompt".to_owned());
+        }
+        for tool in &spec.toolset {
+            if tool == DELEGATE_TOOL {
+                return Err("a delegate child toolset may not contain `delegate`".to_owned());
+            }
+            if !tool_allowed(parent_toolset, tool) {
+                return Err(format!(
+                    "child tool `{tool}` is not a subset of the parent toolset"
+                ));
+            }
+        }
+    }
+    Ok(batch)
+}
+
+/// Fan out an orchestrator's batch: validate, spawn each child as a `Leaf` at
+/// `child_depth` in the SAME `workspace_root` (budgets clamped ≤ the parent's
+/// remaining), then join. `tokio::spawn` gives real parallelism so children
+/// overlap tool-exec / jail I/O (generation is still serialized by the engine
+/// permit). Each child shares the parent's semaphores + store + engine.
+#[allow(clippy::too_many_arguments)]
+async fn run_fan_out(
+    deps: &DelegationDeps,
+    parent_id: &str,
+    parent_toolset: &[String],
+    workspace_root: &Path,
+    child_depth: u8,
+    remaining_iterations: u32,
+    remaining_tokens: u32,
+    args: &Value,
+) -> Result<FanOutResult, String> {
+    let batch = parse_batch(args, parent_toolset)?;
+
+    let mut handles = Vec::with_capacity(batch.len());
+    for spec in batch {
+        // Clamp child budgets to the parent's remaining (the child then applies
+        // the daemon ceilings itself in `DelegationBudget::clamped`).
+        let child_iters = clamp_child_budget(spec.max_iterations, remaining_iterations);
+        let child_tokens = clamp_child_budget(spec.max_output_tokens, remaining_tokens);
+        let child_req = DelegationRequest {
+            prompt: spec.prompt,
+            role: DelegationRole::Leaf,
+            toolset: spec.toolset,
+            workspace_root: workspace_root.to_path_buf(),
+            max_iterations: child_iters,
+            max_output_tokens: child_tokens,
+            depth: child_depth,
+        };
+        let mut child_deps = deps.clone();
+        child_deps.parent_id = Some(parent_id.to_owned());
+        handles.push(tokio::spawn(boxed_delegation(child_deps, child_req)));
+    }
+
+    let mut child_ids = Vec::with_capacity(handles.len());
+    let mut child_tokens_total: u32 = 0;
+    let mut summaries: Vec<Value> = Vec::with_capacity(handles.len());
+    for (idx, handle) in handles.into_iter().enumerate() {
+        match handle.await {
+            Ok(Ok(outcome)) => {
+                child_ids.push(outcome.receipt.id.clone());
+                child_tokens_total = child_tokens_total.saturating_add(outcome.receipt.tokens_used);
+                summaries.push(serde_json::json!({
+                    "index": idx,
+                    "status": outcome.status.as_str(),
+                    "text": outcome.text,
+                }));
+            }
+            Ok(Err(error)) => {
+                summaries.push(serde_json::json!({
+                    "index": idx,
+                    "status": "failed",
+                    "error": error.to_string(),
+                }));
+            }
+            Err(join_error) => {
+                summaries.push(serde_json::json!({
+                    "index": idx,
+                    "status": "failed",
+                    "error": format!("child task join error: {join_error}"),
+                }));
+            }
+        }
+    }
+    let result_text =
+        serde_json::to_string(&summaries).unwrap_or_else(|_| "[child summaries]".to_owned());
+    Ok(FanOutResult {
+        result_text,
+        child_ids,
+        child_tokens: child_tokens_total,
+    })
+}
+
+/// Clamp a child's requested budget to the parent's `remaining` — a child can
+/// never be granted MORE than the parent has left. The floor of 1 keeps a child
+/// meaningful even when the parent is nearly spent.
+fn clamp_child_budget(requested: u32, remaining: u32) -> u32 {
+    requested.min(remaining).max(1)
+}
+
+/// Box a recursive child delegation so it can be `tokio::spawn`ed. The async
+/// block OWNS `deps` and borrows it only internally, so the returned future is
+/// `'static`; boxing type-erases it, breaking the otherwise-infinite recursive
+/// future type (an orchestrator's future would contain its children's).
+fn boxed_delegation(
+    deps: DelegationDeps,
+    request: DelegationRequest,
+) -> Pin<Box<dyn Future<Output = Result<DelegationOutcome, DelegationError>> + Send>> {
+    Box::pin(async move { run_delegation(&deps, request).await })
 }
 
 /// The mutating tools that produce a mutation receipt (mirrors the private
@@ -582,7 +997,10 @@ mod tests {
     use crate::toolhost::confirm::{ConfirmReply, ConfirmRequest};
     use async_trait::async_trait;
     use fae_control_plane::{ClientClass, Scope};
-    use fae_engine::{ChatEvent, MockAdapter};
+    use fae_engine::{AdapterInfo, ChatEvent, ChatStream, EngineError, MockAdapter};
+    use std::collections::VecDeque;
+    use std::sync::Mutex as StdMutex;
+    use std::time::{Duration, Instant};
 
     /// Auto-approving confirmation for tests (dangerous ops still fire their
     /// damage-control deny BEFORE the confirm is reached).
@@ -592,6 +1010,10 @@ mod tests {
         async fn confirm(&self, _req: &ConfirmRequest) -> ConfirmReply {
             ConfirmReply::Approved
         }
+    }
+
+    fn confirm() -> Arc<dyn ToolConfirmation> {
+        Arc::new(AutoApprove)
     }
 
     fn client() -> ClientRecord {
@@ -610,6 +1032,136 @@ mod tests {
 
     fn store_at(dir: &Path) -> Arc<ConductorStore> {
         Arc::new(ConductorStore::open(dir.join("store")).expect("store open"))
+    }
+
+    /// Build deps with fresh (unshared) semaphores — the common single-delegation
+    /// case. Concurrency tests build deps manually to SHARE semaphores.
+    fn deps(
+        engine: Arc<dyn ProviderAdapter>,
+        store: Arc<ConductorStore>,
+        now_ms: u64,
+    ) -> DelegationDeps {
+        DelegationDeps {
+            engine,
+            confirmation: confirm(),
+            store,
+            client: client(),
+            home_dir: None,
+            cancel: CancellationToken::new(),
+            now_ms,
+            engine_permit: Arc::new(Semaphore::new(1)),
+            leaf_permit: leaf_permit_with_cap(DEFAULT_DELEGATION_CONCURRENCY),
+            parent_id: None,
+        }
+    }
+
+    /// A completed-turn script: a final answer, no tool calls (1 iteration).
+    fn final_answer(text: &str) -> Vec<ChatEvent> {
+        vec![
+            ChatEvent::Token(text.to_owned()),
+            ChatEvent::Done {
+                finish_reason: "stop".into(),
+            },
+        ]
+    }
+
+    /// A tool-call turn ending in `tool_calls`.
+    fn tool_call(name: &str, arguments: &str) -> Vec<ChatEvent> {
+        vec![
+            ChatEvent::ToolCall {
+                name: name.into(),
+                arguments: arguments.into(),
+            },
+            ChatEvent::Done {
+                finish_reason: "tool_calls".into(),
+            },
+        ]
+    }
+
+    /// A [`ProviderAdapter`] that routes each `stream_chat` to the FIRST keyed
+    /// script whose key is a substring of the last user message, popping that
+    /// key's FIFO. Concurrency-safe (each delegation selects by its own prompt),
+    /// so an orchestrator + parallel children can be scripted deterministically
+    /// even though they share one engine. Unmatched / exhausted ⇒ a bare answer.
+    struct KeyedMock {
+        scripts: StdMutex<Vec<(String, VecDeque<Vec<ChatEvent>>)>>,
+    }
+
+    impl KeyedMock {
+        fn new(entries: Vec<(&str, Vec<Vec<ChatEvent>>)>) -> Arc<KeyedMock> {
+            Arc::new(KeyedMock {
+                scripts: StdMutex::new(
+                    entries
+                        .into_iter()
+                        .map(|(key, turns)| (key.to_owned(), turns.into()))
+                        .collect(),
+                ),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for KeyedMock {
+        fn describe(&self) -> AdapterInfo {
+            AdapterInfo {
+                backend: "keyed".into(),
+                model_id: "keyed".into(),
+            }
+        }
+        async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
+            let last_user = request
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == Role::User)
+                .map(|m| m.content.clone())
+                .unwrap_or_default();
+            let turn = {
+                let mut guard = self
+                    .scripts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut chosen = None;
+                for (key, queue) in guard.iter_mut() {
+                    if last_user.contains(key.as_str()) {
+                        chosen = queue.pop_front();
+                        break;
+                    }
+                }
+                chosen.unwrap_or_else(|| final_answer("done"))
+            };
+            let events = turn.into_iter().map(Ok).collect::<Vec<_>>();
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    /// A [`ProviderAdapter`] that records the [start, end] wall-clock interval of
+    /// each generation (with a fixed delay) into a shared vec, then returns a
+    /// bare final answer. Used to prove the engine permit serializes generation.
+    struct TimedAdapter {
+        intervals: Arc<StdMutex<Vec<(Instant, Instant)>>>,
+        delay: Duration,
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for TimedAdapter {
+        fn describe(&self) -> AdapterInfo {
+            AdapterInfo {
+                backend: "timed".into(),
+                model_id: "timed".into(),
+            }
+        }
+        async fn stream_chat(&self, _request: ChatRequest) -> Result<ChatStream, EngineError> {
+            let start = Instant::now();
+            tokio::time::sleep(self.delay).await;
+            let end = Instant::now();
+            self.intervals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((start, end));
+            let events = final_answer("done").into_iter().map(Ok).collect::<Vec<_>>();
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
     }
 
     // -- pure helpers -------------------------------------------------------
@@ -641,20 +1193,70 @@ mod tests {
         assert_eq!(approx_output_tokens("abcde"), 2);
     }
 
+    /// A child budget can NEVER exceed the parent's remaining (floor 1).
+    #[test]
+    fn child_budget_is_clamped_to_parent_remaining() {
+        // Requested far exceeds remaining ⇒ clamped down to remaining.
+        assert_eq!(clamp_child_budget(1_000, 3), 3);
+        // Requested below remaining ⇒ passes through.
+        assert_eq!(clamp_child_budget(2, 10), 2);
+        // Parent has nothing left ⇒ floor 1 keeps the child meaningful.
+        assert_eq!(clamp_child_budget(50, 0), 1);
+    }
+
+    /// A child toolset must be a SUBSET of the parent's; a non-subset tool (or
+    /// `delegate` itself) is rejected before any child spawns.
+    #[test]
+    fn parse_batch_rejects_subset_violation() {
+        let args = serde_json::json!({
+            "batch": [
+                { "prompt": "x", "toolset": ["bash"], "max_iterations": 1, "max_output_tokens": 10 }
+            ]
+        });
+        let err = parse_batch(&args, &["write".to_owned()]).expect_err("subset violation");
+        assert!(err.contains("subset"), "unexpected reason: {err}");
+
+        let nested = serde_json::json!({
+            "batch": [
+                { "prompt": "x", "toolset": ["delegate"], "max_iterations": 1, "max_output_tokens": 10 }
+            ]
+        });
+        let err = parse_batch(&nested, &["delegate".to_owned(), "write".to_owned()])
+            .expect_err("nested delegate rejected");
+        assert!(err.contains("delegate"), "unexpected reason: {err}");
+    }
+
+    /// A batch larger than [`MAX_BATCH_SIZE`] is rejected.
+    #[test]
+    fn parse_batch_rejects_oversized_batch() {
+        let child = serde_json::json!({ "prompt": "x", "toolset": [], "max_iterations": 1, "max_output_tokens": 10 });
+        let batch: Vec<Value> = std::iter::repeat_n(child, MAX_BATCH_SIZE + 1).collect();
+        let args = serde_json::json!({ "batch": batch });
+        let err = parse_batch(&args, &[]).expect_err("oversized batch");
+        assert!(err.contains("exceeds"), "unexpected reason: {err}");
+    }
+
+    #[test]
+    fn parse_batch_accepts_subset_and_bare_array() {
+        let obj = serde_json::json!({
+            "batch": [
+                { "prompt": "a", "toolset": ["write"], "max_iterations": 2, "max_output_tokens": 50 }
+            ]
+        });
+        let parsed = parse_batch(&obj, &["write".to_owned(), "read".to_owned()]).expect("valid");
+        assert_eq!(parsed.len(), 1);
+        // A bare array (no `batch` wrapper) is also accepted.
+        let bare = serde_json::json!([
+            { "prompt": "a", "toolset": [], "max_iterations": 1, "max_output_tokens": 10 }
+        ]);
+        assert_eq!(parse_batch(&bare, &[]).expect("valid bare").len(), 1);
+    }
+
     #[tokio::test]
-    async fn depth_greater_than_zero_is_rejected() {
+    async fn depth_beyond_max_is_rejected() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let engine = MockAdapter::new("m");
-        let confirm = AutoApprove;
-        let deps = DelegationDeps {
-            engine: &engine,
-            confirmation: &confirm,
-            store: store_at(tmp.path()),
-            client: client(),
-            home_dir: None,
-            cancel: CancellationToken::new(),
-            now_ms: 1,
-        };
+        let engine = Arc::new(MockAdapter::new("m"));
+        let deps = deps(engine, store_at(tmp.path()), 1);
         let request = DelegationRequest {
             prompt: "do a thing".into(),
             role: DelegationRole::Leaf,
@@ -662,29 +1264,20 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             max_iterations: 4,
             max_output_tokens: 1000,
-            depth: 1,
+            depth: 2, // depth 1 (a leaf child) is allowed; depth 2 is not.
         };
         let err = run_delegation(&deps, request)
             .await
-            .expect_err("depth>0 rejected");
-        assert!(matches!(err, DelegationError::DepthExceeded(1)));
+            .expect_err("depth>MAX_DEPTH rejected");
+        assert!(matches!(err, DelegationError::DepthExceeded(2)));
         assert_eq!(err.code(), "delegation_depth_exceeded");
     }
 
     #[tokio::test]
     async fn empty_prompt_is_rejected() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let engine = MockAdapter::new("m");
-        let confirm = AutoApprove;
-        let deps = DelegationDeps {
-            engine: &engine,
-            confirmation: &confirm,
-            store: store_at(tmp.path()),
-            client: client(),
-            home_dir: None,
-            cancel: CancellationToken::new(),
-            now_ms: 1,
-        };
+        let engine = Arc::new(MockAdapter::new("m"));
+        let deps = deps(engine, store_at(tmp.path()), 1);
         let request = DelegationRequest {
             prompt: "   ".into(),
             role: DelegationRole::Leaf,
@@ -714,37 +1307,18 @@ mod tests {
         std::fs::create_dir_all(&root).expect("mkdir ws");
 
         // Iteration 1: write a file. Iteration 2: final answer.
-        let engine = MockAdapter::scripted(
+        let engine = Arc::new(MockAdapter::scripted(
             "m",
             vec![
-                vec![
-                    ChatEvent::ToolCall {
-                        name: "write".into(),
-                        arguments: "{\"path\":\"note.txt\",\"content\":\"hello-delegate\"}".into(),
-                    },
-                    ChatEvent::Done {
-                        finish_reason: "tool_calls".into(),
-                    },
-                ],
-                vec![
-                    ChatEvent::Token("wrote the note".into()),
-                    ChatEvent::Done {
-                        finish_reason: "stop".into(),
-                    },
-                ],
+                tool_call(
+                    "write",
+                    "{\"path\":\"note.txt\",\"content\":\"hello-delegate\"}",
+                ),
+                final_answer("wrote the note"),
             ],
-        );
-        let confirm = AutoApprove;
+        ));
         let secret_prompt = "please write a note about SECRET-XYZZY";
-        let deps = DelegationDeps {
-            engine: &engine,
-            confirmation: &confirm,
-            store: store_at(tmp.path()),
-            client: client(),
-            home_dir: None,
-            cancel: CancellationToken::new(),
-            now_ms: 42,
-        };
+        let deps = deps(engine, store_at(tmp.path()), 42);
         let request = DelegationRequest {
             prompt: secret_prompt.into(),
             role: DelegationRole::Leaf,
@@ -762,6 +1336,8 @@ mod tests {
         let receipt = &outcome.receipt;
         assert_eq!(receipt.prompt_sha256, sha256_hex(secret_prompt.as_bytes()));
         assert_eq!(receipt.iterations_used, 2);
+        assert!(receipt.parent_id.is_none(), "a top-level run has no parent");
+        assert!(receipt.child_ids.is_empty(), "a leaf spawns no children");
         // Exactly one tool event: the write, linked to a mutation receipt id.
         assert_eq!(receipt.tool_events.len(), 1);
         assert_eq!(receipt.tool_events[0].tool, "write");
@@ -789,28 +1365,11 @@ mod tests {
         std::fs::create_dir_all(&root).expect("mkdir ws");
         // The single permitted iteration emits a tool call → never reaches a
         // final answer.
-        let engine = MockAdapter::scripted(
+        let engine = Arc::new(MockAdapter::scripted(
             "m",
-            vec![vec![
-                ChatEvent::ToolCall {
-                    name: "write".into(),
-                    arguments: "{\"path\":\"a.txt\",\"content\":\"x\"}".into(),
-                },
-                ChatEvent::Done {
-                    finish_reason: "tool_calls".into(),
-                },
-            ]],
-        );
-        let confirm = AutoApprove;
-        let deps = DelegationDeps {
-            engine: &engine,
-            confirmation: &confirm,
-            store: store_at(tmp.path()),
-            client: client(),
-            home_dir: None,
-            cancel: CancellationToken::new(),
-            now_ms: 7,
-        };
+            vec![tool_call("write", "{\"path\":\"a.txt\",\"content\":\"x\"}")],
+        ));
+        let deps = deps(engine, store_at(tmp.path()), 7);
         let request = DelegationRequest {
             prompt: "loop forever".into(),
             role: DelegationRole::Leaf,
@@ -825,5 +1384,185 @@ mod tests {
             .expect("delegation ran");
         assert_eq!(outcome.status, DelegationStatus::BudgetExhausted);
         assert_eq!(outcome.receipt.iterations_used, 1);
+    }
+
+    /// A leaf at depth 1 that emits the `delegate` tool is runtime-rejected (the
+    /// tool is not even in its schema, but defense-in-depth rejects it anyway),
+    /// and no children are spawned. Skips without the OS jail.
+    #[tokio::test]
+    async fn depth_one_leaf_cannot_delegate() {
+        if !jail_backend_available() {
+            eprintln!("skip: OS jail unavailable on this host");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("ws");
+        std::fs::create_dir_all(&root).expect("mkdir ws");
+        // A leaf whose (misbehaving) model emits a delegate tool call, then a
+        // final answer.
+        let engine = Arc::new(MockAdapter::scripted(
+            "m",
+            vec![
+                tool_call(
+                    "delegate",
+                    "{\"batch\":[{\"prompt\":\"x\",\"toolset\":[],\"max_iterations\":1,\"max_output_tokens\":10}]}",
+                ),
+                final_answer("cannot delegate"),
+            ],
+        ));
+        let deps = deps(engine, store_at(tmp.path()), 9);
+        let request = DelegationRequest {
+            prompt: "try to delegate as a leaf".into(),
+            role: DelegationRole::Leaf,
+            toolset: vec![],
+            workspace_root: root,
+            max_iterations: 4,
+            max_output_tokens: 1000,
+            depth: 1,
+        };
+        let outcome = run_delegation(&deps, request)
+            .await
+            .expect("delegation ran");
+        assert!(outcome.receipt.child_ids.is_empty(), "no children spawned");
+        let event = outcome
+            .receipt
+            .tool_events
+            .iter()
+            .find(|e| e.tool == "delegate")
+            .expect("a delegate tool event was recorded");
+        assert_eq!(event.status, "denied_leaf_cannot_delegate");
+    }
+
+    /// The engine permit (permit = 1) serializes generation: two concurrent
+    /// leaf delegations sharing one engine permit must NOT overlap their
+    /// generation intervals, even though their leaf permits allow both loops to
+    /// be live. Skips without the OS jail (run_delegation requires it).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn engine_permit_serializes_generation() {
+        if !jail_backend_available() {
+            eprintln!("skip: OS jail unavailable on this host");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("ws");
+        std::fs::create_dir_all(&root).expect("mkdir ws");
+        let store = store_at(tmp.path());
+
+        let intervals = Arc::new(StdMutex::new(Vec::new()));
+        let engine: Arc<dyn ProviderAdapter> = Arc::new(TimedAdapter {
+            intervals: Arc::clone(&intervals),
+            delay: Duration::from_millis(80),
+        });
+        // ONE shared engine permit (the point of the test); a wide leaf pool so
+        // both loops are live concurrently.
+        let engine_permit = Arc::new(Semaphore::new(1));
+        let leaf_permit = leaf_permit_with_cap(MAX_DELEGATION_CONCURRENCY);
+        let mk = |now: u64| DelegationDeps {
+            engine: Arc::clone(&engine),
+            confirmation: confirm(),
+            store: Arc::clone(&store),
+            client: client(),
+            home_dir: None,
+            cancel: CancellationToken::new(),
+            now_ms: now,
+            engine_permit: Arc::clone(&engine_permit),
+            leaf_permit: Arc::clone(&leaf_permit),
+            parent_id: None,
+        };
+        let req = |prompt: &str| DelegationRequest {
+            prompt: prompt.into(),
+            role: DelegationRole::Leaf,
+            toolset: vec![],
+            workspace_root: root.clone(),
+            max_iterations: 1,
+            max_output_tokens: 100,
+            depth: 0,
+        };
+        let d1 = mk(1);
+        let d2 = mk(2);
+        let (r1, r2) = tokio::join!(
+            run_delegation(&d1, req("alpha")),
+            run_delegation(&d2, req("beta")),
+        );
+        r1.expect("delegation 1 ran");
+        r2.expect("delegation 2 ran");
+
+        let mut ivals = intervals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(ivals.len(), 2, "each delegation generated exactly once");
+        ivals.sort_by_key(|(start, _)| *start);
+        assert!(
+            ivals[0].1 <= ivals[1].0,
+            "generation intervals overlapped — engine permit did not serialize: {:?} vs {:?}",
+            ivals[0],
+            ivals[1]
+        );
+    }
+
+    /// No starvation at cap = 1: an orchestrator that fans out two leaves must
+    /// complete even when the delegation-concurrency pool has a SINGLE permit.
+    /// The orchestrator holds NO permit (it only awaits children), so the two
+    /// leaves take the single permit in turn and both finish. A hard timeout
+    /// converts any deadlock into a test failure. Skips without the OS jail.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn orchestrator_fan_out_no_deadlock_at_cap_one() {
+        if !jail_backend_available() {
+            eprintln!("skip: OS jail unavailable on this host");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("ws");
+        std::fs::create_dir_all(&root).expect("mkdir ws");
+
+        let engine: Arc<dyn ProviderAdapter> = KeyedMock::new(vec![
+            (
+                "ORCH",
+                vec![
+                    tool_call(
+                        "delegate",
+                        "{\"batch\":[\
+                         {\"prompt\":\"CHILD-A answer\",\"toolset\":[],\"max_iterations\":2,\"max_output_tokens\":100},\
+                         {\"prompt\":\"CHILD-B answer\",\"toolset\":[],\"max_iterations\":2,\"max_output_tokens\":100}]}",
+                    ),
+                    final_answer("both children finished"),
+                ],
+            ),
+            ("CHILD-A", vec![final_answer("child A done")]),
+            ("CHILD-B", vec![final_answer("child B done")]),
+        ]);
+
+        let deps = DelegationDeps {
+            engine,
+            confirmation: confirm(),
+            store: store_at(tmp.path()),
+            client: client(),
+            home_dir: None,
+            cancel: CancellationToken::new(),
+            now_ms: 100,
+            engine_permit: Arc::new(Semaphore::new(1)),
+            leaf_permit: leaf_permit_with_cap(1), // the starvation stress
+            parent_id: None,
+        };
+        let request = DelegationRequest {
+            prompt: "ORCH split the work".into(),
+            role: DelegationRole::Orchestrator,
+            toolset: vec![],
+            workspace_root: root,
+            max_iterations: 4,
+            max_output_tokens: 5000,
+            depth: 0,
+        };
+        let outcome = tokio::time::timeout(Duration::from_secs(20), run_delegation(&deps, request))
+            .await
+            .expect("fan-out completed (no deadlock at cap=1)")
+            .expect("delegation ran");
+        assert_eq!(outcome.status, DelegationStatus::Completed);
+        assert_eq!(
+            outcome.receipt.child_ids.len(),
+            2,
+            "the orchestrator receipt records both children"
+        );
     }
 }

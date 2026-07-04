@@ -46,10 +46,12 @@ mod conductor;
 mod delegate;
 mod diagnostic;
 mod events;
-/// Phase F1 — headless delegation proof (`--headless-delegate-test`). Drives the
-/// native loop against a scripted MockAdapter with NO socket + NO real model,
+/// Phase F1+F2 — headless delegation proof (`--headless-delegate-test`). Drives
+/// the native loop against scripted mock adapters with NO socket + NO real model,
 /// asserting the jailed write lands, the receipt links its mutation receipt, an
-/// out-of-root write is rejected, and the budget-exhaustion path trips.
+/// out-of-root write is rejected, the budget-exhaustion path trips, and (F2) an
+/// orchestrator fans out to parallel jailed leaves that link `parent_id` — with
+/// no deadlock at concurrency cap 1 and a leaf's `delegate` call rejected.
 mod headless_delegate_test;
 /// Phase C — headless ToolHost + SkillHost execution proof (`--headless-tool-test`).
 /// Builds the same governed host the protocol path builds, then runs
