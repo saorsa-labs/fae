@@ -212,6 +212,11 @@ actor PipelineCoordinator {
     /// endpointer — only the release (or the 30 s cap) ends the capture.
     func pttStart(holdMode: Bool = false) async {
         guard !pttCapturing else { return }
+        // UX auto-cancel: a new deliberate capture supersedes any outstanding
+        // input request — dismiss the abandoned pill/overlay card so it can't
+        // keep the pill expanded (its webview would otherwise capture every
+        // left-click over the orb, wedging the UI).
+        await InputRequestBridge.shared.cancelPending()
         // A deliberate capture interrupts whatever Fae is saying.
         if assistantSpeaking {
             markGenerationInterrupted()
@@ -1077,6 +1082,12 @@ actor PipelineCoordinator {
     func injectText(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // UX auto-cancel: a new injected turn supersedes any outstanding input
+        // request. Answering a pill prompt posts `input_response` (never reaches
+        // injectText), so this only fires for a genuinely new turn — dismissing
+        // an abandoned card so it can't keep the pill expanded and swallow clicks.
+        await InputRequestBridge.shared.cancelPending()
 
         // UX W6: intercept a pasted x0x contact card BEFORE it reaches the LLM.
         // A card is a ~20 KB `x0x://agent/…` blob; flooding it into context is both

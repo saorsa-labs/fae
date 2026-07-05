@@ -14,6 +14,7 @@ final class InputRequestBridgeRoutingTests: XCTestCase {
         var isOrbHostConnected: Bool
         private(set) var didRequest = false
         private(set) var lastRequestId: String?
+        private(set) var didCancel = false
         var onRequest: ((String) -> Void)?
 
         init(connected: Bool) { isOrbHostConnected = connected }
@@ -28,6 +29,10 @@ final class InputRequestBridgeRoutingTests: XCTestCase {
             didRequest = true
             lastRequestId = requestId
             onRequest?(requestId)
+        }
+
+        func cancelPillInput() {
+            didCancel = true
         }
     }
 
@@ -122,5 +127,55 @@ final class InputRequestBridgeRoutingTests: XCTestCase {
         }
         XCTAssertEqual(result, "overlay")
         XCTAssertFalse(didRequest, "a disconnected host must not receive the pill request")
+    }
+
+    /// UX auto-cancel: when a new turn supersedes an abandoned pill prompt,
+    /// `cancelPending()` must resolve the outstanding request as cancelled (nil)
+    /// AND tell the pill to leave request-input mode — otherwise the expanded
+    /// pill keeps capturing left-clicks over the orb and wedges the UI.
+    func test_cancelPending_cancelsOutstandingPillRequest_andDismissesPill() async {
+        let mock = await MainActor.run { MockPillRouter(connected: true) }
+        await MainActor.run {
+            PillInputRouter.shared = mock
+            // The pill acks (commits to the pill path) but the user never answers.
+            mock.onRequest = { requestId in
+                NotificationCenter.default.post(
+                    name: .faePillInputAck,
+                    object: nil,
+                    userInfo: ["request_id": requestId]
+                )
+            }
+        }
+
+        // Start the request; it suspends waiting for an answer that never comes.
+        async let pending = InputRequestBridge.shared.request(prompt: "api key?")
+
+        // Wait until the pill has actually received the request, so it is
+        // genuinely outstanding when we cancel.
+        var delivered = false
+        for _ in 0..<100 {
+            if await MainActor.run(body: { mock.didRequest }) { delivered = true; break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(delivered, "the pill must receive the request before cancel")
+
+        // A new turn supersedes it → auto-cancel.
+        let cancelled = await InputRequestBridge.shared.cancelPending()
+        XCTAssertTrue(cancelled, "cancelPending reports it cancelled a pending request")
+
+        let result = await pending
+        XCTAssertNil(result, "an auto-cancelled request resolves as nil")
+
+        // The cancel dispatches the pill dismissal on the main actor; let it run.
+        var toldPill = false
+        for _ in 0..<100 {
+            if await MainActor.run(body: { mock.didCancel }) { toldPill = true; break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(toldPill, "the pill must be told to leave request-input mode")
+
+        // Idempotent: a second cancel with nothing pending is a no-op.
+        let again = await InputRequestBridge.shared.cancelPending()
+        XCTAssertFalse(again, "cancelPending is a no-op when nothing is pending")
     }
 }

@@ -711,6 +711,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 window.request_redraw();
             }
+            // UX auto-cancel: Swift saw a new turn start while a `request_input`
+            // was still outstanding, so it asks the pill to leave request-input
+            // mode. Collapsing runs `__faeExpand(false)`, whose JS calls
+            // `exitRequestMode()` — restoring the normal composer and, crucially,
+            // shrinking the pill window so its webview stops capturing clicks over
+            // the orb. Idempotent: a no-op when no request is pending.
+            Event::UserEvent(UserEvent::Bridge(ShellCommand::CancelInput)) => {
+                if pill.pending_input.take().is_some() {
+                    set_pill_expanded(&mut pill, window, false);
+                }
+                window.request_redraw();
+            }
             Event::UserEvent(UserEvent::Bridge(command)) => {
                 apply_bridge_command(
                     command,
@@ -918,10 +930,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                         emit_menu_action(MenuAction::TalkStop);
                     }
                     PressState::Pending { .. } => {
-                        // A short stationary click does nothing: the orb is
-                        // drag-only (move it), long-press to talk, right-click
-                        // for the menu. The pill is the conversation surface.
+                        // A short stationary click normally does nothing: the orb
+                        // is drag-only (move it), long-press to talk, right-click
+                        // for the menu. The one exception is an outstanding pill
+                        // `request_input` — a short click on the orb cancels it
+                        // (frees the Swift continuation and collapses the pill) so
+                        // an abandoned card can never trap the pointer.
                         press = PressState::Idle;
+                        if let Some(request_id) = pill.pending_input.take() {
+                            let cancel = serde_json::json!({
+                                "type": "input_cancel",
+                                "request_id": request_id,
+                            });
+                            emit_panel_action(&cancel.to_string());
+                            set_pill_expanded(&mut pill, window, false);
+                        }
                     }
                     PressState::Idle => {}
                 },
@@ -1515,6 +1538,11 @@ fn apply_bridge_command(
             // means the interceptor was bypassed — ignore rather than panic.
             log::warn!("request_input reached apply_bridge_command; ignoring");
         }
+        ShellCommand::CancelInput => {
+            // Intercepted in the event loop (it drives the pill directly and
+            // needs `pill`). Reaching here means the interceptor was bypassed.
+            log::warn!("cancel_input reached apply_bridge_command; ignoring");
+        }
         ShellCommand::Quit => {
             *control_flow = ControlFlow::Exit;
             return;
@@ -1837,6 +1865,14 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
  background:var(--fae);color:#0F1013;font-size:15px;font-weight:600;
  display:flex;align-items:center;justify-content:center;opacity:.5;transition:opacity .15s}
 #snd.ready{opacity:1}
+/* Cancel (✕) affordance for request-input mode — a visible, always-clickable
+ * escape hatch so an abandoned prompt can never trap the pointer. Hidden until
+ * `#shell.req` (set by __faeRequestInput). */
+#reqx{display:none;flex:none;width:30px;height:30px;border-radius:50%;
+ border:1px solid var(--border);cursor:pointer;background:rgba(255,255,255,.06);
+ color:var(--muted);font-size:17px;line-height:1;align-items:center;justify-content:center}
+#reqx:hover{color:var(--text);background:rgba(255,255,255,.12)}
+#shell.req #reqx{display:flex}
 /* Masked-mode caption in fae-gold-text (DESIGN.md, 9.4:1 on dark). */
 #hl.secure{color:#E6C05A}
 #line{transition:opacity .35s ease}
@@ -1864,7 +1900,7 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
   <div id='log'></div>
   <div id='cmp'>
    <div id='chip' class='hidden'><span id='chiptxt'></span><button id='chipx' type='button'>×</button></div>
-   <div id='cmprow'><textarea id='in' rows='1' placeholder='Message Fae…' autocomplete='off'></textarea><button id='snd'>↑</button></div>
+   <div id='cmprow'><button id='reqx' type='button' title='Cancel'>×</button><textarea id='in' rows='1' placeholder='Message Fae…' autocomplete='off'></textarea><button id='snd'>↑</button></div>
   </div>
  </div>
 </div>
@@ -1873,7 +1909,8 @@ var shell=document.getElementById('shell'),line=document.getElementById('line'),
  dot=document.getElementById('dot'),txt=document.getElementById('txt'),log=document.getElementById('log'),
  input=document.getElementById('in'),snd=document.getElementById('snd'),cl=document.getElementById('cl'),
  exp=document.getElementById('exp'),cmp=document.getElementById('cmp'),hl=document.getElementById('hl'),
- chip=document.getElementById('chip'),chiptxt=document.getElementById('chiptxt'),chipx=document.getElementById('chipx');
+ chip=document.getElementById('chip'),chiptxt=document.getElementById('chiptxt'),chipx=document.getElementById('chipx'),
+ reqx=document.getElementById('reqx');
 var messages=[],status=null,infoItems=[];
 // UX W1 composer state: a Swift request_input in flight (request_id or null),
 // whether the field is masked, and the full text of a long paste held as a chip.
@@ -1938,6 +1975,7 @@ function showChip(n){chiptxt.textContent='pasted · '+n+' chars';chip.classList.
 // Leave request_input mode: restore the normal composer (called on collapse or
 // when a new request arrives).
 function exitRequestMode(){pendingInput=null;secureMode=false;
+ shell.classList.remove('req');
  input.classList.remove('secure');hl.classList.remove('secure');hl.textContent='Conversation';
  input.placeholder='Message Fae…';clearChip();input.value='';autoGrow();updateReady();}
 window.__faeExpand=function(on){if(on){shell.classList.add('expanded');renderLog();
@@ -1947,7 +1985,7 @@ window.__faeExpand=function(on){if(on){shell.classList.add('expanded');renderLog
 // so Swift commits to the pill path (else it falls back to the overlay after 5s).
 window.__faeRequestInput=function(o){o=o||{};
  pendingInput=(o.request_id!=null)?String(o.request_id):'';secureMode=o.secure===true;
- shell.classList.add('show','expanded');renderLog();clearChip();input.value='';
+ shell.classList.add('show','expanded','req');renderLog();clearChip();input.value='';
  hl.textContent=o.prompt||'';hl.classList.toggle('secure',secureMode);
  input.classList.toggle('secure',secureMode);
  input.placeholder=o.placeholder||(secureMode?'Type securely, then send':'Type your answer, then send');
@@ -1976,6 +2014,9 @@ input.addEventListener('paste',function(e){
  var t=cd.getData('text');
  if(t&&t.length>800){e.preventDefault();pastedFull=t;showChip(t.length);updateReady();}});
 chipx.addEventListener('click',function(e){e.stopPropagation();clearChip();updateReady();});
+// Visible Cancel (✕) for request-input mode: always dismisses the prompt
+// (posts input_cancel, frees the Swift continuation) and collapses the pill.
+reqx.addEventListener('click',function(e){e.stopPropagation();requestCollapse();});
 function submit(){
  if(pendingInput!==null){var v=input.value;
   post({type:'input_response',request_id:pendingInput,text:v});return;}

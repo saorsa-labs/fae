@@ -18,6 +18,11 @@ protocol PillInputRouting: AnyObject {
         multiline: Bool,
         placeholder: String
     )
+    /// Tell the pill to LEAVE request-input mode — a new conversation turn
+    /// superseded an outstanding `request_input`, so the abandoned card is
+    /// dismissed and the pill returns to its normal composer. Idempotent (a
+    /// no-op host-side when the pill is not hosting a request).
+    func cancelPillInput()
 }
 
 /// UX W1: process-wide registration point so the (actor-isolated)
@@ -137,6 +142,14 @@ final class RustUiShellController: PillInputRouting {
         ]
         if !placeholder.isEmpty { message["placeholder"] = placeholder }
         send(message)
+    }
+
+    /// UX auto-cancel: ask the pill to leave request-input mode. Sent when a new
+    /// turn (PTT capture / text injection) superseded an outstanding
+    /// `request_input` so the abandoned card can never keep the pill expanded
+    /// (and its webview capturing clicks over the orb).
+    func cancelPillInput() {
+        send(["type": "cancel_input"])
     }
 
     func startIfAvailable() {
