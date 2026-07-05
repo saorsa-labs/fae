@@ -508,6 +508,32 @@ actor PipelineCoordinator {
         await playback.setSpeed(speed)
     }
 
+    /// Toggle whether Fae speaks her replies aloud (voice mute for a text-first
+    /// experience). When muting, any in-progress utterance is stopped so the
+    /// mute takes effect immediately. The reply text is unaffected — it still
+    /// renders in the pill/conversation on the text path.
+    func setSpeakReplies(_ enabled: Bool) async {
+        config.tts.speakReplies = enabled
+        voiceMutedSkipLogged = false
+        if enabled {
+            NSLog("PipelineCoordinator: voice output ENABLED — Fae will speak replies aloud")
+        } else {
+            NSLog("PipelineCoordinator: voice output MUTED — replies are text-only; stopping any in-progress speech")
+            ttsState.cancelPending()
+            await stopAssistantPlaybackForInterrupt()
+            markAssistantSpeechEnded(reason: "voice_muted")
+        }
+    }
+
+    /// Loudly note (once per muted stretch) that TTS is being skipped because
+    /// voice output is muted, so a silent reply is diagnosable as intentional
+    /// rather than a broken pipeline.
+    private func logVoiceMutedSkipIfNeeded() {
+        guard !voiceMutedSkipLogged else { return }
+        voiceMutedSkipLogged = true
+        NSLog("PipelineCoordinator: voice muted (tts.speakReplies=false) — skipping TTS, reply is text-only")
+    }
+
     // MARK: - Pipeline State
 
     private var mode: PipelineMode = .conversation
@@ -613,6 +639,18 @@ actor PipelineCoordinator {
 
     /// TTS task chain and TTFA telemetry state.
     private let ttsState = TTSState()
+
+    /// Lazily-loaded in-process Kokoro engine used as the LAST-RESORT TTS lane
+    /// when the daemon `tts.speak` path fails or produces no audio. Guarantees a
+    /// reply is never silent even if the daemon TTS lane is unhealthy. Loaded
+    /// with the "fae" (Lauren) voice — see `inProcessFallbackTTSEngine()`.
+    private var fallbackTTSEngine: FaeTTSAdapter?
+
+    /// True once the "voice muted" skip has been logged for the current muted
+    /// stretch; reset when voice output is re-enabled so the log fires once per
+    /// mute rather than once per sentence.
+    private var voiceMutedSkipLogged = false
+
     private var currentTurnID: String?
     private var activeConversationSessionID: String?
 
@@ -5390,6 +5428,14 @@ actor PipelineCoordinator {
     /// Call this from inside the token generation loop. The LLM keeps producing tokens
     /// while TTS runs concurrently on the actor (re-entrant at `await` points).
     private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil, generationID: UUID? = nil) {
+        // Voice-output mute (text-first): when disabled, skip TTS entirely. The
+        // reply text is emitted separately (sendAssistantText), so the pill
+        // still shows it — we just never enter the speaking state or synthesize.
+        guard config.tts.speakReplies else {
+            logVoiceMutedSkipIfNeeded()
+            return
+        }
+
         // Track assistant text for false-interruption recovery.
         bargeInState.lastAssistantTextBuffer += text
 
@@ -5458,12 +5504,20 @@ actor PipelineCoordinator {
         voiceInstruct: String? = nil,
         emitAssistantText: Bool = true
     ) async {
-        markAssistantSpeechStarted()
-
         let cleaned = TextProcessing.stripNonSpeechChars(text)
         if emitAssistantText, !cleaned.isEmpty {
             sendAssistantText(cleaned, isFinal: isFinal)
         }
+
+        // Voice-output mute (text-first): the text has been emitted above, so
+        // display still works — just skip speaking. Do this before entering the
+        // speaking state so muted replies never light the orb as "speaking".
+        guard config.tts.speakReplies else {
+            logVoiceMutedSkipIfNeeded()
+            return
+        }
+
+        markAssistantSpeechStarted()
 
         // Use cleaned text for TTS — stripping self-introductions, markup, etc.
         let ttsText = cleaned.isEmpty ? text : cleaned
@@ -5485,32 +5539,23 @@ actor PipelineCoordinator {
 
     /// Core TTS synthesis — shared by both `enqueueTTS` and `speakText`.
     ///
-    /// Uses a task group with a timeout child so that if the TTS async stream
-    /// blocks before yielding its first buffer (model hang), the timeout task
-    /// cancels the stream consumer and we fall through to cleanup.
+    /// Two lanes with a loud, bulletproof fallback so a reply is NEVER silent:
+    ///   1. Daemon-owned playback (`tts.speak`) when the daemon TTS lane is
+    ///      active. On a thrown error OR a nil playback id (daemon produced no
+    ///      audio), we do NOT return silently — we log loudly and fall through
+    ///      to the in-process Kokoro engine + local playback (lane 2).
+    ///   2. In-process Kokoro (`FaeTTSAdapter`) + local `AudioPlaybackManager`.
+    ///      Used both when there is no daemon and as the daemon's fallback.
     private func synthesizeSentence(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
-        guard await ttsEngine.isLoaded else {
-            NSLog("PipelineCoordinator: TTS not loaded, skipping speech")
-            debugLog(debugConsole, .pipeline, "⚠️ TTS not loaded — skipping speech")
-            if isFinal {
-                markAssistantSpeechEnded(reason: "tts_not_loaded")
-            }
-            return
-        }
         debugLog(debugConsole, .pipeline, "TTS: \"\(String(text.prefix(80)))\"\(text.count > 80 ? "…" : "") (final=\(isFinal))")
 
         let effectiveVoiceInstruct = voiceInstruct ?? config.tts.defaultVoiceInstruct
-        var didProduceAudio = false
 
         // Voice spine V3b (FAE_DAEMON_PLAYBACK, default-on since 2026-06-17):
         // synthesize + play in the daemon. Returns immediately with a playback
         // id; the level envelope + playback-end arrive as server-push events
         // (`handleDaemonPlaybackEvent`). No local enqueue/markEnd — the daemon
-        // owns playback, so there is no dual audio stream. When the daemon path
-        // is requested but unavailable (e.g. the MLX in-process TTS lane is
-        // selected, or the event subscriber failed to start) we fall through to
-        // the local Swift path below AND log loudly (once) that the orb will
-        // not show Speaking on that fallback.
+        // owns playback, so there is no dual audio stream.
         if daemonPlaybackActive, let daemon = ttsEngine as? DaemonTTSEngine {
             // Serialize segments: wait for any in-flight daemon playback to end
             // before starting the next (otherwise clips overlap — the daemon's
@@ -5518,23 +5563,30 @@ actor PipelineCoordinator {
             // through to the speech-drain watchdog.
             await awaitDaemonPlaybackDrained(timeoutMs: 30_000)
             do {
-                let playbackID = try await daemon.speak(
-                    text: text, voiceInstruct: effectiveVoiceInstruct, speed: config.tts.speed)
-                if let playbackID {
+                if let playbackID = try await daemon.speak(
+                    text: text, voiceInstruct: effectiveVoiceInstruct, speed: config.tts.speed) {
                     currentDaemonPlaybackID = playbackID
-                    didProduceAudio = true
+                    // Success: `audio.playback_ended` resolves speech-end.
+                    return
                 }
-                // `audio.playback_ended` resolves speech-end for the final
-                // chunk; for a non-final sentence there is no markEnd analogue
-                // (the daemon plays it through). If synthesis produced nothing,
-                // fall through to the no-audio handling below.
-                if isFinal && !didProduceAudio && assistantSpeaking {
-                    markAssistantSpeechEnded(reason: "tts_final_no_audio")
-                }
+                // nil playback id = the daemon produced NO audio. Never leave a
+                // reply silent — fall through to the in-process Kokoro fallback.
+                NSLog(
+                    "PipelineCoordinator: daemon tts.speak produced NO audio (nil playback id) — " +
+                        "engaging in-process Kokoro (\"fae\") fallback so the reply is not silent")
             } catch {
-                NSLog("PipelineCoordinator: daemon tts.speak failed: %@", error.localizedDescription)
-                markAssistantSpeechEnded(reason: "tts_error")
+                NSLog(
+                    "PipelineCoordinator: daemon tts.speak FAILED (%@) — engaging in-process Kokoro " +
+                        "(\"fae\") fallback so the reply is not silent",
+                    error.localizedDescription)
             }
+            // Bulletproof last-resort lane: synthesize on the in-process Kokoro
+            // engine and play locally. Independent of the daemon, so a dead or
+            // unhealthy daemon TTS lane still speaks (in Lauren's "fae" voice).
+            let fallback = await inProcessFallbackTTSEngine()
+            await synthesizeLocally(
+                using: fallback, text: text, effectiveVoiceInstruct: effectiveVoiceInstruct,
+                isFinal: isFinal, engineLabel: "in-process-fallback")
             return
         }
 
@@ -5542,7 +5594,65 @@ actor PipelineCoordinator {
         // runtime — loudly note the fallback so the no-Speaking orb is
         // diagnosable, then continue on the local Swift playback path.
         logDaemonPlaybackFallbackIfNeeded()
+        await synthesizeLocally(
+            using: ttsEngine, text: text, effectiveVoiceInstruct: effectiveVoiceInstruct,
+            isFinal: isFinal, engineLabel: "primary")
+    }
 
+    /// Lazily create + load the in-process Kokoro fallback engine in Lauren's
+    /// "fae" voice. Loud on both success and failure so a wrong/missing voice is
+    /// diagnosable. Loading may download the Kokoro model on first use — that is
+    /// the price of never going silent, and only paid when the daemon lane fails.
+    private func inProcessFallbackTTSEngine() async -> FaeTTSAdapter {
+        if let existing = fallbackTTSEngine { return existing }
+        let engine = FaeTTSAdapter()
+        // Match ModelManager.effectiveTTSModelID: voice-identity-lock forces the
+        // bundled "fae" (Lauren) voice; otherwise the configured voice.
+        let voice: String
+        if config.tts.voiceIdentityLock {
+            voice = "fae"
+        } else {
+            let configured = config.tts.voice.trimmingCharacters(in: .whitespacesAndNewlines)
+            voice = configured.isEmpty ? "af_heart" : configured
+        }
+        let modelID = "kokoro:\(voice):\(config.tts.speed)"
+        do {
+            try await engine.load(modelID: modelID)
+            NSLog(
+                "PipelineCoordinator: in-process Kokoro TTS fallback LOADED (voice=%@, modelID=%@) — " +
+                    "replies stay audible even when the daemon TTS lane fails",
+                voice, modelID)
+        } catch {
+            NSLog(
+                "PipelineCoordinator: in-process Kokoro TTS fallback FAILED to load (%@) — the next " +
+                    "reply may be silent until the daemon TTS lane recovers",
+                error.localizedDescription)
+        }
+        fallbackTTSEngine = engine
+        return engine
+    }
+
+    /// Consume `engine`'s synthesis stream and play it on the local
+    /// `AudioPlaybackManager`. Shared by the primary in-process lane and the
+    /// daemon-failure fallback. A task-group timeout child guards against a TTS
+    /// stream that hangs before yielding its first buffer.
+    private func synthesizeLocally(
+        using engine: any TTSEngine,
+        text: String,
+        effectiveVoiceInstruct: String?,
+        isFinal: Bool,
+        engineLabel: String
+    ) async {
+        guard await engine.isLoaded else {
+            NSLog("PipelineCoordinator: TTS (%@) not loaded, skipping speech", engineLabel)
+            debugLog(debugConsole, .pipeline, "⚠️ TTS (\(engineLabel)) not loaded — skipping speech")
+            if isFinal {
+                markAssistantSpeechEnded(reason: "tts_not_loaded")
+            }
+            return
+        }
+
+        var didProduceAudio = false
         var ttsSamplesForEcho: [Float] = []
         var ttsSampleRate = 24_000
 
@@ -5551,11 +5661,11 @@ actor PipelineCoordinator {
                 // Child 1: consume the TTS stream.
                 // Uses Task.checkCancellation() for interruption — the timeout
                 // child or external cancellation (barge-in) cancels this task.
-                group.addTask { [ttsEngine, playback] in
+                group.addTask { [playback] in
                     let ttsStartedAt = Date()
                     var firstChunkEmitted = false
                     var produced = false
-                    let audioStream = await ttsEngine.synthesize(
+                    let audioStream = await engine.synthesize(
                         text: text, voiceInstruct: effectiveVoiceInstruct
                     )
                     // Accumulate TTS chunks before scheduling on the player.

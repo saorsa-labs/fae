@@ -232,6 +232,7 @@ final class RustUiShellController: PillInputRouting {
         sendRuntimeStatus()
         sendControlsSnapshot()
         sendSettingsSnapshot()
+        sendVoiceMuteState(muted: !FaeConfig.load().tts.speakReplies)
         sendConversationSnapshot()
         refreshWorkspaceSnapshot()
     }
@@ -368,6 +369,15 @@ final class RustUiShellController: PillInputRouting {
             .sink { [weak self] _ in
                 self?.sendControlsSnapshot()
                 self?.sendSettingsSnapshot()
+            }
+            .store(in: &cancellables)
+
+        // Voice mute (text-first): reflect the speaker glyph on the pill.
+        NotificationCenter.default.publisher(for: .faeVoiceMuteChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] note in
+                let muted = (note.userInfo?["muted"] as? Bool) ?? false
+                self?.sendVoiceMuteState(muted: muted)
             }
             .store(in: &cancellables)
 
@@ -523,6 +533,13 @@ final class RustUiShellController: PillInputRouting {
             "access": faeCore.toolMode,
             "thinking": faeCore.thinkingLevel.rawValue,
         ])
+    }
+
+    /// Push the current voice-mute state to the orb host so the pill speaker
+    /// glyph reflects whether Fae will speak (`muted=false`) or is text-only
+    /// (`muted=true`). Sent on connect and whenever the mute toggles.
+    func sendVoiceMuteState(muted: Bool) {
+        send(["type": "voice_mute", "muted": muted])
     }
 
     private func sendSettingsSnapshot() {
@@ -759,6 +776,14 @@ final class RustUiShellController: PillInputRouting {
             send(["type": "hide"])
             onHideFae?()
         case "stop": NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
+        case "toggle_mute":
+            // Pill speaker glyph / context menu → flip voice output. patchConfig
+            // persists + drives the pipeline gate and re-pushes the glyph state.
+            let current = FaeConfig.load().tts.speakReplies
+            NSLog("RustUiShellController: toggle_mute → speakReplies=%@", (!current) ? "true" : "false")
+            Task { @MainActor [weak self] in
+                self?.faeCore?.patchConfig(key: "tts.speak_replies", payload: ["value": !current])
+            }
         case "permissions_microphone": onPermissionMicrophone?()
         case "permissions_contacts": onPermissionContacts?()
         case "permissions_calendars": onPermissionCalendars?()

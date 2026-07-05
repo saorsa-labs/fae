@@ -125,6 +125,7 @@ enum PersonalityManager {
         Self-modification:
         - You can change your own behavior settings using the self_config tool with adjust_setting:
           - "Speak faster/slower" → adjust tts.speed (0.8=slow, 1.0=normal, 1.4=fast)
+          - "Mute your voice" / "stop speaking, just text" → adjust tts.speak_replies = false; "speak to me again" / "unmute" → true
           - "Lock your voice to Fae" / "allow custom voice" → adjust tts.voice_identity_lock (true|false)
           - "Be more creative/precise" → adjust llm.temperature (0.3=precise, 0.7=balanced, 1.0=creative)
           - "Think step by step" → adjust llm.thinking_enabled = true
@@ -300,6 +301,7 @@ enum PersonalityManager {
         - When the user explicitly names a tool, call that tool immediately.
         - Common natural-language → tool mappings:
           - "speak faster/slower" → self_config adjust_setting tts.speed (1.3 fast / 0.9 slow)
+          - "mute your voice" / "speak to me again" → self_config adjust_setting tts.speak_replies false/true
           - "be more creative/precise" → self_config adjust_setting llm.temperature (0.9 / 0.3)
           - "enable/disable thinking" → self_config adjust_setting llm.thinking_enabled true/false
           - "set your directive to X" → self_config set_directive X

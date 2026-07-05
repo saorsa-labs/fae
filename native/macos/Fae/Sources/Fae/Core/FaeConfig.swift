@@ -262,6 +262,15 @@ struct FaeConfig: Codable {
         /// Falls back to FaeTTSAdapter (loudly) when the daemon is
         /// unavailable. Default true — the daemon is the primary lane.
         var useDaemonEngine: Bool = true
+
+        /// When `true` (default), Fae speaks her replies aloud (voice + TTS).
+        /// When `false` she is muted for a text-first experience: the reply
+        /// still renders in the pill/conversation, but the TTS/playback step is
+        /// skipped entirely. Toggled from the Talk menu, the pill speaker glyph,
+        /// or by voice ("mute your voice" / "speak to me again"). Unlike the
+        /// always-on awareness features this is a genuine user preference, so it
+        /// round-trips through config like `tts.speed`.
+        var speakReplies: Bool = true
     }
 
     // STT / streaming-ASR config removed (S18 kill-list 3/3): push-to-talk
@@ -1088,6 +1097,9 @@ struct FaeConfig: Codable {
                 case "useDaemonEngine":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.tts.useDaemonEngine = v
+                case "speakReplies", "speak_replies":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.tts.speakReplies = v
                 case "emotionalProsody", "warmth":
                     break // Legacy keys — silently ignored (emotional prosody removed in v2.0).
                 default: break
@@ -1399,6 +1411,7 @@ struct FaeConfig: Codable {
         lines.append("voiceIdentityLock = \(tts.voiceIdentityLock ? "true" : "false")")
         lines.append("preferFinalOnly = \(tts.preferFinalOnly ? "true" : "false")")
         lines.append("useDaemonEngine = \(tts.useDaemonEngine ? "true" : "false")")
+        lines.append("speakReplies = \(tts.speakReplies ? "true" : "false")")
         lines.append("")
 
         lines.append("[conversation]")
