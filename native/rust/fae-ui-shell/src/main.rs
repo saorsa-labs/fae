@@ -572,6 +572,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
         event_loop.set_activation_policy(ActivationPolicy::Accessory);
+        // Install a minimal app menu (Edit → Cut/Copy/Paste/Select All) so the
+        // standard editing key equivalents reach the focused WKWebView (the pill
+        // composer). As an Accessory app the orb host has no visible menubar; on
+        // macOS ⌘V into a WKWebView text field is routed through the Edit→Paste
+        // menu item, so with no main-menu Edit item the keystroke never reaches
+        // the pill and paste is dead. This registers the key equivalents without
+        // showing a menubar or adding a Dock icon. See `install_edit_menubar`.
+        if let Err(error) = install_edit_menubar() {
+            log::warn!("failed to install edit menu (⌘V may not paste into the pill): {error}");
+        }
     }
     let proxy = event_loop.create_proxy();
     let menu_proxy = proxy.clone();
@@ -2512,6 +2522,51 @@ fn show_context_menu(menu: &OrbMenu, window: &Window, position: PhysicalPosition
         let _ = (&menu.menu, window, position);
         log::warn!("context menu popup is not wired for this platform yet");
     }
+}
+
+/// Install a minimal macOS application menu carrying only the standard Edit
+/// commands (Undo/Redo · Cut/Copy/Paste/Select All).
+///
+/// The orb host runs as an `Accessory` app, so this menu is never drawn in the
+/// system menubar and adds no Dock icon — AppKit accessory apps do not own the
+/// menubar. Its sole purpose is to register the ⌘Z/⌘X/⌘C/⌘V/⌘A key equivalents
+/// on `NSApp.mainMenu` so that `-[NSApplication sendEvent:]` routes them through
+/// `performKeyEquivalent:` into the focused first responder — the pill's
+/// WKWebView. Without a main-menu Edit item, ⌘V is delivered as a bare keyDown
+/// that the WebView does not act on, so paste into the composer is dead.
+///
+/// Quit is intentionally omitted: ⌘Q stays owned by the Swift host
+/// (`WindowEvent::CloseRequested` → `MenuAction::Quit`, which tells Swift to
+/// terminate the whole app). A `terminate:` item here would kill only the orb
+/// host process and trigger its auto-respawn, splitting the quit path.
+///
+/// The menu is leaked so the `NSMenu` outlives this call; `NSApplication`
+/// retains it as its main menu for the process lifetime (mirrors the leaked orb
+/// window). Must be called on the main thread after the event loop is built
+/// (so `NSApplication` exists). Predefined items act via native selectors and
+/// emit no `muda::MenuEvent`, so this never interferes with the OrbMenu context
+/// menu or the stdout menu-event path.
+#[cfg(target_os = "macos")]
+fn install_edit_menubar() -> Result<(), muda::Error> {
+    use muda::{Menu, PredefinedMenuItem, Submenu};
+
+    let menubar = Menu::new();
+    // A leading (empty) app submenu keeps the conventional structure so AppKit
+    // treats the second submenu as Edit rather than the app menu.
+    let app_menu = Submenu::new("Fae", true);
+    let edit_menu = Submenu::new("Edit", true);
+    edit_menu.append(&PredefinedMenuItem::undo(None))?;
+    edit_menu.append(&PredefinedMenuItem::redo(None))?;
+    edit_menu.append(&PredefinedMenuItem::separator())?;
+    edit_menu.append(&PredefinedMenuItem::cut(None))?;
+    edit_menu.append(&PredefinedMenuItem::copy(None))?;
+    edit_menu.append(&PredefinedMenuItem::paste(None))?;
+    edit_menu.append(&PredefinedMenuItem::select_all(None))?;
+    menubar.append(&app_menu)?;
+    menubar.append(&edit_menu)?;
+    menubar.init_for_nsapp();
+    Box::leak(Box::new(menubar));
+    Ok(())
 }
 
 #[cfg(test)]
