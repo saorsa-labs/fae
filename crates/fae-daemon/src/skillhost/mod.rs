@@ -214,14 +214,22 @@ impl SkillHost {
                 ),
                 Availability::Quarantined(reason) => (SkillEvent::Quarantined, reason.clone()),
             };
-            let _ = self.audit.record(SkillHostAuditRecord {
+            if let Err(err) = self.audit.record(SkillHostAuditRecord {
                 event_type: "skill_event",
                 ts_ms: self.clock.now_ms(),
                 skill: e.name.clone(),
                 event,
                 checksum_status: status,
                 call_id: String::new(),
-            });
+            }) {
+                // Best-effort at discovery (the per-run path re-audits and fails
+                // closed), but surface the write failure loudly so a degrading
+                // audit store is visible rather than silently swallowed.
+                eprintln!(
+                    "fae-daemon: skillhost discovery audit write FAILED (skill='{}'): {err}",
+                    e.name
+                );
+            }
         }
     }
 

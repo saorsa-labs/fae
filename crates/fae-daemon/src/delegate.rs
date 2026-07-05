@@ -236,6 +236,9 @@ pub enum DelegationStatus {
     BudgetExhausted,
     /// The engine failed mid-loop.
     Failed,
+    /// The parent cancelled this delegation between turns (CR-H2) — the receipt
+    /// is PARTIAL and any in-flight children were aborted.
+    Cancelled,
 }
 
 impl DelegationStatus {
@@ -246,6 +249,7 @@ impl DelegationStatus {
             DelegationStatus::Completed => "completed",
             DelegationStatus::BudgetExhausted => "budget_exhausted",
             DelegationStatus::Failed => "failed",
+            DelegationStatus::Cancelled => "cancelled",
         }
     }
 }
@@ -458,6 +462,15 @@ pub async fn run_delegation(
     let mut status = DelegationStatus::BudgetExhausted;
 
     for iteration in 0..budget.max_iterations {
+        // CR-H2: stop between turns when the parent (or the transport
+        // `session_cancel`) cancels — otherwise a disconnected orchestrator's
+        // child would run its remaining turns to completion (orphaned engine
+        // use). Checked at the loop top so cancellation is observed before the
+        // next generation is issued.
+        if deps.cancel.is_cancelled() {
+            status = DelegationStatus::Cancelled;
+            break;
+        }
         if budget.tokens_remaining() == 0 {
             status = DelegationStatus::BudgetExhausted;
             break;
@@ -887,8 +900,15 @@ async fn run_fan_out(
 ) -> Result<FanOutResult, String> {
     let batch = parse_batch(args, parent_toolset)?;
 
-    let mut handles = Vec::with_capacity(batch.len());
-    for spec in batch {
+    let child_count = batch.len();
+    // CR-H2: spawn children into a `JoinSet` (not detached `tokio::spawn`
+    // handles). If this future is dropped — the orchestrator was cancelled or
+    // its transport task aborted — the `JoinSet`'s Drop ABORTS every child
+    // instead of orphaning it to run to completion. Each child returns its
+    // `idx` so ordered summaries survive out-of-order completion.
+    let mut set: tokio::task::JoinSet<(usize, Result<DelegationOutcome, DelegationError>)> =
+        tokio::task::JoinSet::new();
+    for (idx, spec) in batch.into_iter().enumerate() {
         // Clamp child budgets to the parent's remaining (the child then applies
         // the daemon ceilings itself in `DelegationBudget::clamped`).
         let child_iters = clamp_child_budget(spec.max_iterations, remaining_iterations);
@@ -904,39 +924,56 @@ async fn run_fan_out(
         };
         let mut child_deps = deps.clone();
         child_deps.parent_id = Some(parent_id.to_owned());
-        handles.push(tokio::spawn(boxed_delegation(child_deps, child_req)));
+        set.spawn(async move { (idx, boxed_delegation(child_deps, child_req).await) });
     }
 
-    let mut child_ids = Vec::with_capacity(handles.len());
+    let mut ordered: Vec<Option<Value>> = vec![None; child_count];
+    let mut child_ids = Vec::with_capacity(child_count);
     let mut child_tokens_total: u32 = 0;
-    let mut summaries: Vec<Value> = Vec::with_capacity(handles.len());
-    for (idx, handle) in handles.into_iter().enumerate() {
-        match handle.await {
-            Ok(Ok(outcome)) => {
+    // Drain the set, but observe `deps.cancel` WHILE awaiting so an in-flight
+    // fan-out is torn down promptly: the early `break` drops `set`, aborting
+    // every child still running (CR-H2 — no orphaned run to completion).
+    loop {
+        let joined = tokio::select! {
+            biased;
+            () = deps.cancel.cancelled() => break,
+            next = set.join_next() => next,
+        };
+        let Some(joined) = joined else { break };
+        match joined {
+            Ok((idx, Ok(outcome))) => {
                 child_ids.push(outcome.receipt.id.clone());
                 child_tokens_total = child_tokens_total.saturating_add(outcome.receipt.tokens_used);
-                summaries.push(serde_json::json!({
-                    "index": idx,
-                    "status": outcome.status.as_str(),
-                    "text": outcome.text,
-                }));
+                if let Some(slot) = ordered.get_mut(idx) {
+                    *slot = Some(serde_json::json!({
+                        "index": idx,
+                        "status": outcome.status.as_str(),
+                        "text": outcome.text,
+                    }));
+                }
             }
-            Ok(Err(error)) => {
-                summaries.push(serde_json::json!({
-                    "index": idx,
-                    "status": "failed",
-                    "error": error.to_string(),
-                }));
+            Ok((idx, Err(error))) => {
+                if let Some(slot) = ordered.get_mut(idx) {
+                    *slot = Some(serde_json::json!({
+                        "index": idx,
+                        "status": "failed",
+                        "error": error.to_string(),
+                    }));
+                }
             }
             Err(join_error) => {
-                summaries.push(serde_json::json!({
-                    "index": idx,
-                    "status": "failed",
-                    "error": format!("child task join error: {join_error}"),
-                }));
+                // A panicked/aborted child carries no `idx`; record it at the
+                // first open slot so the summary count stays honest.
+                if let Some(slot) = ordered.iter_mut().find(|s| s.is_none()) {
+                    *slot = Some(serde_json::json!({
+                        "status": "failed",
+                        "error": format!("child task join error: {join_error}"),
+                    }));
+                }
             }
         }
     }
+    let summaries: Vec<Value> = ordered.into_iter().flatten().collect();
     let result_text =
         serde_json::to_string(&summaries).unwrap_or_else(|_| "[child summaries]".to_owned());
     Ok(FanOutResult {
@@ -1783,6 +1820,125 @@ mod tests {
         assert!(
             bare_specs.is_empty(),
             "with no MCP catalog, an mcp: tool must not be advertised"
+        );
+    }
+
+    /// A [`ProviderAdapter`] for the CR-H2 cancellation test: an orchestrator
+    /// prompt returns a fan-out tool call immediately; each CHILD prompt SLEEPS
+    /// for `child_delay` before recording completion. A child that is aborted
+    /// mid-sleep never reaches the increment.
+    struct SlowChildMock {
+        completed: Arc<AtomicUsize>,
+        child_delay: Duration,
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for SlowChildMock {
+        fn describe(&self) -> AdapterInfo {
+            AdapterInfo {
+                backend: "slow-child".into(),
+                model_id: "slow-child".into(),
+                context_window: 8192,
+            }
+        }
+        async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
+            let last_user = request
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == Role::User)
+                .map(|m| m.content.clone())
+                .unwrap_or_default();
+            let turn = if last_user.contains("ORCH") {
+                tool_call(
+                    "delegate",
+                    "{\"batch\":[\
+                     {\"prompt\":\"CHILD-A slow\",\"toolset\":[],\"max_iterations\":2,\"max_output_tokens\":100},\
+                     {\"prompt\":\"CHILD-B slow\",\"toolset\":[],\"max_iterations\":2,\"max_output_tokens\":100}]}",
+                )
+            } else {
+                // A child generation completes only AFTER the delay, so an
+                // aborted child never records completion.
+                tokio::time::sleep(self.child_delay).await;
+                self.completed.fetch_add(1, Ordering::SeqCst);
+                final_answer("child done")
+            };
+            let events = turn.into_iter().map(Ok).collect::<Vec<_>>();
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    /// CR-H2: a cancelled parent (orchestrator) delegation must ABORT its
+    /// in-flight children, not orphan them to run to completion. The children
+    /// sleep far longer than the cancel deadline; the fix converts the fan-out
+    /// spawns to a `JoinSet` whose drop aborts them, plus a loop-top cancel
+    /// check that ends the delegation between turns. Skips without the OS jail
+    /// (`run_delegation` requires it).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_parent_aborts_in_flight_children() {
+        if !jail_backend_available() {
+            eprintln!("skip: OS jail unavailable on this host");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("ws");
+        std::fs::create_dir_all(&root).expect("mkdir ws");
+
+        let completed = Arc::new(AtomicUsize::new(0));
+        let engine: Arc<dyn ProviderAdapter> = Arc::new(SlowChildMock {
+            completed: Arc::clone(&completed),
+            child_delay: Duration::from_secs(30),
+        });
+
+        let deps = DelegationDeps {
+            engine,
+            confirmation: confirm(),
+            store: store_at(tmp.path()),
+            client: client(),
+            home_dir: None,
+            cancel: CancellationToken::new(),
+            now_ms: 100,
+            engine_permit: Arc::new(Semaphore::new(1)),
+            leaf_permit: leaf_permit_with_cap(DEFAULT_DELEGATION_CONCURRENCY),
+            parent_id: None,
+        };
+        let request = DelegationRequest {
+            prompt: "ORCH split the work".into(),
+            role: DelegationRole::Orchestrator,
+            toolset: vec![],
+            workspace_root: root,
+            max_iterations: 4,
+            max_output_tokens: 5000,
+            depth: 0,
+        };
+
+        // Cancel shortly after the children start their long generation.
+        let canceller = deps.cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            canceller.cancel();
+        });
+
+        let start = Instant::now();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), run_delegation(&deps, request))
+            .await
+            .expect("cancelled delegation must return well before the 30s child sleep")
+            .expect("delegation ran");
+        let elapsed = start.elapsed();
+
+        assert_eq!(
+            outcome.status,
+            DelegationStatus::Cancelled,
+            "a parent cancelled mid-fan-out reports Cancelled"
+        );
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            0,
+            "no child ran to completion — in-flight children were aborted, not orphaned"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "teardown was prompt (elapsed {elapsed:?}), not blocked on the child sleep"
         );
     }
 }

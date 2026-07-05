@@ -666,7 +666,7 @@ impl ToolHost {
     async fn execute_mcp(&self, req: &ToolHostRequest) -> Result<ToolHostResult, ToolHostError> {
         let now_ms = self.clock.now_ms();
         let deny = |reason: &str| -> Result<ToolHostResult, ToolHostError> {
-            let _ = self.audit.record(ToolHostAuditRecord {
+            if let Err(err) = self.audit.record(ToolHostAuditRecord {
                 event_type: "tool_policy",
                 ts_ms: now_ms,
                 tool: req.tool.clone(),
@@ -675,7 +675,14 @@ impl ToolHost {
                 reason: reason.into(),
                 risk_class: "Mcp",
                 isolation: MCP_ISOLATION_LABEL,
-            });
+            }) {
+                // Keep denying (correct), but surface the swallowed audit-write
+                // failure loudly so a degrading store is visible.
+                eprintln!(
+                    "fae-daemon: toolhost MCP deny-path audit write FAILED (tool='{}', reason='{reason}'): {err}",
+                    req.tool
+                );
+            }
             Err(ToolHostError::Denied(reason.into()))
         };
 
