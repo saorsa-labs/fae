@@ -24,6 +24,7 @@ struct FaeConfig: Codable {
     var privacy: PrivacyConfig = PrivacyConfig()
     var voice: VoiceConfig = VoiceConfig()
     var x0x: X0xConfig = X0xConfig()
+    var ui: UiConfig = UiConfig()
     var userName: String?
     var licenseAccepted: Bool = false
     var startupIntroSeen: Bool = false
@@ -482,6 +483,17 @@ struct FaeConfig: Codable {
         var ownerFleet: [String] = []
         /// Allow-list of agent IDs permitted to send peer messages.
         var allowList: [String] = []
+    }
+
+    struct UiConfig: Codable {
+        /// Reveal engineering menus in both the orb context menu and the Swift
+        /// menu bar. Default false — non-expert users never see Scheduler,
+        /// Skills, Edit Soul/Instructions, or permission quick items.
+        ///
+        /// Orb menu: applies at next app launch (reads FAE_ORB_ADVANCED_MENUS
+        /// env var set by RustUiShellController at process start).
+        /// Swift menu bar: applies live on next menu open.
+        var advancedMenus: Bool = false
     }
 
     static func recommendedTrainingTarget() -> String {
@@ -1216,6 +1228,13 @@ struct FaeConfig: Codable {
                     config.x0x.allowList = v
                 default: break
                 }
+            case "ui":
+                switch key {
+                case "advancedMenus", "advanced_menus":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.ui.advancedMenus = v
+                default: break
+                }
             case "vision":
                 switch key {
                 case "enabled":
@@ -1470,6 +1489,10 @@ struct FaeConfig: Codable {
         lines.append("enabled = \(x0x.enabled ? "true" : "false")")
         lines.append("ownerFleet = \(encodeStringArray(x0x.ownerFleet))")
         lines.append("allowList = \(encodeStringArray(x0x.allowList))")
+
+        lines.append("")
+        lines.append("[ui]")
+        lines.append("advancedMenus = \(ui.advancedMenus ? "true" : "false")")
 
         return lines.joined(separator: "\n") + "\n"
     }

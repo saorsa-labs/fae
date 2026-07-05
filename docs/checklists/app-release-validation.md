@@ -109,7 +109,7 @@ These scenarios are mandatory for the new canonical UI shell once it is included
 - [ ] Thinking/speaking states show the orb and resume rendering only while active; idle/listening remain visually quiescent.
 - [ ] The orb window is frameless, transparent, movable, and visually reads as just the orb.
 - [ ] Right-click on the orb opens the Fae menu.
-- [ ] Menu includes Settings, Open Browser/Data Panel, Reset Conversation, Hide Fae, Stop, permissions, Scheduler, Skills, edit prompts, Ask Fae/help topics, Memory Inbox, Rescue Mode, and Quit Fae.
+- [ ] Default menu (9 items): Talk to Fae · Settings… · [Hand off submenu if fleet non-empty] · Reset Conversation · Hide Fae · Stop · Ask Fae for Help · Rescue Mode… · Quit Fae. Engineering items (Scheduler, Skills, Edit Soul, Edit Custom Instructions, permissions ×6, Memory Inbox) are NOT present unless `ui.advancedMenus = true` in config (applies at next launch).
 - [ ] Rust shell menu does not include Cowork or Open Work with Fae.
 - [ ] Stop, Hide, and Quit perform their expected action.
 - [ ] Open Browser/Data Panel opens an orb-launched browser/webview surface for charts, data, documents, and video.

@@ -1,4 +1,4 @@
-use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -17,6 +17,9 @@ pub enum MenuAction {
     Skills,
     EditSoul,
     EditCustomInstructions,
+    /// Single "Ask Fae for Help" item that injects a canned discovery prompt.
+    /// Replaces the four "Ask About …" items removed in UX W5.
+    AskFaeForHelp,
     AskAboutShortcuts,
     AskAboutModels,
     AskAboutPrivacy,
@@ -52,6 +55,7 @@ impl MenuAction {
             MenuAction::Skills => "skills",
             MenuAction::EditSoul => "edit_soul",
             MenuAction::EditCustomInstructions => "edit_custom_instructions",
+            MenuAction::AskFaeForHelp => "ask_fae_for_help",
             MenuAction::AskAboutShortcuts => "ask_about_shortcuts",
             MenuAction::AskAboutModels => "ask_about_models",
             MenuAction::AskAboutPrivacy => "ask_about_privacy",
@@ -71,66 +75,102 @@ pub struct OrbMenu {
 }
 
 impl OrbMenu {
-    pub fn new() -> Result<Self, muda::Error> {
+    /// Build the orb context menu.
+    ///
+    /// `advanced` — when true, appends the engineering section (Scheduler,
+    /// Skills, Edit Soul/Instructions, Settings legacy, permissions ×6, Memory
+    /// Inbox). Reads `FAE_ORB_ADVANCED_MENUS=1` at launch; applies at next
+    /// launch after the Settings toggle changes.
+    ///
+    /// `fleet` — non-empty list of x0x owner-fleet agent IDs causes a "Hand
+    /// off to…" submenu to appear. Items emit `handoff_<agentId>` via the raw
+    /// event path (bypasses `MenuAction` — handled in main.rs event loop).
+    pub fn new(advanced: bool, fleet: &[String]) -> Result<Self, muda::Error> {
         let menu = Menu::new();
+
+        // ── Primary actions ──────────────────────────────────────────────────
         // Right ⌥ hold-to-talk is the primary gesture; this item is the
         // discoverable mouse fallback (capture ends on pause or via Stop).
         append_item(&menu, MenuAction::TalkToggle, "Talk to Fae")?;
-        append_item(&menu, MenuAction::Settings, "Settings…")?;
-        append_item(&menu, MenuAction::SettingsLegacy, "Settings (legacy)…")?;
+        append_item(&menu, MenuAction::Settings, "Settings\u{2026}")?;
         append_separator(&menu)?;
+
+        // Hand off to… — only when an owner fleet is configured.
+        if !fleet.is_empty() {
+            let handoff_sub = Submenu::new("Hand off to\u{2026}", true);
+            for agent_id in fleet {
+                let short = format!("{}\u{2026}", agent_id.chars().take(12).collect::<String>());
+                let item_id = format!("handoff_{agent_id}");
+                handoff_sub.append(&MenuItem::with_id(
+                    MenuId::new(&item_id),
+                    &short,
+                    true,
+                    None,
+                ))?;
+            }
+            menu.append(&handoff_sub)?;
+        }
+
         append_item(&menu, MenuAction::ResetConversation, "Reset Conversation")?;
         append_item(&menu, MenuAction::HideFae, "Hide Fae")?;
         append_item(&menu, MenuAction::Stop, "Stop")?;
         append_separator(&menu)?;
-        append_item(
-            &menu,
-            MenuAction::PermissionsMicrophone,
-            "Microphone — Check Permission",
-        )?;
-        append_item(
-            &menu,
-            MenuAction::PermissionsContacts,
-            "Contacts — Check Permission",
-        )?;
-        append_item(
-            &menu,
-            MenuAction::PermissionsCalendars,
-            "Calendars — Check Permission",
-        )?;
-        append_item(
-            &menu,
-            MenuAction::PermissionsReminders,
-            "Reminders — Check Permission",
-        )?;
-        append_item(
-            &menu,
-            MenuAction::PermissionsMailNotes,
-            "Mail & Notes (Automation)…",
-        )?;
-        append_item(
-            &menu,
-            MenuAction::OpenPrivacySecurity,
-            "Open Privacy & Security…",
-        )?;
-        append_separator(&menu)?;
-        append_item(&menu, MenuAction::Scheduler, "Scheduler")?;
-        append_item(&menu, MenuAction::Skills, "Skills")?;
-        append_item(&menu, MenuAction::EditSoul, "Edit Soul…")?;
-        append_item(
-            &menu,
-            MenuAction::EditCustomInstructions,
-            "Edit Custom Instructions…",
-        )?;
-        append_separator(&menu)?;
-        append_item(&menu, MenuAction::AskAboutShortcuts, "Ask About Shortcuts")?;
-        append_item(&menu, MenuAction::AskAboutModels, "Ask About Models")?;
-        append_item(&menu, MenuAction::AskAboutPrivacy, "Ask About Privacy")?;
-        append_item(&menu, MenuAction::AskAboutTools, "Ask About Tools")?;
-        append_item(&menu, MenuAction::MemoryInbox, "Memory Inbox…")?;
-        append_item(&menu, MenuAction::RescueMode, "Rescue Mode…")?;
+        append_item(&menu, MenuAction::AskFaeForHelp, "Ask Fae for Help")?;
+        append_item(&menu, MenuAction::RescueMode, "Rescue Mode\u{2026}")?;
         append_separator(&menu)?;
         append_item(&menu, MenuAction::Quit, "Quit Fae")?;
+
+        // ── Engineering section (Advanced menus ON) ──────────────────────────
+        if advanced {
+            append_separator(&menu)?;
+            append_item(&menu, MenuAction::Scheduler, "Scheduler")?;
+            append_item(&menu, MenuAction::Skills, "Skills")?;
+            append_item(&menu, MenuAction::EditSoul, "Edit Soul\u{2026}")?;
+            append_item(
+                &menu,
+                MenuAction::EditCustomInstructions,
+                "Edit Custom Instructions\u{2026}",
+            )?;
+            append_item(
+                &menu,
+                MenuAction::SettingsLegacy,
+                "Settings (legacy)\u{2026}",
+            )?;
+            append_separator(&menu)?;
+            append_item(
+                &menu,
+                MenuAction::PermissionsMicrophone,
+                "Microphone \u{2014} Check Permission",
+            )?;
+            append_item(
+                &menu,
+                MenuAction::PermissionsContacts,
+                "Contacts \u{2014} Check Permission",
+            )?;
+            append_item(
+                &menu,
+                MenuAction::PermissionsCalendars,
+                "Calendars \u{2014} Check Permission",
+            )?;
+            append_item(
+                &menu,
+                MenuAction::PermissionsReminders,
+                "Reminders \u{2014} Check Permission",
+            )?;
+            append_item(
+                &menu,
+                MenuAction::PermissionsMailNotes,
+                "Mail & Notes (Automation)\u{2026}",
+            )?;
+            append_item(
+                &menu,
+                MenuAction::OpenPrivacySecurity,
+                "Open Privacy & Security\u{2026}",
+            )?;
+            append_separator(&menu)?;
+            append_item(&menu, MenuAction::MemoryInbox, "Memory Inbox\u{2026}")?;
+        }
+
         Ok(Self { menu })
     }
 
@@ -164,6 +204,7 @@ fn id(action: MenuAction) -> MenuId {
         MenuAction::Skills => "skills",
         MenuAction::EditSoul => "edit_soul",
         MenuAction::EditCustomInstructions => "edit_custom_instructions",
+        MenuAction::AskFaeForHelp => "ask_fae_for_help",
         MenuAction::AskAboutShortcuts => "ask_about_shortcuts",
         MenuAction::AskAboutModels => "ask_about_models",
         MenuAction::AskAboutPrivacy => "ask_about_privacy",
@@ -194,6 +235,7 @@ fn action_from_id(id: &MenuId) -> Option<MenuAction> {
         "skills" => Some(MenuAction::Skills),
         "edit_soul" => Some(MenuAction::EditSoul),
         "edit_custom_instructions" => Some(MenuAction::EditCustomInstructions),
+        "ask_fae_for_help" => Some(MenuAction::AskFaeForHelp),
         "ask_about_shortcuts" => Some(MenuAction::AskAboutShortcuts),
         "ask_about_models" => Some(MenuAction::AskAboutModels),
         "ask_about_privacy" => Some(MenuAction::AskAboutPrivacy),

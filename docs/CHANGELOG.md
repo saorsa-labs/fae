@@ -2,6 +2,22 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — UX W5 (menu purge — pill-first defaults + advanced engineering menus)
+
+### Changed
+- **Orb context menu (default)**: Reduced to 9 items: Talk to Fae · Settings… · sep · Hand off to… (submenu, only when x0x ownerFleet non-empty) · Reset Conversation · Hide Fae · Stop · sep · Ask Fae for Help · Rescue Mode… · sep · Quit Fae. Removed the 6 permission quick items, Scheduler, Skills, Edit Soul, Edit Custom Instructions, Memory Inbox, and the 4 Ask About… entries that were cluttering the default menu.
+- **Orb context menu (advanced ON)**: Engineering items appended when `FAE_ORB_ADVANCED_MENUS=1` env var is set at launch: sep · Scheduler · Skills · Edit Soul… · Edit Custom Instructions… · Settings (legacy)… · sep · permission items ×6 · sep · Memory Inbox. Applies at next app launch.
+- **Hand off submenu**: Dynamic submenu populated from `FAE_ORB_FLEET` (comma-separated agent IDs set by `RustUiShellController`). Only shown when fleet non-empty. Emits `handoff_<agentId>` raw menu IDs, handled in Swift via `hasPrefix("handoff_")`.
+- **Swift menu bar (default)**: Rebuilt around 3 menus — App `{About, Check for Updates}`, Talk `{Talk to Fae, Stop ⌘., Hand off (fleet)}`, Help `{Ask Fae for Help, Memory Inbox ⇧⌘M, Rescue Mode ⌘⌥R}`. Removed: Permissions submenu, Edit menu (Edit Soul, Edit Custom Instructions moved to Engineering), the 4 Ask About… items from Help, Stop and Debug Console from View.
+- **Swift menu bar (advanced ON)**: Engineering `CommandMenu` appended when `FaeConfig.ui.advancedMenus = true`: Debug Console ⇧⌘L · Edit Soul… ⇧⌘E · Edit Custom Instructions… ⇧⌘I · Permissions submenu. Applies live on next menu open.
+- **`FaeConfig.UiConfig.advancedMenus`** (`native/macos/Fae/Sources/Fae/Core/FaeConfig.swift`): new `[ui]` TOML section with `advancedMenus: Bool = false`. Full parse/serialize/round-trip support following x0x.enabled precedent.
+- **Settings footer toggle** (`SettingsView.swift`): always-visible "Show engineering menus" toggle (below TabView, above window chrome) with honest description. Persists to `FaeConfig`.
+- **`RustUiShellController`** (`RustUiShellController.swift`): sets `FAE_ORB_ADVANCED_MENUS` and `FAE_ORB_FLEET` env vars on the orb host process before launch. Replaced 4 `ask_about_*` callbacks with `onAskFaeForHelp` + `onHandOff`. Handles `handoff_*` raw IDs via `hasPrefix`.
+- **`OrbMenu::new(advanced, fleet)`** (`native/rust/fae-ui-shell/src/menu.rs`): factory now takes advanced flag and fleet slice. `MenuAction::AskFaeForHelp` added. Dynamic `Submenu` for Hand off fleet. Unrecognized menu IDs emitted raw via `emit_raw_menu_action` in `main.rs`.
+
+### Testing
+- **`FaeConfigTests`**: three new tests — `testUiAdvancedMenusDefaultIsFalse`, `testUiAdvancedMenusRoundTripTrue`, `testUiAdvancedMenusSerializesAndReloads`. All pass.
+
 ## Unreleased — Phase G commit 2 (main-lane pinned-summary compression)
 
 ### New Features

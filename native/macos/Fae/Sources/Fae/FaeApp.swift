@@ -318,17 +318,11 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         }
         rustUiShell.onEditSoul = { [weak self] in self?.personalityEditor.showSoulEditor() }
         rustUiShell.onEditCustomInstructions = { [weak self] in self?.personalityEditor.showInstructionsEditor() }
-        rustUiShell.onAskAboutShortcuts = { [weak self] in
-            self?.prefillFaePrompt("What keyboard shortcuts and voice commands do you support?")
+        rustUiShell.onAskFaeForHelp = { [weak self] in
+            self?.faeCore.injectText("What can you do, and how do I talk to you?")
         }
-        rustUiShell.onAskAboutModels = { [weak self] in
-            self?.prefillFaePrompt("What models are you running and how were they selected?")
-        }
-        rustUiShell.onAskAboutPrivacy = { [weak self] in
-            self?.prefillFaePrompt("How do you handle my privacy and data security?")
-        }
-        rustUiShell.onAskAboutTools = { [weak self] in
-            self?.prefillFaePrompt("What tools do you have and how do I configure them?")
+        rustUiShell.onHandOff = { [weak self] agentId in
+            self?.sendX0xHandoff(to: agentId)
         }
         rustUiShell.onMemoryInbox = { [weak self] in self?.memoryImport.show() }
         rustUiShell.onRescueMode = { [weak self] in self?.toggleRescueMode() }
@@ -1111,6 +1105,8 @@ struct FaeApp: App {
             .environmentObject(appDelegate.faeCore)
         }
         .commands {
+            // ── App menu ────────────────────────────────────────────────────
+            // Settings… is system-provided by SwiftUI — no extra button needed.
             CommandGroup(replacing: .appInfo) {
                 Button("About Fae") {
                     appDelegate.aboutWindow.show()
@@ -1122,40 +1118,18 @@ struct FaeApp: App {
                     appDelegate.sparkleUpdater.checkForUpdates()
                 }
             }
-            CommandGroup(after: .appInfo) {
-                Menu("Permissions") {
-                    Button("Microphone — \(appDelegate.onboarding.microphoneStatus)") {
-                        appDelegate.onboarding.requestMicrophone()
-                    }
-                    Button("Contacts — \(appDelegate.onboarding.contactsStatus)") {
-                        appDelegate.onboarding.requestContacts()
-                    }
-                    Button("Calendars — \(appDelegate.onboarding.calendarStatus)") {
-                        appDelegate.onboarding.requestCalendar()
-                    }
-                    Button("Reminders — \(appDelegate.onboarding.remindersStatus)") {
-                        appDelegate.onboarding.requestReminders()
-                    }
-                    Divider()
-                    Button("Mail & Notes (Automation)\u{2026}") {
-                        appDelegate.onboarding.requestMail()
-                    }
-                    Divider()
-                    Button("Open Privacy & Security\u{2026}") {
-                        appDelegate.onboarding.openPrivacySettings("AllFiles")
-                    }
-                }
-            }
-            CommandMenu("Edit") {
-                Button("Edit Soul\u{2026}") {
-                    appDelegate.personalityEditor.showSoulEditor()
-                }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
 
-                Button("Edit Custom Instructions\u{2026}") {
-                    appDelegate.personalityEditor.showInstructionsEditor()
+            // ── Talk menu ────────────────────────────────────────────────────
+            // Primary capture controls + optional x0x handoff.
+            CommandMenu("Talk") {
+                Button("Talk to Fae") {
+                    Task { await appDelegate.faeCore.pttToggle() }
                 }
-                .keyboardShortcut("i", modifiers: [.command, .shift])
+
+                Button("Stop") {
+                    NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
+                }
+                .keyboardShortcut(".", modifiers: .command)
 
                 let fleet = FaeConfig.load().x0x.ownerFleet
                 if !fleet.isEmpty {
@@ -1169,37 +1143,17 @@ struct FaeApp: App {
                     }
                 }
             }
-            CommandGroup(before: .sidebar) {
-                Button("Stop") {
-                    NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
-                }
-                .keyboardShortcut(".", modifiers: .command)
-            }
-            CommandGroup(after: .sidebar) {
-                Divider()
 
-                Button(appDelegate.auxiliaryWindows.isDebugConsoleVisible ? "Hide Debug Console" : "Debug Console") {
-                    appDelegate.auxiliaryWindows.toggleDebugConsole()
-                }
-                .keyboardShortcut("l", modifiers: [.command, .shift])
-            }
+            // ── Help menu ────────────────────────────────────────────────────
+            // One discovery prompt replaces the four Ask About… items (UX W5).
             CommandGroup(replacing: .help) {
-                Button("Ask About Shortcuts") {
-                    askFae("What keyboard shortcuts and voice commands do you support?")
-                }
-                Button("Ask About Models") {
-                    askFae("What models are you running and how were they selected?")
-                }
-                Button("Ask About Privacy") {
-                    askFae("How do you handle my privacy and data security?")
-                }
-                Button("Ask About Tools") {
-                    askFae("What tools do you have and how do I configure them?")
+                Button("Ask Fae for Help") {
+                    askFae("What can you do, and how do I talk to you?")
                 }
 
                 Divider()
 
-                Button("Memory Inbox...") {
+                Button("Memory Inbox\u{2026}") {
                     appDelegate.memoryImport.show()
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
@@ -1210,6 +1164,56 @@ struct FaeApp: App {
                     appDelegate.toggleRescueMode()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
+            }
+
+            // ── Engineering menu (Advanced menus ON) ─────────────────────────
+            // Hidden by default; toggle in Settings > Show engineering menus.
+            // Applies live on next menu open (reads FaeConfig.load() each time).
+            if FaeConfig.load().ui.advancedMenus {
+                CommandMenu("Engineering") {
+                    Button(appDelegate.auxiliaryWindows.isDebugConsoleVisible
+                           ? "Hide Debug Console" : "Debug Console") {
+                        appDelegate.auxiliaryWindows.toggleDebugConsole()
+                    }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+
+                    Divider()
+
+                    Button("Edit Soul\u{2026}") {
+                        appDelegate.personalityEditor.showSoulEditor()
+                    }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                    Button("Edit Custom Instructions\u{2026}") {
+                        appDelegate.personalityEditor.showInstructionsEditor()
+                    }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
+
+                    Divider()
+
+                    Menu("Permissions") {
+                        Button("Microphone \u{2014} \(appDelegate.onboarding.microphoneStatus)") {
+                            appDelegate.onboarding.requestMicrophone()
+                        }
+                        Button("Contacts \u{2014} \(appDelegate.onboarding.contactsStatus)") {
+                            appDelegate.onboarding.requestContacts()
+                        }
+                        Button("Calendars \u{2014} \(appDelegate.onboarding.calendarStatus)") {
+                            appDelegate.onboarding.requestCalendar()
+                        }
+                        Button("Reminders \u{2014} \(appDelegate.onboarding.remindersStatus)") {
+                            appDelegate.onboarding.requestReminders()
+                        }
+                        Divider()
+                        Button("Mail & Notes (Automation)\u{2026}") {
+                            appDelegate.onboarding.requestMail()
+                        }
+                        Divider()
+                        Button("Open Privacy & Security\u{2026}") {
+                            appDelegate.onboarding.openPrivacySettings("AllFiles")
+                        }
+                    }
+                }
             }
         }
     }

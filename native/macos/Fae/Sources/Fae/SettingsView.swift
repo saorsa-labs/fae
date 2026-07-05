@@ -20,10 +20,15 @@ struct SettingsView: View {
     /// Hold Option while opening Settings to reveal the Developer tab.
     @State private var showDeveloper: Bool = false
 
+    /// Persisted to FaeConfig ([ui] advancedMenus). Toggle is always visible
+    /// so non-expert users can see what it does without using the Option key.
+    @State private var advancedMenus: Bool = false
+
     @AppStorage("fae.feature.world_class_settings")
     private var worldClassSettingsEnabled: Bool = true
 
     var body: some View {
+        VStack(spacing: 0) {
         TabView {
             if worldClassSettingsEnabled {
                 SettingsOverviewTab(commandSender: commandSender)
@@ -155,10 +160,34 @@ struct SettingsView: View {
                         }
                 }
             }
+        }  // end TabView
+        // ── Engineering menus toggle — always visible ────────────────────────
+        // Reveals Scheduler, Skills, Edit Soul/Instructions, and permission
+        // controls. Orb menu applies at next app launch; Swift bar applies live.
+        Divider()
+        HStack {
+            Toggle(isOn: $advancedMenus) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show engineering menus")
+                    Text("Adds Scheduler, Skills, Edit Soul/Instructions, and permission controls to the orb and menu bar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .onChange(of: advancedMenus) { _, newValue in
+                var config = FaeConfig.load()
+                config.ui.advancedMenus = newValue
+                try? config.save()
+            }
+            Spacer()
         }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        }  // end VStack
         .frame(minWidth: 920, minHeight: 680)
         .onAppear {
             showDeveloper = NSEvent.modifierFlags.contains(.option)
+            advancedMenus = FaeConfig.load().ui.advancedMenus
         }
     }
 }
