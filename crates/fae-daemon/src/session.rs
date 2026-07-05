@@ -1736,8 +1736,87 @@ fn skillhost_error_response(request_id: &str, err: &crate::skillhost::SkillHostE
             format!("no declared script for: {name}"),
         ),
         SkillHostError::Audit(msg) => ("audit_error", msg.clone()),
+        SkillHostError::ArchiveRefused { name, reason } => {
+            ("archive_refused", format!("{name}: {reason}"))
+        }
+        SkillHostError::ArchiveMove(msg) => ("archive_move_failed", msg.clone()),
     };
     Response::error(request_id, code, &message)
+}
+
+/// The read-only `skillhost.usage` handler (Phase G4). Returns per-skill run
+/// counters for every discovered skill — zero-run skills included, so the
+/// nightly curation pass can find stale `auto-*` skills. Safe-scope gated.
+pub fn run_authorized_skillhost_usage(
+    record: &ClientRecord,
+    cmd: &Command,
+    skillhost: &crate::skillhost::SkillHost,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => Response::ok(
+            &cmd.request_id,
+            serde_json::json!({ "usage": skillhost.list_usage() }),
+        ),
+        AuthzDecision::ConfirmRequired | AuthzDecision::Deny(_) => {
+            Response::error(&cmd.request_id, "forbidden", "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
+/// The `skillhost.archive` handler (Phase G4). Moves an `auto-*` skill to the
+/// sibling `skills-archived/` directory — archival, never deletion. Fail-closed:
+/// non-`auto-` names are refused and unknown skills are `not_found`. Re-runs
+/// discovery after the move. Safe-scope gated.
+pub fn run_authorized_skillhost_archive(
+    record: &ClientRecord,
+    cmd: &Command,
+    skillhost: &crate::skillhost::SkillHost,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => match parse_skill_name_payload(&cmd.payload) {
+            Ok(name) => match skillhost.archive(&name) {
+                Ok(()) => Response::ok(
+                    &cmd.request_id,
+                    serde_json::json!({ "archived": true, "name": name }),
+                ),
+                Err(err) => skillhost_error_response(&cmd.request_id, &err),
+            },
+            Err(msg) => Response::error(&cmd.request_id, "bad_request", &msg),
+        },
+        AuthzDecision::ConfirmRequired | AuthzDecision::Deny(_) => {
+            Response::error(&cmd.request_id, "forbidden", "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
 }
 
 /// `agent.cancel` — interrupt the session's in-flight turn (`session/cancel`).

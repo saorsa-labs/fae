@@ -1021,6 +1021,11 @@ actor SkillManager {
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
                 continue
             }
+            // Phase G4: never discover the archive directory — archived skills
+            // are intentionally retired by the nightly curation pass.
+            if url.lastPathComponent == "skills-archived" {
+                continue
+            }
             let skillMd = url.appendingPathComponent("SKILL.md")
             if let metadata = SkillParser.parse(skillURL: skillMd, tier: tier) {
                 results.append(metadata)

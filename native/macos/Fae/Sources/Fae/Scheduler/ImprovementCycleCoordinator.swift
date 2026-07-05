@@ -177,6 +177,13 @@ actor ImprovementCycleCoordinator {
     /// for a lane keeps that lane's eval fail-closed (`.unmeasured`).
     private var adapterEvaluators: [AdapterKind: AdapterEvaluator] = [:]
 
+    /// The daemon engine used for `skillhost.usage` reads and `skillhost.archive`
+    /// mutations during nightly skill curation (Phase G4). `nil` ⇒ curation skips.
+    private var daemonLLMEngine: DaemonLLMEngine?
+
+    /// The vault manager for the post-curation backup (Phase G4). `nil` ⇒ no backup.
+    private var vaultManager: GitVaultManager?
+
     /// Minimum SFT examples required before training proceeds.
     static let minSFTExamples = 10
 
@@ -269,6 +276,106 @@ actor ImprovementCycleCoordinator {
     /// config reader/writer, training bridge, skill manager) already configured.
     func setMetaOptimizer(_ optimizer: MetaOptimizer) {
         metaOptimizer = optimizer
+    }
+
+    /// Wire the daemon engine for skill-curation commands (Phase G4). Called by
+    /// FaeScheduler when the daemon LLM lane is active; `nil` skips curation.
+    func setDaemonLLMEngine(_ engine: DaemonLLMEngine?) {
+        daemonLLMEngine = engine
+    }
+
+    /// Wire the vault manager for the post-curation backup (Phase G4).
+    func setVaultManager(_ manager: GitVaultManager) {
+        vaultManager = manager
+    }
+
+    // MARK: - Skill Curation (Phase G4)
+
+    /// Staleness threshold for auto-skill archival: 14 days in milliseconds.
+    static let curationStaleThresholdMs: Int64 = 14 * 24 * 60 * 60 * 1000
+
+    /// Maximum skills archived per nightly cycle (conservatism cap).
+    static let curationMaxPerCycle = 3
+
+    /// Return the names of auto-generated skills eligible for archival.
+    ///
+    /// Eligibility: name starts with `"auto-"`, `run_count == 0`, and the age
+    /// (`nowMs` − `last_used_ms`, falling back to `first_seen_ms`) exceeds
+    /// 14 days. Skills without any timestamp anchor are skipped (age unknown —
+    /// fail safe, don't archive). Capped at `maxCount`, oldest first.
+    ///
+    /// Pure function over the raw `skillhost.usage` JSON so tests can exercise
+    /// the policy without a daemon.
+    static func skillsEligibleForArchival(
+        _ usage: [[String: Any]],
+        nowMs: Int64,
+        maxCount: Int = curationMaxPerCycle
+    ) -> [String] {
+        var eligible: [(name: String, ageMs: Int64)] = []
+        for entry in usage {
+            guard let name = entry["name"] as? String, name.hasPrefix("auto-") else { continue }
+            let runCount = (entry["run_count"] as? NSNumber)?.int64Value ?? 0
+            guard runCount == 0 else { continue }
+            let lastUsed = (entry["last_used_ms"] as? NSNumber)?.int64Value
+            let firstSeen = (entry["first_seen_ms"] as? NSNumber)?.int64Value
+            guard let anchor = lastUsed ?? firstSeen else { continue }
+            let age = nowMs - anchor
+            if age > curationStaleThresholdMs {
+                eligible.append((name: name, ageMs: age))
+            }
+        }
+        return eligible.sorted { $0.ageMs > $1.ageMs }
+            .prefix(maxCount)
+            .map(\.name)
+    }
+
+    /// Archive stale auto-generated skills via the daemon SkillHost, then
+    /// trigger a vault backup naming what moved. Non-fatal by design: no wired
+    /// daemon, a daemon error, or an unexpected response shape all log + skip —
+    /// the improvement cycle must never fail because curation could not run.
+    private func runSkillCuration() async {
+        guard let engine = daemonLLMEngine else {
+            NSLog("ImprovementCycleCoordinator: skill curation — daemon engine not wired, skipping")
+            return
+        }
+        do {
+            let response = try await engine.sendDaemonCommand("skillhost.usage", payload: [:])
+            guard let usage = response["usage"] as? [[String: Any]] else {
+                NSLog("ImprovementCycleCoordinator: skill curation — unexpected usage response shape")
+                return
+            }
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let toArchive = Self.skillsEligibleForArchival(usage, nowMs: nowMs)
+            guard !toArchive.isEmpty else {
+                NSLog("ImprovementCycleCoordinator: skill curation — no stale auto-* skills to archive")
+                return
+            }
+            var archived: [String] = []
+            for name in toArchive {
+                do {
+                    _ = try await engine.sendDaemonCommand(
+                        "skillhost.archive", payload: ["name": name])
+                    archived.append(name)
+                    NSLog("ImprovementCycleCoordinator: skill curation — archived '%@'", name)
+                } catch {
+                    // Non-fatal: continue with the remaining candidates.
+                    NSLog(
+                        "ImprovementCycleCoordinator: skill curation — archive '%@' failed: %@",
+                        name, error.localizedDescription)
+                }
+            }
+            if !archived.isEmpty, let vault = vaultManager {
+                let reason = "skill-curation: archived \(archived.joined(separator: ", "))"
+                _ = await vault.backup(reason: reason)
+                NSLog(
+                    "ImprovementCycleCoordinator: skill curation — vault backup triggered (%@)",
+                    reason)
+            }
+        } catch {
+            NSLog(
+                "ImprovementCycleCoordinator: skill curation — skipped (daemon unavailable): %@",
+                error.localizedDescription)
+        }
     }
 
     /// Consume the pending meta-optimization narrative for the morning briefing.
@@ -541,6 +648,10 @@ actor ImprovementCycleCoordinator {
             NSLog("ImprovementCycleCoordinator: meta-optimization failed: %@", error.localizedDescription)
             // Non-fatal: proceed to training regardless.
         }
+
+        // Phase G4: nightly skill curation — archive stale auto-* skills via the
+        // daemon SkillHost. Non-fatal; skips silently-with-log when no daemon.
+        await runSkillCuration()
 
         // Step 4c: Check if we should skip training (e.g., insufficient correction data).
         // Meta-optimization may be sufficient for this cycle.
