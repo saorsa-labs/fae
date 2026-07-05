@@ -503,6 +503,14 @@ extension Notification.Name {
     /// - `text: String` — the user's response text
     static let faeInputResponse = Notification.Name("faeInputResponse")
 
+    /// UX W1: posted by the orb host when the pill accepts a `request_input`
+    /// command. InputRequestBridge waits ≤5s for this before committing to the
+    /// pill path; on timeout it falls back to the SwiftUI overlay card.
+    ///
+    /// userInfo keys:
+    /// - `request_id: String` — the input request identifier
+    static let faePillInputAck = Notification.Name("faePillInputAck")
+
     /// Posted after Reset Fae finishes deleting Fae-owned data.
     static let faeDataResetCompleted = Notification.Name("faeDataResetCompleted")
 

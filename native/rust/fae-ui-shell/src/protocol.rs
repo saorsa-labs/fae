@@ -85,6 +85,22 @@ pub enum ShellCommand {
         sections: Vec<SettingsSection>,
         cards: Vec<SettingsCard>,
     },
+    /// Swift asks Fae's question INSIDE the pill (UX W1): the composer swaps to
+    /// a prompted / masked field, and the pill posts `input_response` /
+    /// `input_cancel` back over stdout keyed by `request_id`. Preferred over the
+    /// SwiftUI overlay card whenever the orb host is connected.
+    RequestInput {
+        request_id: String,
+        prompt: String,
+        /// Mask the field (password style) and disable the paste-chip logic.
+        #[serde(default)]
+        secure: bool,
+        /// Allow the composer textarea to grow to multiple rows.
+        #[serde(default)]
+        multiline: bool,
+        #[serde(default)]
+        placeholder: Option<String>,
+    },
     ClearConversation,
     Show,
     Hide,
@@ -232,6 +248,47 @@ mod tests {
             _ => false,
         };
         assert!(has_message);
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_request_input_command() -> Result<(), serde_json::Error> {
+        // Secure request: the pill masks the field and skips the paste chip.
+        let secure: ShellCommand = serde_json::from_str(
+            r#"{"type":"request_input","request_id":"abc-123","prompt":"Paste your API key","secure":true,"multiline":false,"placeholder":"sk-…"}"#,
+        )?;
+        let ok = match secure {
+            ShellCommand::RequestInput {
+                request_id,
+                prompt,
+                secure,
+                multiline,
+                placeholder,
+            } => {
+                request_id == "abc-123"
+                    && prompt == "Paste your API key"
+                    && secure
+                    && !multiline
+                    && placeholder.as_deref() == Some("sk-…")
+            }
+            _ => false,
+        };
+        assert!(ok, "secure request_input must decode with all fields");
+
+        // Minimal request: optional fields default (not secure, single-line).
+        let minimal: ShellCommand = serde_json::from_str(
+            r#"{"type":"request_input","request_id":"x","prompt":"What's your city?"}"#,
+        )?;
+        let defaults_ok = matches!(
+            minimal,
+            ShellCommand::RequestInput {
+                secure: false,
+                multiline: false,
+                placeholder: None,
+                ..
+            }
+        );
+        assert!(defaults_ok, "request_input must default optional fields");
         Ok(())
     }
 

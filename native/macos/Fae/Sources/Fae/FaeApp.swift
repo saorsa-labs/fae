@@ -260,6 +260,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         rustUiShell.orbState = orbState
         rustUiShell.conversation = conversation
         rustUiShell.faeCore = faeCore
+        // UX W1: let InputRequestBridge prefer the pill for `request_input`.
+        PillInputRouter.shared = rustUiShell
         rustUiShell.onSettings = { [weak self] in
             self?.rustUiShell.refreshWorkspaceSnapshot()
         }

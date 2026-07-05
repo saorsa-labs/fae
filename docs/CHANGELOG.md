@@ -2,6 +2,18 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — UX overhaul Wave 1 (pill as THE input surface)
+
+### New Features
+- **Auto-growing composer (`native/rust/fae-ui-shell/src/main.rs`, `PILL_HTML`)**: the pill's single-line `<input>` is now an auto-growing `<textarea>` (1 → ~6 rows, then internal scroll). Enter sends; Shift+Enter inserts a newline; pasted multiline text keeps its newlines. A long paste (> 800 chars, non-secure) collapses into a removable frosted chip ("pasted · N chars") so the composer isn't flooded — the chip's full text still ships with the message (**send-format decision: full text goes to the pipeline; the chip is a composer-side visual only — the conversation echo is unchanged and still shows what Swift stores**).
+- **Click-anywhere-to-collapse fix**: while expanded, a click on the pill's caption/body (anything outside the composer) collapses it; caret clicks inside the textarea and the send button are preserved. Chevron / Esc / focus-loss collapse unchanged.
+- **`request_input` in the pill (`ShellCommand::RequestInput`)**: Swift can now ask Fae's question INSIDE the conversation surface. The command `{request_id, prompt, secure, multiline, placeholder}` expands the pill, shows the prompt as the caption, and swaps the composer to a masked field when `secure` (`-webkit-text-security`, paste-chip disabled, caption in `fae-gold-text` #E6C05A). Send posts `input_response {request_id, text}`; Esc / collapse / click-away posts `input_cancel {request_id}`. The pill acks (`input_ack`) so Swift knows it was accepted.
+- **Bridge routing (`RustUiShellController`, `InputRequestBridge`)**: `InputRequestTool` text requests now PREFER the pill when the orb host is connected — `InputRequestBridge` dispatches `request_input` and waits ≤5s for the pill ack, otherwise falls back to the existing SwiftUI overlay card (host absent, disconnected, or ack timeout). Both surfaces resolve the same `CheckedContinuation`; resolution is idempotent so a late responder after fallback is harmless. The 120s continuation timeout and the secure / `store_key` logic in `InputRequestTool.execute` are unchanged (Wave 2 owns secret-safety).
+
+### Testing
+- **Rust (`protocol.rs`)**: `decodes_request_input_command` — full secure payload decodes with all fields; a minimal payload defaults `secure`/`multiline`/`placeholder`.
+- **Swift (`InputRequestBridgeRoutingTests`)**: pill-preferred when connected + acked (overlay NOT used); overlay fallback when no router; overlay fallback when the host is disconnected (the pill request is never dispatched).
+
 ## Unreleased — UX Wave 2 (structural credential withholding + memory-capture redaction)
 
 ### Security

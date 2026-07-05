@@ -2,6 +2,32 @@ import AppKit
 import Combine
 import Foundation
 
+/// UX W1: the seam InputRequestBridge uses to prefer the pill for a
+/// `request_input` (Fae asks her question INSIDE the conversation surface)
+/// instead of the SwiftUI overlay card. RustUiShellController conforms; a mock
+/// stands in for it under test.
+@MainActor
+protocol PillInputRouting: AnyObject {
+    /// True when the orb host is running and can host the prompt in the pill.
+    var isOrbHostConnected: Bool { get }
+    /// Send the request into the pill composer (prompted / masked mode).
+    func requestPillInput(
+        requestId: String,
+        prompt: String,
+        secure: Bool,
+        multiline: Bool,
+        placeholder: String
+    )
+}
+
+/// UX W1: process-wide registration point so the (actor-isolated)
+/// InputRequestBridge can reach the live orb-host controller without a hard
+/// dependency. Set once at app startup; nil when the orb host isn't wired.
+@MainActor
+enum PillInputRouter {
+    static weak var shared: (any PillInputRouting)?
+}
+
 /// Launches and bridges the Rust orb UI host (`native/rust/fae-ui-shell`).
 ///
 /// Product-wise, the orb is the UI; this process is the implementation host for
@@ -13,7 +39,7 @@ import Foundation
 ///
 /// Logs from the host are left on stderr so stdout remains machine-readable.
 @MainActor
-final class RustUiShellController {
+final class RustUiShellController: PillInputRouting {
     weak var orbState: OrbStateController?
     weak var conversation: ConversationRuntimeController?
     weak var faeCore: FaeCore?
@@ -85,6 +111,31 @@ final class RustUiShellController {
     /// True while the Rust orb host process is running. When active, the orb
     /// is the product UI and the Swift main window stays hidden.
     var isActive: Bool { process != nil }
+
+    // MARK: - PillInputRouting (UX W1)
+
+    var isOrbHostConnected: Bool { isActive }
+
+    /// Send a `request_input` into the pill composer. The pill acks
+    /// (`.faePillInputAck`) then answers with `input_response`/`input_cancel`,
+    /// which `handleShellEvent` forwards to `.faeInputResponse`.
+    func requestPillInput(
+        requestId: String,
+        prompt: String,
+        secure: Bool,
+        multiline: Bool,
+        placeholder: String
+    ) {
+        var message: [String: Any] = [
+            "type": "request_input",
+            "request_id": requestId,
+            "prompt": prompt,
+            "secure": secure,
+            "multiline": multiline,
+        ]
+        if !placeholder.isEmpty { message["placeholder"] = placeholder }
+        send(message)
+    }
 
     func startIfAvailable() {
         guard process == nil else { return }
@@ -530,6 +581,26 @@ final class RustUiShellController {
             // Messages-panel composer (typed input from the orb's panel).
             guard let text = event.text, !text.isEmpty else { return }
             onSendText?(text)
+        case "input_ack":
+            // UX W1: the pill accepted a `request_input` — tell the bridge so it
+            // commits to the pill path (a 5s ack timeout falls back to overlay).
+            guard let requestId = event.requestId, !requestId.isEmpty else { return }
+            NotificationCenter.default.post(
+                name: .faePillInputAck,
+                object: nil,
+                userInfo: ["request_id": requestId]
+            )
+        case "input_response", "input_cancel":
+            // UX W1: the pill composer answered (or cancelled) a `request_input`.
+            // Resolve the same continuation the overlay would — a cancel is an
+            // empty response (InputRequestBridge maps empty → nil).
+            guard let requestId = event.requestId, !requestId.isEmpty else { return }
+            let text = (event.type == "input_cancel") ? "" : (event.text ?? "")
+            NotificationCenter.default.post(
+                name: .faeInputResponse,
+                object: nil,
+                userInfo: ["request_id": requestId, "text": text]
+            )
         case "set_access":
             // Messages-panel Controls strip → tool access mode.
             guard let faeCore, let value = event.value, !value.isEmpty else { return }
@@ -715,4 +786,12 @@ private struct ShellEvent: Decodable {
     let text: String?
     let key: String?
     let value: String?
+    /// UX W1: the pill's `request_input` reply carries the originating id so the
+    /// InputRequestBridge resolves the right suspended continuation.
+    let requestId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case type, action, id, enabled, active, text, key, value
+        case requestId = "request_id"
+    }
 }
