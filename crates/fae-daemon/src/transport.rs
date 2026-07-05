@@ -27,8 +27,6 @@ use crate::mcp::McpCatalog;
 use crate::server_request::{ServerReply, ServerRequester};
 use crate::session::{
     handle_frame, run_authorized_agent_prompt, run_authorized_delegate, run_authorized_mcp_list,
-    run_authorized_skillhost_activate, run_authorized_skillhost_list, run_authorized_skillhost_run,
-    handle_frame, run_authorized_agent_prompt, run_authorized_delegate,
     run_authorized_skillhost_activate, run_authorized_skillhost_archive,
     run_authorized_skillhost_list, run_authorized_skillhost_run, run_authorized_skillhost_usage,
     run_authorized_toolhost_execute, SessionBackends, SessionState,
