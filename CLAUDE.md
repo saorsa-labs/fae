@@ -11,7 +11,7 @@ Fae should be:
 - **correct over fast** — Fae is not a real-time conversational chatbot. She is a thoughtful voice-first assistant that takes time to think, search, and verify before responding. Speed will improve as models improve, but correctness and thoroughness always come first.
 - reliable in conversation
 - memory-strong over long horizons
-- **proactive from day 1** — all awareness, memory, learning, and intelligence features are always-on from first launch. No setup required beyond voice enrollment.
+- **proactive from day 1** — all awareness, memory, learning, and intelligence features are always-on from first launch. No setup required — PTT is the engagement gate (voice enrollment retired in S18).
 - the best, most proactive friend anyone can have
 
 ## Proactive-by-default philosophy
@@ -20,7 +20,7 @@ Fae should be:
 
 > **S18 update (voice identity retired):** push-to-talk (Right ⌥ hold / orb long-press) is the engagement + tool-access gate. `SpeakerProfileStore` survives only for `fae_self` echo rejection, not access control. The "Voice identity security model" subsection immediately below describes the pre-S18 design and is retained for historical context only.
 
-### Voice identity security model
+### Voice identity security model (pre-S18, retired — PTT is the gate)
 
 1. **Pre-enrollment (first launch)**: Fae listens to everyone, continually nudges to enroll as primary user. No tool calls except voice enrollment. Barge-in always on.
 2. **Primary user enrolled**: Fae ONLY responds to recognized voices. Primary user has full tool access.
@@ -41,7 +41,7 @@ Fae should be:
 | Daily summaries | Creates daily digests of what happened |
 | Personal learning | Continuously improves based on your interactions |
 | Barge-in | User can always interrupt Fae mid-speech |
-| Voice identity enforcement | After primary enrollment, only recognized voices get responses |
+| PTT capture gate | Push-to-talk (Right ⌥ hold / orb long-press) is the engagement + tool-access gate (voice identity enforcement retired in S18 — PTT is the gate) |
 
 ### Settings UI treatment
 
@@ -81,15 +81,15 @@ Required for: model swaps, prompt/routing changes, voice capture/STT/TTS/playbac
 
 ## Architecture overview
 
-Swift app (voice pipeline, memory, tools, skills) + Rust orb host (only product UI) + Rust daemon (`crates/fae-daemon`, primary LLM lane). All intelligence runs locally — no cloud, no API keys, no data leaves the machine. The Swift MLX engine remains the macOS fallback and LoRA training substrate.
+Swift app (voice pipeline, memory, tools, skills) + Rust orb host (only product UI) + Rust daemon (`crates/fae-daemon`, primary LLM lane). All intelligence runs locally by default — no cloud, no API keys, no data leaves the machine unless the user explicitly opts into the OpenRouter cloud lane (off by default; egress passes the mode-cap → PII-membrane → pricing → budget gates behind the `FAE_PRIVACY_LANE` triple-gate). The Swift MLX engine remains the macOS fallback and LoRA training substrate.
 
 ```
 Right ⌥ hold / orb long-press → mic capture (16kHz) → WAV → fae-daemon
 (Gemma 4 E4B, two-pass: pass 1 transcribe → pass 2 LLM + tools) → TTS → Speaker
                                       │
                                       ├── Memory (SQLite + ANN + FTS5)
-                                      ├── Tools (36 built-in)
-                                      ├── Skills (30 built-in)
+                                      ├── Tools (37 built-in)
+                                      ├── Skills (33 built-in)
                                       ├── Scheduler (~23 tasks)
                                       ├── Backup (Git Vault)
                                       └── Self-Config

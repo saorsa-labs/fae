@@ -71,6 +71,8 @@ multiple-versions = "warn"
 wildcards = "warn"
 
 [sources]
-# Fail on crates pulled from registries/git we do not explicitly trust.
-unknown-registry = "warn"
-unknown-git = "warn"
+# Deny crates pulled from registries/git we do not explicitly trust.
+# Local [patch] path overrides (vendor/candle, vendor/mistral.rs) resolve as
+# path sources and are unaffected by this gate.
+unknown-registry = "deny"
+unknown-git = "deny"
