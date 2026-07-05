@@ -412,6 +412,15 @@ impl FaeToolPolicy {
                     error = %e,
                     "toolhost audit write failed"
                 );
+                // Surface loudly even without a tracing subscriber: an audit
+                // write failure means storage is degrading and this decision
+                // (allow OR deny) is now unlogged. The Allow path fails closed on
+                // `false`; the deny paths keep denying — this makes their
+                // otherwise-swallowed failure visible.
+                eprintln!(
+                    "fae-daemon: toolhost audit write FAILED (tool='{tool}', call_id='{}'): {e} — decision unlogged",
+                    self.gov.call_id
+                );
                 false
             }
         }

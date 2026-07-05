@@ -280,19 +280,30 @@ async fn handle_connection(
                         let audit_path = audit_path.to_path_buf();
                         let sink = Arc::clone(&sink);
                         let conductor = Arc::clone(&conductor);
-                        tokio::spawn(async move {
-                            let outcome = run_authorized_agent_prompt(
-                                &record,
-                                &cmd,
-                                &agents,
-                                &events,
-                                Some(conductor.as_ref()),
-                                &crate::session::REAL_ACP_RUNNER,
-                                requester,
-                                now,
-                                event_id,
-                            )
-                            .await;
+                        // CR-H1: track the spawned agent run in `tool_tasks` (not a
+                        // fire-and-forget `tokio::spawn`) so connection teardown
+                        // drains + aborts it — otherwise the task's `Arc<ConnSink>`
+                        // clone outlives `drop(sink)` and `writer.await` blocks for
+                        // the whole agent run. Race it against `session_cancel` so a
+                        // mid-turn disconnect cancels it cooperatively, matching the
+                        // `toolhost.execute` / `conversation.delegate` tasks.
+                        let cancel = session_cancel.clone();
+                        tool_tasks.spawn(async move {
+                            let outcome = tokio::select! {
+                                biased;
+                                () = cancel.cancelled() => return,
+                                outcome = run_authorized_agent_prompt(
+                                    &record,
+                                    &cmd,
+                                    &agents,
+                                    &events,
+                                    Some(conductor.as_ref()),
+                                    &crate::session::REAL_ACP_RUNNER,
+                                    requester,
+                                    now,
+                                    event_id,
+                                ) => outcome,
+                            };
                             // Same fail-closed contract: audit before responding.
                             if append_audit_jsonl(&audit_path, &outcome.audit).is_err() {
                                 let response = Response::error(
@@ -939,4 +950,67 @@ fn tighten_socket_permissions(socket_path: &Path) -> std::io::Result<()> {
     #[cfg(not(unix))]
     let _ = socket_path;
     Ok(())
+}
+
+#[cfg(test)]
+mod cr_h1_teardown_tests {
+    //! CR-H1: an `agent.prompt` task must be tracked in `tool_tasks` AND race
+    //! `session_cancel`, so connection teardown drains/aborts it and
+    //! `writer.await` does not block for the full agent run. Constructing the
+    //! full `handle_connection` dependency graph in a unit test is impractical,
+    //! so this models the transport close path with a real `ConnSink` +
+    //! `JoinSet` + `CancellationToken`, wired exactly as the handler wires them.
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::task::JoinSet;
+    use tokio_util::sync::CancellationToken;
+
+    use crate::events::ConnSink;
+
+    #[tokio::test]
+    async fn teardown_does_not_block_on_an_in_flight_agent_prompt_task() {
+        // The read half is dropped; we only care that the sink's writer task
+        // returns once every `Arc<ConnSink>` clone is gone.
+        let (_client, server) = tokio::io::duplex(4096);
+        let (sink, writer) = ConnSink::spawn(server);
+
+        let session_cancel = CancellationToken::new();
+        let mut tool_tasks: JoinSet<()> = JoinSet::new();
+
+        // Model the `agent.prompt` handler task: it holds an `Arc<ConnSink>`
+        // clone (like the real `sink` capture) and would otherwise run for a
+        // long agent turn. Tracked in `tool_tasks` + racing `session_cancel`.
+        let task_sink = Arc::clone(&sink);
+        let cancel = session_cancel.clone();
+        tool_tasks.spawn(async move {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {}
+                () = tokio::time::sleep(Duration::from_secs(3600)) => {}
+            }
+            // Hold the sink clone until the task actually returns — this clone
+            // is what would pin `writer.await` open under the bug.
+            drop(task_sink);
+        });
+
+        // The real teardown sequence (transport.rs close path).
+        session_cancel.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            while tool_tasks.join_next().await.is_some() {}
+        })
+        .await;
+        tool_tasks.shutdown().await;
+        drop(sink);
+
+        // Under the fix `writer.await` returns promptly; under the bug (a bare
+        // untracked `tokio::spawn` with no cancel) the task's sink clone would
+        // outlive `drop(sink)` and this would hang for the full hour.
+        let joined = tokio::time::timeout(Duration::from_secs(2), writer).await;
+        assert!(
+            joined.is_ok(),
+            "writer must finish once the tracked+cancelled agent task drops its sink clone"
+        );
+    }
 }

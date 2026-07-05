@@ -9,54 +9,148 @@
 //! automatically on the next publish — no explicit unregister. A subscriber
 //! receives an event only when it was granted the event's required [`Scope`].
 
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicBool;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use fae_audio::PlaybackId;
 use fae_control_plane::{Event, Scope};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 
-/// A line-oriented outbound sink for one connection. Delivery is non-blocking
-/// (an unbounded channel drained by the writer task); per-connection ordering
-/// is preserved.
+/// Bound on the per-connection lossy event queue (`audio.level` et al.). At the
+/// V3 RMS publish rate (~tens of frames/sec) this is a few seconds of backlog;
+/// beyond it a stalled reader sheds the OLDEST samples so the freshest levels —
+/// and any terminal `audio.playback_ended` — always win, and RSS is bounded no
+/// matter how long the reader stalls.
+const EVENT_QUEUE_CAP: usize = 256;
+
+/// A line-oriented outbound sink for one connection. Delivery of an event is
+/// non-blocking and LOSSY: events ride a bounded [drop-oldest](EventQueue) lane
+/// so a stalled reader can never grow RSS without bound. Per-lane ordering is
+/// preserved. Request responses use [`ConnSink::send_line`] (the reliable lane).
 pub trait EventSink: Send + Sync {
-    /// Queue one already-serialized NDJSON line (trailing newline included).
+    /// Queue one already-serialized NDJSON event line (trailing newline
+    /// included) on the lossy lane. Dropped (oldest-first) if the reader has
+    /// stalled past [`EVENT_QUEUE_CAP`].
     fn deliver(&self, line: &Arc<Vec<u8>>);
 }
 
-/// Owns a connection's writer task. The response path and the event path both
-/// send through `tx`, so a single task serializes every write to the socket and
-/// frames never interleave.
+/// The lossy lane's bounded ring buffer. `deliver` pushes; the writer task
+/// drains. On overflow the OLDEST frame is evicted (drop-oldest) so the newest
+/// frames — including any terminal `audio.playback_ended` — survive.
+struct EventQueue {
+    ring: Mutex<VecDeque<Arc<Vec<u8>>>>,
+    notify: Notify,
+    dropped: AtomicU64,
+}
+
+impl EventQueue {
+    fn new() -> EventQueue {
+        EventQueue {
+            ring: Mutex::new(VecDeque::new()),
+            notify: Notify::new(),
+            dropped: AtomicU64::new(0),
+        }
+    }
+
+    /// Enqueue a lossy frame, evicting the oldest if already at capacity, then
+    /// wake the writer. Bounds the queue at [`EVENT_QUEUE_CAP`].
+    fn push(&self, line: Arc<Vec<u8>>) {
+        if let Ok(mut ring) = self.ring.lock() {
+            while ring.len() >= EVENT_QUEUE_CAP {
+                ring.pop_front();
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            ring.push_back(line);
+        }
+        self.notify.notify_one();
+    }
+
+    fn pop(&self) -> Option<Arc<Vec<u8>>> {
+        self.ring.lock().ok().and_then(|mut r| r.pop_front())
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.ring.lock().map(|r| r.len()).unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
+
+/// Owns a connection's writer task. A single task serializes every write, so
+/// frames never interleave mid-frame. Two lanes feed it: the RELIABLE lane
+/// (`tx`, request responses/control — never dropped) and the LOSSY `events`
+/// lane (bounded, drop-oldest — high-rate `audio.level`). Reliable frames are
+/// prioritized; the lossy lane bounds RSS under a stalled reader.
 pub struct ConnSink {
     tx: mpsc::UnboundedSender<Arc<Vec<u8>>>,
+    events: Arc<EventQueue>,
 }
 
 impl ConnSink {
-    /// Spawn the writer task draining queued lines to `writer`. Returns the sink
+    /// Spawn the writer task draining both lanes to `writer`. Returns the sink
     /// and the task handle; dropping every reference to the sink closes the
-    /// channel and ends the task once the backlog is flushed.
+    /// reliable channel, which drains any remaining events and ends the task.
     pub fn spawn<W>(mut writer: W) -> (Arc<ConnSink>, JoinHandle<()>)
     where
         W: AsyncWrite + Unpin + Send + 'static,
     {
         let (tx, mut rx) = mpsc::unbounded_channel::<Arc<Vec<u8>>>();
+        let events = Arc::new(EventQueue::new());
+        let events_task = Arc::clone(&events);
         let handle = tokio::spawn(async move {
-            while let Some(line) = rx.recv().await {
-                if writer.write_all(&line).await.is_err() {
-                    break;
-                }
-                if writer.flush().await.is_err() {
-                    break;
+            loop {
+                // Reliable frames take priority; the lossy lane drains when the
+                // reliable lane is idle. Either way the writer emits ONE
+                // complete line at a time, so frames never interleave mid-frame.
+                tokio::select! {
+                    biased;
+                    reliable = rx.recv() => {
+                        match reliable {
+                            Some(line) => {
+                                if writer.write_all(&line).await.is_err()
+                                    || writer.flush().await.is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            None => {
+                                // Sink dropped (connection teardown): flush any
+                                // buffered events best-effort, then exit.
+                                while let Some(line) = events_task.pop() {
+                                    if writer.write_all(&line).await.is_err()
+                                        || writer.flush().await.is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    () = events_task.notify.notified() => {
+                        while let Some(line) = events_task.pop() {
+                            if writer.write_all(&line).await.is_err()
+                                || writer.flush().await.is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
                 }
             }
         });
-        (Arc::new(ConnSink { tx }), handle)
+        (Arc::new(ConnSink { tx, events }), handle)
     }
 
-    /// Queue one line on the connection (request responses).
+    /// Queue one line on the RELIABLE lane (request responses/control). Never
+    /// dropped — bounded in practice by the client's request rate.
     pub fn send_line(&self, line: Arc<Vec<u8>>) {
         let _ = self.tx.send(line);
     }
@@ -64,7 +158,7 @@ impl ConnSink {
 
 impl EventSink for ConnSink {
     fn deliver(&self, line: &Arc<Vec<u8>>) {
-        let _ = self.tx.send(Arc::clone(line));
+        self.events.push(Arc::clone(line));
     }
 }
 
@@ -269,6 +363,34 @@ mod tests {
         drop(sink);
         bus.publish("audio.level", Scope::AudioPlayback, serde_json::json!({}));
         assert_eq!(bus.subscriber_count(), 0, "dead subscriber pruned");
+    }
+
+    #[test]
+    fn event_queue_is_bounded_and_drops_oldest_under_a_stalled_reader() {
+        let q = EventQueue::new();
+        // Push well past capacity with no reader draining (a stalled reader):
+        // each frame's payload encodes its index so we can prove WHICH frames
+        // survived. Unbounded growth is the bug; this asserts the bound + that
+        // the OLDEST frames — not the newest — are the ones shed.
+        let overflow = EVENT_QUEUE_CAP + 100;
+        for i in 0..overflow {
+            q.push(Arc::new((i as u32).to_le_bytes().to_vec()));
+        }
+        assert_eq!(q.len(), EVENT_QUEUE_CAP, "queue is bounded at capacity");
+        assert_eq!(
+            q.dropped(),
+            (overflow - EVENT_QUEUE_CAP) as u64,
+            "the overflow frames were dropped, not queued",
+        );
+        // The first RETAINED frame is index `overflow - CAP` (drop-oldest keeps
+        // the freshest window), never index 0 (which would be drop-newest).
+        let expected_first = (overflow - EVENT_QUEUE_CAP) as u32;
+        let first = q.pop().expect("queue holds the freshest frames");
+        assert_eq!(
+            first.as_ref(),
+            &expected_first.to_le_bytes().to_vec(),
+            "oldest surviving frame is the first one NOT evicted",
+        );
     }
 
     #[tokio::test]
