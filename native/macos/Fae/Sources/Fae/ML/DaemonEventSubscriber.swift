@@ -82,14 +82,27 @@ final class DaemonEventSubscriber: @unchecked Sendable {
     }
 
     /// Stop reading and close the socket. Safe to call multiple times.
+    ///
+    /// CR-H3: the read loop runs on `queue` and blocks in `recv()`, so a
+    /// `queue.sync` here would deadlock (the serial queue never drains while the
+    /// loop is parked in `recv`, and the `close(fd)` that would wake it is trapped
+    /// inside that un-runnable sync block). Instead we flip `stopped` and grab the
+    /// fd under `stateLock` — the SAME lock `isStopped` and `currentFD()` read — and
+    /// `close()` the fd from THIS thread. Closing the fd out from under the blocked
+    /// `recv()` makes it return EBADF, `readLineLocked` throws, and the loop observes
+    /// `stopped == true` and exits cleanly. No queue hop, so no deadlock.
+    ///
+    /// `buffer` is intentionally NOT touched here: it is confined to `readLineLocked`
+    /// on the serial `queue`, so clearing it from this thread would be a data race.
+    /// The loop exits promptly after `stop()` and the subscriber is then discarded.
     func stop() {
-        queue.sync {
-            stopped = true
-            if fd >= 0 {
-                Darwin.close(fd)
-                fd = -1
-            }
-            buffer.removeAll()
+        stateLock.lock()
+        stopped = true
+        let fdToClose = fd
+        fd = -1
+        stateLock.unlock()
+        if fdToClose >= 0 {
+            Darwin.close(fdToClose)
         }
     }
 

@@ -31,6 +31,7 @@ struct AwarenessThrottle: Sendable {
         // Tier 2 tasks (camera, screen) require full awareness consent.
         let isTier1 = taskId == "enhanced_morning_briefing" || taskId == "overnight_work"
             || taskId == "training_data_export" || taskId == "training_cycle"
+            || taskId == "improvement_cycle"
         if isTier1 {
             guard config.proactiveLiteEnabled || (config.enabled && config.consentGrantedAt != nil) else {
                 return .skip(reason: "Proactive lite disabled and no awareness consent")

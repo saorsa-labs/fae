@@ -686,15 +686,14 @@ final class VoicePipelineRegressionTests: XCTestCase {
     // MARK: - Context Budget
 
     func testRecommendedMaxHistoryAccountsForLargeSystemPrompt() {
-        // 32K context with 4096 maxTokens:
-        // available = 32768 - 18000 - 4096 = 10672 tokens → 26 messages
+        // 32K context with 4096 maxTokens, P-H2 8K system budget:
+        // available = 32768 - 8000 - 4096 = 20672 tokens → 51 messages.
         let maxHistory = FaeConfig.recommendedMaxHistory(contextSize: 32_768, maxTokens: 4_096)
-        XCTAssertLessThanOrEqual(maxHistory, 30, "maxHistory should be conservative on 32K context")
-        XCTAssertGreaterThanOrEqual(maxHistory, 6, "maxHistory should be at least 6")
+        XCTAssertEqual(maxHistory, 51, "32K context should yield 51 history messages")
     }
 
     func testRecommendedMaxHistoryHandlesSmallContext() {
-        // 8K context: available = 8192 - 18000 - 2048 = negative → 6 (minimum)
+        // 8K context: available = 8192 - 8000 - 2048 = negative → 6 (minimum)
         let maxHistory = FaeConfig.recommendedMaxHistory(contextSize: 8_192, maxTokens: 2_048)
         XCTAssertEqual(maxHistory, 6, "Small context should clamp to minimum 6")
     }

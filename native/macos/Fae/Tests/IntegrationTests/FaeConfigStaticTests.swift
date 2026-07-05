@@ -38,14 +38,35 @@ final class FaeConfigStaticTests: XCTestCase {
     // MARK: - recommendedMaxHistory
 
     func testRecommendedMaxHistoryLargeContext() {
-        let maxHist = FaeConfig.recommendedMaxHistory(contextSize: 131072, maxTokens: 8192)
-        XCTAssertGreaterThanOrEqual(maxHist, 6)
-        XCTAssertLessThanOrEqual(maxHist, 100)
+        // Exact values under the P-H2 8K system budget.
+        // 131072: (131072 - 8000 - 8192) / 400 = 287 → clamped to the 100 ceiling.
+        XCTAssertEqual(
+            FaeConfig.recommendedMaxHistory(contextSize: 131072, maxTokens: 8192), 100)
+        // 32K (≥32GB tier): (32768 - 8000 - 4096) / 400 = 51 — real history headroom
+        // (was 26 under the stale 18K budget).
+        XCTAssertEqual(
+            FaeConfig.recommendedMaxHistory(contextSize: 32768, maxTokens: 4096), 51)
+    }
+
+    func testRecommendedMaxHistoryMidContext() {
+        // P-H2 regression: the 16GB tier (16K daemon context) previously clamped to
+        // the 6-message floor because the 18K system budget exceeded the whole window.
+        // With the corrected 8K budget a 16K machine gets meaningful history back.
+        // (16384 - 8000 - 4096) / 400 = 10 with the production-default 4096 maxTokens.
+        XCTAssertEqual(
+            FaeConfig.recommendedMaxHistory(contextSize: 16384, maxTokens: 4096), 10)
+        // (16384 - 8000 - 2048) / 400 = 15 with a leaner 2048 generation budget.
+        XCTAssertEqual(
+            FaeConfig.recommendedMaxHistory(contextSize: 16384, maxTokens: 2048), 15)
     }
 
     func testRecommendedMaxHistorySmallContext() {
-        let maxHist = FaeConfig.recommendedMaxHistory(contextSize: 4096, maxTokens: 2048)
-        XCTAssertEqual(maxHist, 6) // minimum
+        // 8K window still floors at 6: (8192 - 8000 - 4096) is negative → clamp to 6.
+        XCTAssertEqual(
+            FaeConfig.recommendedMaxHistory(contextSize: 8192, maxTokens: 4096), 6)
+        // 4K window also floors at 6.
+        XCTAssertEqual(
+            FaeConfig.recommendedMaxHistory(contextSize: 4096, maxTokens: 2048), 6)
     }
 
     // MARK: - isMultimodalLLM
