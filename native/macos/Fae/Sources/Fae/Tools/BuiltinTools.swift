@@ -867,7 +867,11 @@ actor InputRequestBridge {
 
     private var textContinuations: [String: CheckedContinuation<String?, Never>] = [:]
     private var formContinuations: [String: CheckedContinuation<[String: String]?, Never>] = [:]
+    /// UX W1: continuations awaiting the pill's `.faePillInputAck` (≤5s) so the
+    /// bridge knows whether to commit to the pill path or fall back to overlay.
+    private var pillAckContinuations: [String: CheckedContinuation<Bool, Never>] = [:]
     private nonisolated(unsafe) var observer: NSObjectProtocol?
+    private nonisolated(unsafe) var ackObserver: NSObjectProtocol?
 
     private init() {
         observer = NotificationCenter.default.addObserver(
@@ -881,10 +885,20 @@ actor InputRequestBridge {
             let formValues = Self.parseFormValues(notification.userInfo)
             Task { await self.resolve(requestId: requestId, text: text, formValues: formValues) }
         }
+        ackObserver = NotificationCenter.default.addObserver(
+            forName: .faePillInputAck,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let requestId = notification.userInfo?["request_id"] as? String ?? ""
+            Task { await self.resolvePillAck(requestId: requestId, acked: true) }
+        }
     }
 
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let ackObserver { NotificationCenter.default.removeObserver(ackObserver) }
     }
 
     /// Post a single-field input request to the UI and suspend until the user responds.
@@ -902,6 +916,69 @@ actor InputRequestBridge {
         return await withCheckedContinuation { continuation in
             textContinuations[requestId] = continuation
 
+            // UX W1: prefer the pill (Fae asks inside the conversation surface);
+            // the overlay card is the fallback. Routing is async — the 120s hard
+            // timeout below is armed regardless of which surface answers.
+            Task { [requestId] in
+                await self.routeTextRequest(
+                    requestId: requestId,
+                    prompt: prompt,
+                    title: title,
+                    placeholder: placeholder,
+                    isSecure: isSecure,
+                    isMultiline: isMultiline
+                )
+            }
+
+            Task { [requestId] in
+                try? await Task.sleep(for: .seconds(120))
+                await self.resolveWithTimeout(requestId: requestId)
+            }
+        }
+    }
+
+    /// UX W1: choose the input surface. If the orb host is connected, send the
+    /// prompt into the pill and wait ≤5s for its ack; on ack the pill owns the
+    /// request, otherwise (host absent, or ack timeout) show the overlay card.
+    /// Either surface resolves the same continuation — `resolve` is idempotent,
+    /// so a late responder after fallback is harmless.
+    private func routeTextRequest(
+        requestId: String,
+        prompt: String,
+        title: String?,
+        placeholder: String,
+        isSecure: Bool,
+        isMultiline: Bool
+    ) async {
+        let connected = await MainActor.run { PillInputRouter.shared?.isOrbHostConnected ?? false }
+
+        if connected {
+            // Register the ack waiter BEFORE dispatching so a fast ack (the pipe
+            // round-trip can be near-instant) is never lost to a race, then
+            // dispatch into the pill and suspend up to 5s for the ack.
+            let acked = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                pillAckContinuations[requestId] = continuation
+                Task { [requestId] in
+                    try? await Task.sleep(for: .seconds(5))
+                    await self.resolvePillAck(requestId: requestId, acked: false)
+                }
+                Task { [requestId] in
+                    await MainActor.run {
+                        PillInputRouter.shared?.requestPillInput(
+                            requestId: requestId,
+                            prompt: prompt,
+                            secure: isSecure,
+                            multiline: isMultiline,
+                            placeholder: placeholder
+                        )
+                    }
+                }
+            }
+            if acked { return }  // The pill acknowledged — it owns this request.
+        }
+
+        // Fallback: the SwiftUI overlay card (host absent, or ack timed out).
+        await MainActor.run {
             var info: [String: Any] = [
                 "request_id": requestId,
                 "prompt": prompt,
@@ -911,18 +988,13 @@ actor InputRequestBridge {
                 "mode": "text",
             ]
             if let title { info["title"] = title }
-
-            NotificationCenter.default.post(
-                name: .faeInputRequired,
-                object: nil,
-                userInfo: info
-            )
-
-            Task { [requestId] in
-                try? await Task.sleep(for: .seconds(120))
-                await self.resolveWithTimeout(requestId: requestId)
-            }
+            NotificationCenter.default.post(name: .faeInputRequired, object: nil, userInfo: info)
         }
+    }
+
+    private func resolvePillAck(requestId: String, acked: Bool) {
+        guard let continuation = pillAckContinuations.removeValue(forKey: requestId) else { return }
+        continuation.resume(returning: acked)
     }
 
     /// Post a multi-field form request to the UI and suspend until submit/cancel.

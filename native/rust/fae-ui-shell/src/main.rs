@@ -660,6 +660,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                     window.request_redraw();
                 }
             }
+            // UX W1: a `request_input` command drives the pill's composer
+            // directly (expand + prompted/masked mode) — it needs `pill`, which
+            // `apply_bridge_command` cannot see, so intercept it here.
+            Event::UserEvent(UserEvent::Bridge(ShellCommand::RequestInput {
+                request_id,
+                prompt,
+                secure,
+                multiline,
+                placeholder,
+            })) => {
+                window.set_visible(true);
+                pill_request_input(
+                    &mut pill,
+                    window,
+                    request_id,
+                    &prompt,
+                    secure,
+                    multiline,
+                    placeholder.as_deref(),
+                );
+                window.request_redraw();
+            }
             Event::UserEvent(UserEvent::Bridge(command)) => {
                 apply_bridge_command(
                     command,
@@ -733,6 +755,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 }
                             }
                         }
+                    }
+                    // UX W1: the pill answered (or cancelled) a Swift
+                    // `request_input`. Clear the guard, collapse back to the
+                    // caption, and forward the event to Swift, whose
+                    // InputRequestBridge resolves the suspended continuation.
+                    Some("input_response") | Some("input_cancel") => {
+                        pill.pending_input = None;
+                        set_pill_expanded(&mut pill, window, false);
+                        emit_panel_action(&action_json);
                     }
                     _ => emit_panel_action(&action_json),
                 }
@@ -872,8 +903,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             } => {
                 if window_id == pill.window.id() {
                     // Click-away / focus to another window collapses the pill
-                    // back to its single-line caption.
+                    // back to its single-line caption. If a Swift `request_input`
+                    // is pending (UX W1), a click-away is a cancel — emit it so
+                    // the suspended continuation is freed rather than left to
+                    // time out.
                     if matches!(event, WindowEvent::Focused(false)) && pill.expanded {
+                        if let Some(request_id) = pill.pending_input.take() {
+                            let cancel = serde_json::json!({
+                                "type": "input_cancel",
+                                "request_id": request_id,
+                            });
+                            emit_panel_action(&cancel.to_string());
+                        }
                         set_pill_expanded(&mut pill, window, false);
                     }
                 } else if matches!(event, WindowEvent::CloseRequested) {
@@ -1428,6 +1469,12 @@ fn apply_bridge_command(
             state.set_active(false);
             window.set_visible(false);
         }
+        ShellCommand::RequestInput { .. } => {
+            // UX W1: intercepted in the event loop (it drives the pill directly
+            // and needs `pill`, which this function can't see). Reaching here
+            // means the interceptor was bypassed — ignore rather than panic.
+            log::warn!("request_input reached apply_bridge_command; ignoring");
+        }
         ShellCommand::Quit => {
             *control_flow = ControlFlow::Exit;
             return;
@@ -1480,6 +1527,11 @@ struct PillPanel {
     /// Collapsed = one-line caption; expanded = scrollable history + composer.
     /// Drives the two window sizes and the JS `__faeExpand` toggle.
     expanded: bool,
+    /// Set to a `request_id` while the pill hosts a Swift `request_input` (UX
+    /// W1): the composer is in prompted/masked mode. Cleared when the pill posts
+    /// `input_response`/`input_cancel`. Focus-loss consults it so a click-away
+    /// emits a cancel (freeing the Swift continuation) before collapsing.
+    pending_input: Option<String>,
 }
 
 /// The pill's two window sizes, in **logical** points so the HTML/CSS (authored
@@ -1581,6 +1633,7 @@ fn open_pill_panel(
         window,
         webview,
         expanded: false,
+        pending_input: None,
     })
 }
 
@@ -1606,6 +1659,40 @@ fn set_pill_expanded(pill: &mut PillPanel, orb_window: &Window, expanded: bool) 
     if expanded {
         pill.window.set_focus();
     }
+}
+
+/// UX W1: put the pill into prompted-input mode for a Swift `request_input`.
+/// Expand the window, then hand the request to the composer JS
+/// (`__faeRequestInput`), which shows the prompt as the caption, masks the
+/// field when `secure`, and posts `input_ack` so Swift commits to the pill path
+/// (a 5s ack timeout falls back to the SwiftUI overlay). The composer answers
+/// with `input_response`/`input_cancel`, both keyed by `request_id`.
+fn pill_request_input(
+    pill: &mut PillPanel,
+    orb_window: &Window,
+    request_id: String,
+    prompt: &str,
+    secure: bool,
+    multiline: bool,
+    placeholder: Option<&str>,
+) {
+    pill.expanded = true;
+    pill.pending_input = Some(request_id.clone());
+    pill.window.set_visible(true);
+    pill.window.set_inner_size(EXPANDED_PILL);
+    position_pill(orb_window, pill);
+    let payload = serde_json::json!({
+        "request_id": request_id,
+        "prompt": prompt,
+        "secure": secure,
+        "multiline": multiline,
+        "placeholder": placeholder.unwrap_or(""),
+    });
+    let script = format!("window.__faeRequestInput({payload});");
+    if let Err(error) = pill.webview.evaluate_script(&script) {
+        log::warn!("failed to drive pill request_input: {error}");
+    }
+    pill.window.set_focus();
 }
 
 /// Push the conversation history into the pill so it can show the latest line
@@ -1636,6 +1723,7 @@ fn push_pill_messages(pill: &PillPanel, orb_ui: &OrbUiModel) {
 const PILL_HTML: &str = r#"<!doctype html><html class=""><head><meta charset='utf-8'><style>
 :root{color-scheme:dark;
  --bg:rgba(22,20,28,.78);--border:rgba(180,168,196,.22);
+ --surface-frosted:rgba(26,24,32,.7);
  --text:rgba(255,255,255,.92);--muted:#9A90A8;--you:#B4A8C4;--fae:#D4A934;
  --serif:ui-serif,Georgia,'Times New Roman',serif;
  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
@@ -1683,16 +1771,34 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
 .msg .b{font:13px/1.55 var(--serif);white-space:pre-wrap;word-break:break-word}
 .msg.you .b{color:#CEC4DC}
 @keyframes rise{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
-#cmp{display:flex;align-items:center;gap:8px;padding:9px 11px 11px;flex:none;
+#cmp{display:flex;flex-direction:column;gap:7px;padding:9px 11px 11px;flex:none;
  border-top:1px solid rgba(180,168,196,.14)}
+#cmprow{display:flex;align-items:flex-end;gap:8px}
+/* Long-paste chip: a frosted capsule summarising a pasted blob so the composer
+ * isn't flooded (UX W1). Its full text still sends with the message. */
+#chip{display:flex;align-items:center;gap:8px;align-self:flex-start;max-width:100%;
+ background:var(--surface-frosted);border:1px solid var(--border);border-radius:9999px;
+ padding:5px 6px 5px 12px}
+#chip.hidden{display:none}
+#chiptxt{font:12px var(--sans);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#chipx{flex:none;width:18px;height:18px;border-radius:50%;border:none;cursor:pointer;padding:0;
+ background:rgba(255,255,255,.08);color:var(--muted);font-size:13px;line-height:1;
+ display:flex;align-items:center;justify-content:center}
+#chipx:hover{color:var(--text);background:rgba(255,255,255,.14)}
 #in{flex:1 1 auto;background:rgba(255,255,255,.04);border:1px solid var(--border);
- border-radius:9999px;padding:8px 13px;color:var(--text);font:13px var(--serif);outline:none}
+ border-radius:16px;padding:7px 13px;color:var(--text);font:13px/1.4 var(--serif);outline:none;
+ resize:none;min-height:34px;max-height:120px;overflow-y:auto}
 #in::placeholder{color:var(--muted)}
 #in:focus{border-color:rgba(212,169,52,.5)}
+/* Secure request_input: mask characters (password style) without swapping the
+ * element, and disable the paste-chip logic in JS. */
+#in.secure{-webkit-text-security:disc;letter-spacing:.14em}
 #snd{flex:none;width:30px;height:30px;border-radius:50%;border:none;cursor:pointer;
  background:var(--fae);color:#0F1013;font-size:15px;font-weight:600;
  display:flex;align-items:center;justify-content:center;opacity:.5;transition:opacity .15s}
 #snd.ready{opacity:1}
+/* Masked-mode caption in fae-gold-text (DESIGN.md, 9.4:1 on dark). */
+#hl.secure{color:#E6C05A}
 #line{transition:opacity .35s ease}
 #line.fading{opacity:0}
 #line.multi{height:auto;align-items:flex-start;padding:11px 16px;white-space:normal}
@@ -1714,16 +1820,24 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
  <div id='line'><span id='dot'></span><span id='txt'></span></div>
  <div id='info'><span class='idot'></span><span class='itxt'></span></div>
  <div id='exp'>
-  <div id='head'><span class='l'>Conversation</span><span id='cl'>⌄</span></div>
+  <div id='head'><span class='l' id='hl'>Conversation</span><span id='cl'>⌄</span></div>
   <div id='log'></div>
-  <div id='cmp'><input id='in' placeholder='Message Fae…' autocomplete='off'/><button id='snd'>↑</button></div>
+  <div id='cmp'>
+   <div id='chip' class='hidden'><span id='chiptxt'></span><button id='chipx' type='button'>×</button></div>
+   <div id='cmprow'><textarea id='in' rows='1' placeholder='Message Fae…' autocomplete='off'></textarea><button id='snd'>↑</button></div>
+  </div>
  </div>
 </div>
 <script>(function(){
 var shell=document.getElementById('shell'),line=document.getElementById('line'),
  dot=document.getElementById('dot'),txt=document.getElementById('txt'),log=document.getElementById('log'),
- input=document.getElementById('in'),snd=document.getElementById('snd'),cl=document.getElementById('cl');
+ input=document.getElementById('in'),snd=document.getElementById('snd'),cl=document.getElementById('cl'),
+ exp=document.getElementById('exp'),cmp=document.getElementById('cmp'),hl=document.getElementById('hl'),
+ chip=document.getElementById('chip'),chiptxt=document.getElementById('chiptxt'),chipx=document.getElementById('chipx');
 var messages=[],status=null,infoItems=[];
+// UX W1 composer state: a Swift request_input in flight (request_id or null),
+// whether the field is masked, and the full text of a long paste held as a chip.
+var pendingInput=null,secureMode=false,pastedFull=null;
 var post=function(o){if(window.ipc&&window.ipc.postMessage)window.ipc.postMessage(JSON.stringify(o));};
 function rc(r){return r==='fae'?'fae':((r==='you'||r==='user')?'you':'');}
 var fadeTimer=null,fadeOut=null;
@@ -1774,15 +1888,65 @@ window.__faeSetMessages=function(a){messages=a||[];shell.classList.add('show');r
 window.__faeSetStatus=function(kind,text,opts){opts=opts||{};
  status=kind?{kind:kind,text:text,live:opts.live===true,muted:opts.muted===true}:null;
  shell.classList.add('show');renderLine();};
+// Auto-growing textarea: reset then grow to fit, capped (~6 rows) with internal
+// scroll beyond. Send button lights when there's something to send.
+function autoGrow(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,120)+'px';}
+function updateReady(){snd.classList.toggle('ready',
+ input.value.trim().length>0||pastedFull!==null||pendingInput!==null);}
+function clearChip(){pastedFull=null;chip.classList.add('hidden');chiptxt.textContent='';}
+function showChip(n){chiptxt.textContent='pasted · '+n+' chars';chip.classList.remove('hidden');}
+// Leave request_input mode: restore the normal composer (called on collapse or
+// when a new request arrives).
+function exitRequestMode(){pendingInput=null;secureMode=false;
+ input.classList.remove('secure');hl.classList.remove('secure');hl.textContent='Conversation';
+ input.placeholder='Message Fae…';clearChip();input.value='';autoGrow();updateReady();}
 window.__faeExpand=function(on){if(on){shell.classList.add('expanded');renderLog();
- setTimeout(function(){input.focus();},30);}else{shell.classList.remove('expanded');input.blur();renderLine();}};
+ setTimeout(function(){input.focus();},30);}
+ else{shell.classList.remove('expanded');if(pendingInput!==null)exitRequestMode();input.blur();renderLine();}};
+// UX W1: enter prompted/masked input mode for a Swift request_input, then ack
+// so Swift commits to the pill path (else it falls back to the overlay after 5s).
+window.__faeRequestInput=function(o){o=o||{};
+ pendingInput=(o.request_id!=null)?String(o.request_id):'';secureMode=o.secure===true;
+ shell.classList.add('show','expanded');renderLog();clearChip();input.value='';
+ hl.textContent=o.prompt||'';hl.classList.toggle('secure',secureMode);
+ input.classList.toggle('secure',secureMode);
+ input.placeholder=o.placeholder||(secureMode?'Type securely, then send':'Type your answer, then send');
+ post({type:'input_ack',request_id:pendingInput});
+ autoGrow();updateReady();setTimeout(function(){input.focus();},30);};
+// Collapse intent: while a request is pending a collapse is a cancel (frees the
+// Swift continuation); otherwise it's an ordinary pill collapse.
+function requestCollapse(){
+ if(pendingInput!==null)post({type:'input_cancel',request_id:pendingInput});
+ else post({type:'pill_collapse'});}
 line.addEventListener('click',function(){post({type:'pill_expand'});});
-cl.addEventListener('click',function(){post({type:'pill_collapse'});});
-input.addEventListener('input',function(){snd.classList.toggle('ready',input.value.trim().length>0);});
-function submit(){var t=input.value.trim();if(!t)return;post({type:'send_text',text:t});input.value='';snd.classList.remove('ready');}
+cl.addEventListener('click',function(e){e.stopPropagation();requestCollapse();});
+// Click-to-collapse: while expanded, a click on the caption/body (anything
+// OUTSIDE the composer) collapses — caret clicks inside the textarea and the
+// send button are preserved.
+exp.addEventListener('click',function(e){
+ if(!shell.classList.contains('expanded'))return;
+ if(cmp.contains(e.target))return;
+ requestCollapse();});
+input.addEventListener('input',function(){autoGrow();updateReady();});
+// Long paste (>800 chars, non-secure) becomes a removable chip instead of
+// flooding the composer; its full text still sends with the message.
+input.addEventListener('paste',function(e){
+ if(secureMode)return;
+ var cd=e.clipboardData;if(!cd)return;
+ var t=cd.getData('text');
+ if(t&&t.length>800){e.preventDefault();pastedFull=t;showChip(t.length);updateReady();}});
+chipx.addEventListener('click',function(e){e.stopPropagation();clearChip();updateReady();});
+function submit(){
+ if(pendingInput!==null){var v=input.value;
+  post({type:'input_response',request_id:pendingInput,text:v});return;}
+ var typed=input.value.trim();
+ var full=pastedFull?(typed?typed+'\n\n'+pastedFull:pastedFull):typed;
+ if(!full)return;
+ post({type:'send_text',text:full});
+ input.value='';clearChip();autoGrow();updateReady();}
 snd.addEventListener('click',submit);
 input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}
- else if(e.key==='Escape'){post({type:'pill_collapse'});}});
+ else if(e.key==='Escape'){e.preventDefault();requestCollapse();}});
 function renderInfo(){
  var n=infoItems.length;
  shell.classList.toggle('has-info',n>0);
