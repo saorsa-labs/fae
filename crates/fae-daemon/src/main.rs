@@ -38,6 +38,10 @@ use fae_engine::{
 };
 
 mod agents;
+/// Shared env-scrubbing allowlist for every daemon child spawn (jailed tool exec
+/// + MCP servers) so provider secrets in the daemon's ambient env are never
+/// inherited by a child. See `child_env.rs`.
+mod child_env;
 /// Phase G1 — pure context-compaction planning (token estimate, prompt budget,
 /// oldest-first eviction with hysteresis). Shared by the delegate child loop and
 /// the `conversation.compact` command. See `compaction.rs`.

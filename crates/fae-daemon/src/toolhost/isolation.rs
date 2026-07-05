@@ -364,6 +364,11 @@ impl JailedSessionEnv {
             .current_dir(&dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // C1: a jailed tool must NOT inherit the daemon's provider secrets
+        // (Landlock confines writes only, network is open). Clear the inherited
+        // env and re-add only the vetted allowlist.
+        cmd.env_clear();
+        cmd.envs(crate::child_env::scrubbed_child_env());
         // SAFETY: the closure only issues the `landlock_restrict_self` syscall
         // (+ prctl) on an fd built in the parent — no allocation, no shared-lock
         // acquisition — so it is safe in the post-fork, pre-exec child.

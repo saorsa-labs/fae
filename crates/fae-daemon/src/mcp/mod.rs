@@ -203,7 +203,12 @@ impl McpCatalog {
                 decl.command.clone(),
                 decl.args.clone(),
                 None,
-                None,
+                // C1: MCP servers are un-jailed and network-open. Hand the child a
+                // scrubbed env (vetted allowlist) instead of `None` (inherit-all),
+                // so the daemon's provider secrets never reach a declared server.
+                // The transport treats a `Some(env)` as the child's COMPLETE env
+                // (it `env_clear()`s first), so this map is authoritative.
+                Some(crate::child_env::scrubbed_child_env()),
             )
             .await
             {

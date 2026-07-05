@@ -548,6 +548,9 @@ impl ProcessTransport {
         }
 
         if let Some(env_vars) = env {
+            // An explicit env is the child's COMPLETE env: clear the inherited one
+            // first so a caller can scrub secrets, not merely add on top of them.
+            cmd.env_clear();
             for (key, value) in env_vars {
                 cmd.env(key, value);
             }
