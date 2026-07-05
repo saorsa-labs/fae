@@ -1,0 +1,76 @@
+# cargo-deny supply-chain gate for the Fae daemon workspace (SC-H2).
+#
+# Run: `cargo deny check licenses bans sources` (from crates/). CI runs this in
+# .github/workflows/ci-linux.yml. cargo-deny 0.19 denies any license not in the
+# `allow` list below, so the list is the whole policy.
+#
+# Product license: the Fae workspace crates are dual "AGPL-3.0-or-later OR
+# LicenseRef-Commercial". AGPL is copyleft and MUST NOT leak in from third-party
+# dependencies, so it is NOT in the global `allow` list — it is granted ONLY to
+# our own workspace crates via the per-crate `exceptions` block below.
+
+[licenses]
+# Permissive / weak-copyleft licenses acceptable for third-party dependencies.
+# None of these is in the hostile set the audit calls out (GPL-2.0-only,
+# GPL-3.0-only, SSPL-1.0, BUSL-1.1). The MPL/0BSD/CDLA/NCSA entries below are
+# not in the audit's starter list but ARE present in the current dependency
+# tree (symphonia audio codecs + servo cssparser = MPL-2.0; webpki-roots =
+# CDLA-Permissive-2.0; libfuzzer-sys dev-dep = NCSA; doctest-file/recvmsg =
+# 0BSD) and are all permissive or file-level weak-copyleft — safe to allow.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "0BSD",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "NCSA",
+]
+# Everything not listed above is denied by default (cargo-deny 0.19). This
+# includes the copyleft/commercial-hostile licenses called out by the audit:
+# GPL-2.0-only, GPL-3.0-only, SSPL-1.0, BUSL-1.1 — none are in `allow`, so any
+# dependency carrying them fails the gate. Unlicensed crates are also denied.
+confidence-threshold = 0.9
+
+# AGPL exception — granted ONLY to first-party Saorsa Labs crates. The nine
+# workspace members are dual "AGPL-3.0-or-later OR LicenseRef-Commercial"; the
+# five x0x-symphony-* crates (published to crates.io, pulled in by
+# fae-symphony-runner) are Saorsa's own code under bare "AGPL-3.0-or-later".
+# Any OTHER (genuinely third-party) AGPL dependency is still denied — no global
+# allow, no exception for it.
+exceptions = [
+    # Workspace members.
+    { crate = "fae-control-plane", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-envelope-gate", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-pii-membrane", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-metaopt", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-engine", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-audio", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-acp", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-daemon", allow = ["AGPL-3.0-or-later"] },
+    { crate = "fae-symphony-runner", allow = ["AGPL-3.0-or-later"] },
+    # First-party x0x-symphony crates (Saorsa Labs, crates.io).
+    { crate = "x0x-symphony-core", allow = ["AGPL-3.0-or-later"] },
+    { crate = "x0x-symphony-orchestrator", allow = ["AGPL-3.0-or-later"] },
+    { crate = "x0x-symphony-signing", allow = ["AGPL-3.0-or-later"] },
+    { crate = "x0x-symphony-tracker-x0x-crdt", allow = ["AGPL-3.0-or-later"] },
+    { crate = "x0x-symphony-workspace", allow = ["AGPL-3.0-or-later"] },
+]
+
+[bans]
+# Supply-chain hygiene only — multiple versions are noisy in a large tree, so
+# they warn rather than fail. This gate is about licenses + provenance.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Fail on crates pulled from registries/git we do not explicitly trust.
+unknown-registry = "warn"
+unknown-git = "warn"

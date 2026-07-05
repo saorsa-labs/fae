@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Check PR body carries exactly one release-validation disposition
         run: python3 scripts/ci/guard-release-validation-pr.py
 
@@ -40,6 +40,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Assert AGENTS.md checklist references resolve + template present
         run: python3 scripts/ci/guard-release-validation-docs.py

@@ -29,7 +29,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Resolve release version
         id: version
@@ -58,7 +58,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
           lfs: true
@@ -84,7 +84,7 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
           lfs: true
@@ -124,10 +124,10 @@ jobs:
           popd
 
       - name: Install stable Rust for bundled auxiliaries
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
       - name: Cache Rust auxiliary builds
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
         with:
           workspaces: |
             crates -> target
@@ -884,7 +884,7 @@ jobs:
           echo "appcast.xml validation passed — edSignature is ${#SIG} chars of valid base64"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fae-macos-arm64
           path: ${{ env.ARTIFACTS_DIR }}/*
@@ -896,10 +896,10 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           # Flatten artifacts into artifacts/ (no per-artifact subdir). Without
           # this, files land at artifacts/fae-macos-arm64/… and the checksum
@@ -963,7 +963,7 @@ jobs:
           gpg --batch --armor --export "$KEY_FPR" > FAE_UPDATE_SIGNING_KEY.asc
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
           files: |

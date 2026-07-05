@@ -13,9 +13,19 @@ export RUSTFLAGS := ""
 default: check
 
 # Full validation — zero warnings, all tests.
+#
+# The clippy invocations MIRROR .github/workflows/ci-linux.yml so a green local
+# `just check` means a green CI: the workspace-wide `-D warnings` pass is the
+# broad safety net, and the per-crate passes add the strict production-safety
+# lints (`-D clippy::panic -D clippy::unwrap_used -D clippy::expect_used`) that
+# CI enforces on the daemon binary, fae-engine, and fae-metaopt.
 check:
     cargo fmt --all -- --check
     cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy -p fae-daemon --bin fae-daemon -p fae-engine --all-targets --all-features \
+        -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+    cargo clippy -p fae-metaopt --all-targets --all-features \
+        -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
     cargo test --all-features
 
 fmt:

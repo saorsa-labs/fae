@@ -54,7 +54,7 @@ jobs:
             triple: aarch64-unknown-linux-gnu
             runtime_platform: linux-aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
           lfs: true
@@ -70,13 +70,13 @@ jobs:
             libxcursor-dev libxkbcommon-dev libwayland-dev file
 
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: clippy, rustfmt
           targets: ${{ matrix.triple }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@0d949697a22925b8fa9993202894c96e1631d94b # nextest
 
       - name: Crate gate (fmt, clippy -D warnings, tests)
         working-directory: crates
@@ -99,7 +99,30 @@ jobs:
           # nextest (process-per-test isolation): some fae-engine tests mutate
           # env (FAE_MODELS_LOCK) or touch app-support paths and only pass when
           # isolated — the same reason release-linux.yml prefers nextest.
-          env -u RUSTFLAGS cargo nextest run -p fae-daemon -p fae-engine -p fae-metaopt
+          # fae-symphony-runner + fae-acp are included: their hermetic suites
+          # (runner_headless.rs; fae-acp smoke/mock_agent over stdio) run here;
+          # the live x0xd suites (live_x0xd.rs, live_group_of_fae.rs) are
+          # #[ignore]d and nextest skips ignored tests by default — so no live
+          # x0xd dependency is pulled into CI.
+          env -u RUSTFLAGS cargo nextest run \
+            -p fae-daemon -p fae-engine -p fae-metaopt \
+            -p fae-symphony-runner -p fae-acp
+
+      # Supply-chain gate (SC-H2): fail the build on a disallowed dependency
+      # license or an untrusted source. Runs once (amd64) — the lockfile is
+      # arch-independent. Scoped to licenses+bans+sources; `advisories` is
+      # intentionally excluded so a newly-published RustSec advisory on an
+      # unrelated dep can't turn this license/provenance gate spuriously red.
+      - name: Install cargo-deny
+        if: matrix.arch == 'amd64'
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        with:
+          tool: cargo-deny
+
+      - name: "Supply-chain gate (cargo-deny: licenses + bans + sources)"
+        if: matrix.arch == 'amd64'
+        working-directory: crates
+        run: env -u RUSTFLAGS cargo deny check licenses bans sources
 
       - name: "Guard: fae-metaopt boundary (mutation stays offline/CLI-only)"
         run: bash scripts/ci/guard-metaopt-boundary.sh
@@ -216,7 +239,7 @@ jobs:
       # Cache the Qwen3-ASR GGUF + mmproj (~2.5GB) used by the round-trip
       # intelligibility gate. Keyed on models.lock so a model bump invalidates it.
       - name: Cache Qwen3-ASR model (round-trip STT)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/linux/data/fae/models/llamacpp/asr
           key: qwen3-asr-${{ matrix.arch }}-${{ hashFiles('native/macos/Fae/Sources/Fae/Resources/Models/models.lock') }}
@@ -257,7 +280,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
           lfs: true
@@ -269,7 +292,7 @@ jobs:
             build-essential pkg-config libasound2-dev file
 
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: x86_64-unknown-linux-gnu
 
@@ -289,7 +312,7 @@ jobs:
       # Keyed on models.lock so a model bump invalidates the cache. First run
       # downloads; subsequent runs reuse — keeps the heavy lane affordable.
       - name: Cache Gemma-4 E4B GGUF + mmproj
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/linux/data/fae/models/llamacpp
           key: gemma4-e4b-qat-${{ hashFiles('native/macos/Fae/Sources/Fae/Resources/Models/models.lock') }}
