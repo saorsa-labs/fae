@@ -107,7 +107,26 @@ impl PeerOutbound {
     }
 
     /// Wrap `text` in a `direct_message` envelope and send it to `to_agent_id`.
+    ///
+    /// This is the single chokepoint for ALL outbound peer text (the guest
+    /// `auto_reply` routes through it), so the PII egress membrane is enforced here:
+    /// credential-shaped text is NEVER sent to an external peer, even if the model
+    /// reproduced a secret. Fail closed — audit + refuse rather than leak.
     pub async fn send_direct_message(&self, to_agent_id: &str, text: &str) -> Result<(), String> {
+        if fae_pii_membrane::should_block_remote_egress(text) {
+            let record = AuditRecord {
+                event_type: "peer_egress_blocked".to_owned(),
+                envelope_id: next_envelope_id("egress-block"),
+                sender_id: self.own_agent_id.clone(),
+                kind: None,
+                decision: GateDecision::Rejected,
+                reason: "pii_membrane_blocked_outbound".to_owned(),
+            };
+            if let Err(error) = append_audit_jsonl(&self.audit_path, &record) {
+                tracing::warn!("peer egress-block audit append failed: {error}");
+            }
+            return Err("outbound message blocked by PII egress membrane".to_owned());
+        }
         let raw = build_direct_message_envelope(&self.own_agent_id, text)?;
         self.client
             .direct_send(to_agent_id, &raw)
@@ -650,6 +669,60 @@ mod tests {
         assert!(content.contains("peer_consent_decision"));
         assert!(content.contains("env-42"));
         assert!(content.contains("owner_consent_granted"));
+    }
+
+    // ── S-H3: PII egress membrane on outbound peer text ──
+
+    #[test]
+    fn send_direct_message_blocks_credential_shaped_egress() {
+        // The membrane check runs BEFORE any network send (the client points at a
+        // dead address, never contacted). This is the exact path `auto_reply` uses,
+        // so a guest auto-reply carrying a credential shape is blocked here too.
+        let dir = tempfile::tempdir().unwrap();
+        let audit = dir.path().join("peer_envelope_audit.jsonl");
+        let outbound = PeerOutbound::new(
+            X0xPeerClient::new("http://127.0.0.1:1", "tok").unwrap(),
+            OWN.to_owned(),
+            HashSet::new(),
+            audit.clone(),
+        );
+        // Credential shape built by concatenation so no secret-shaped literal is committed.
+        let secret_reply = format!("sure, the key is {}{}", "sk-", "abcdefghijklmnopqrstuvwx");
+        let result = tokio_test_block(outbound.send_direct_message("peer-1", &secret_reply));
+        assert!(
+            result.is_err(),
+            "credential-shaped egress must be blocked before send"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("membrane") || err.contains("blocked"),
+            "unexpected error: {err}"
+        );
+        let content = std::fs::read_to_string(&audit).unwrap();
+        assert!(
+            content.contains("peer_egress_blocked"),
+            "egress block must be audited"
+        );
+    }
+
+    #[test]
+    fn send_direct_message_allows_benign_text_past_the_membrane() {
+        // Benign text must NOT be blocked by the membrane; it proceeds to the send
+        // path (which then fails at the dead network address, a DIFFERENT error).
+        let outbound = PeerOutbound::new(
+            X0xPeerClient::new("http://127.0.0.1:1", "tok").unwrap(),
+            OWN.to_owned(),
+            HashSet::new(),
+            std::env::temp_dir().join("unused-egress-audit.jsonl"),
+        );
+        let result = tokio_test_block(
+            outbound.send_direct_message("peer-1", "The weather in Edinburgh is mild today."),
+        );
+        let err = result.expect_err("dead address must fail the network send");
+        assert!(
+            !err.contains("membrane"),
+            "benign text must not be membrane-blocked, got: {err}"
+        );
     }
 
     // ── event-bus mapping ──

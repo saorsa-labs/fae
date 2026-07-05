@@ -26,6 +26,7 @@
     not(test),
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::sync::OnceLock;
 
@@ -89,9 +90,11 @@ struct CompiledRule {
     regex: regex::Regex,
 }
 
-// The 12 detection rules, ported byte-for-byte from the Swift source. Patterns use
-// only features the Rust linear-time `regex` engine supports (no lookbehind /
-// backreferences), so every pattern compiles — asserted by `all_rules_compile`.
+// The 13 detection rules. Most are ported byte-for-byte from the Swift source; a
+// few are intentional egress-hardening divergences (the case-insensitive PEM rule
+// and the AWS `AKIA…` rule below). Patterns use only features the Rust linear-time
+// `regex` engine supports (no lookbehind / backreferences), so every pattern
+// compiles — asserted at init (fail-closed) and by `all_rules_compile`.
 const RAW_RULES: &[RawRule] = &[
     RawRule {
         label: "private_key_block",
@@ -104,7 +107,9 @@ const RAW_RULES: &[RawRule] = &[
         // (`-----BEGIN RSA PRIVATE KEY-----`, `... OPENSSH PRIVATE KEY-----`, etc.).
         // This pattern catches the real PKCS#1 / PKCS#8 / OpenSSH / PGP private
         // key headers. Marked as a deliberate divergence from Swift, not parity.
-        pattern: r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?-----",
+        // `(?i)`: PEM headers are conventionally upper-case, but a lower-case
+        // (or mixed-case) header still names a private key and MUST be caught.
+        pattern: r"(?i)-----BEGIN (?:RSA |DSA |EC |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?-----",
     },
     RawRule {
         label: "seed_phrase",
@@ -142,6 +147,14 @@ const RAW_RULES: &[RawRule] = &[
         pattern: r"(?i)\bAIza[0-9A-Za-z\-_]{20,}\b",
     },
     RawRule {
+        // AWS access key IDs are exactly 20 chars (`AKIA` + 16 upper-alnum), so they
+        // slip UNDER the 40-char `long_opaque_token` catch-all. Case-sensitive by
+        // spec (AWS emits upper-case). Intentional hardening, not Swift parity.
+        label: "aws_access_key",
+        level: SensitivityLevel::LikelyCredential,
+        pattern: r"\bAKIA[0-9A-Z]{16}\b",
+    },
+    RawRule {
         label: "ssh_key",
         level: SensitivityLevel::HighlySensitive,
         pattern: r"(?i)\bssh-(?:rsa|ed25519|ecdsa)\s+[A-Za-z0-9+/=]{20,}",
@@ -163,23 +176,47 @@ const RAW_RULES: &[RawRule] = &[
     },
 ];
 
-/// Lazily compile all rules once and cache them for the process lifetime. Bad
-/// patterns are skipped (matching Swift's `try?` resilience) — but
-/// `all_rules_compile` proves every static pattern compiles, so a skip in practice
-/// indicates a regression in the `RAW_RULES` table.
+/// Compile a raw rule table, failing if ANY pattern is invalid. Pure — no process
+/// env, no globals — so the fail-closed invariant is unit-testable with a
+/// deliberately-broken table. On success every raw rule has a compiled counterpart
+/// (`out.len() == raw.len()`); a `filter_map(...ok())` would instead silently DROP
+/// a broken rule and let the secret it guards egress un-scanned.
+fn compile_rules(raw: &[RawRule]) -> Result<Vec<CompiledRule>, String> {
+    let mut out = Vec::with_capacity(raw.len());
+    for r in raw {
+        let regex = regex::Regex::new(r.pattern)
+            .map_err(|e| format!("rule {:?} failed to compile: {e}", r.label))?;
+        out.push(CompiledRule {
+            label: r.label,
+            level: r.level,
+            regex,
+        });
+    }
+    if out.len() != raw.len() {
+        return Err(format!(
+            "compiled {} of {} rules (table integrity broken)",
+            out.len(),
+            raw.len()
+        ));
+    }
+    Ok(out)
+}
+
+/// Lazily compile all rules once and cache them for the process lifetime. FAIL
+/// CLOSED: if any pattern fails to compile (a `RAW_RULES` regression), abort the
+/// process rather than serve with an incomplete egress membrane — a silently
+/// dropped rule is a hole through which a secret could leave un-scanned.
 fn compiled_rules() -> &'static [CompiledRule] {
     static RULES: OnceLock<Vec<CompiledRule>> = OnceLock::new();
-    RULES.get_or_init(|| {
-        RAW_RULES
-            .iter()
-            .filter_map(|r| {
-                regex::Regex::new(r.pattern).ok().map(|regex| CompiledRule {
-                    label: r.label,
-                    level: r.level,
-                    regex,
-                })
-            })
-            .collect()
+    RULES.get_or_init(|| match compile_rules(RAW_RULES) {
+        Ok(rules) => rules,
+        Err(e) => {
+            eprintln!(
+                "FATAL: fae-pii-membrane egress rule table failed to initialize: {e}. \
+                 Refusing to run with an incomplete membrane."
+            );
+            std::process::abort();
+        }
     })
 }
 
@@ -310,13 +347,70 @@ mod tests {
 
     #[test]
     fn all_rules_compile() {
-        // Every static pattern must compile; a skip in `compiled_rules` is a
-        // regression. This is the test the advisor asked for: runtime is resilient
-        // (skip-on-fail), but the table is asserted complete.
+        // Every static pattern must compile and produce a compiled counterpart:
+        // count parity is the fail-closed invariant (`compiled_rules` aborts the
+        // process otherwise, so reaching this assert already proves no rule was
+        // dropped).
         assert_eq!(compiled_rules().len(), RAW_RULES.len());
     }
 
-    // ── Per-label coverage: each of the 12 rules fires and reports its tier ─────
+    #[test]
+    fn broken_rule_table_is_rejected_fail_closed() {
+        // A deliberately-invalid regex must make `compile_rules` ERROR (its caller
+        // aborts, failing closed) rather than silently drop the rule. Building the
+        // membrane must be all-or-nothing, never partial.
+        let bad = [RawRule {
+            label: "deliberately_broken",
+            level: SensitivityLevel::LikelyCredential,
+            pattern: "(unterminated",
+        }];
+        assert!(
+            compile_rules(&bad).is_err(),
+            "an invalid pattern must fail compilation, not be skipped"
+        );
+        // And the real table compiles fully, with count parity (no silent drops).
+        let good = compile_rules(RAW_RULES).expect("real RAW_RULES table must compile");
+        assert_eq!(good.len(), RAW_RULES.len());
+    }
+
+    // ── AWS access-key hardening (S-H2: 20-char AKIA slips the 40-char catch-all) ─
+
+    #[test]
+    fn aws_access_key_id_is_blocked() {
+        // Built by concatenation so no secret-shaped literal reaches git.
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let text = format!("aws access key {key} for the bucket");
+        let result = scan(&text);
+        assert!(
+            result.matched_labels.iter().any(|l| l == "aws_access_key"),
+            "AKIA key not caught; got {:?}",
+            result.matched_labels
+        );
+        assert!(result.level >= SensitivityLevel::LikelyCredential);
+        assert!(should_block_remote_egress(&text));
+    }
+
+    // ── PEM case-insensitivity (S-H2: lower/mixed-case headers are still keys) ────
+
+    #[test]
+    fn pem_header_detection_is_case_insensitive() {
+        for header in [
+            "-----begin rsa private key-----",
+            "-----Begin OpenSSH Private Key-----",
+        ] {
+            let result = scan(header);
+            assert!(
+                result
+                    .matched_labels
+                    .iter()
+                    .any(|l| l == "private_key_block"),
+                "case-variant PEM header {header:?} was NOT caught"
+            );
+            assert!(should_block_remote_egress(header));
+        }
+    }
+
+    // ── Per-label coverage: each rule fires and reports its tier ─────────────────
 
     #[test]
     fn every_rule_fires_on_a_real_sample() {
