@@ -28,6 +28,9 @@ use crate::server_request::{ServerReply, ServerRequester};
 use crate::session::{
     handle_frame, run_authorized_agent_prompt, run_authorized_delegate, run_authorized_mcp_list,
     run_authorized_skillhost_activate, run_authorized_skillhost_list, run_authorized_skillhost_run,
+    handle_frame, run_authorized_agent_prompt, run_authorized_delegate,
+    run_authorized_skillhost_activate, run_authorized_skillhost_archive,
+    run_authorized_skillhost_list, run_authorized_skillhost_run, run_authorized_skillhost_usage,
     run_authorized_toolhost_execute, SessionBackends, SessionState,
 };
 use crate::skillhost::SkillHost;
@@ -634,6 +637,51 @@ async fn handle_connection(
                     }
                     if cmd.command == "skillhost.activate" {
                         let outcome = run_authorized_skillhost_activate(
+                            record,
+                            &cmd,
+                            &skill_host,
+                            now,
+                            event_id,
+                        );
+                        if append_audit_jsonl(audit_path, &outcome.audit).is_err() {
+                            let response = Response::error(
+                                &outcome.response.request_id,
+                                "audit_error",
+                                "audit write failed",
+                            );
+                            sink.send_line(response_line(&response)?);
+                            return Ok(());
+                        }
+                        sink.send_line(response_line(&outcome.response)?);
+                        continue;
+                    }
+                    // Phase G4: `skillhost.usage` — read-only per-skill run
+                    // counters (zero-run skills included). Handled inline.
+                    if cmd.command == "skillhost.usage" {
+                        let outcome = run_authorized_skillhost_usage(
+                            record,
+                            &cmd,
+                            &skill_host,
+                            now,
+                            event_id,
+                        );
+                        if append_audit_jsonl(audit_path, &outcome.audit).is_err() {
+                            let response = Response::error(
+                                &outcome.response.request_id,
+                                "audit_error",
+                                "audit write failed",
+                            );
+                            sink.send_line(response_line(&response)?);
+                            return Ok(());
+                        }
+                        sink.send_line(response_line(&outcome.response)?);
+                        continue;
+                    }
+                    // Phase G4: `skillhost.archive` — move an `auto-*` skill to
+                    // skills-archived/ (fail-closed name check). Handled inline
+                    // (a synchronous filesystem rename, no confirm round-trip).
+                    if cmd.command == "skillhost.archive" {
+                        let outcome = run_authorized_skillhost_archive(
                             record,
                             &cmd,
                             &skill_host,

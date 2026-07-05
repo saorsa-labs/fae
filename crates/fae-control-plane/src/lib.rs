@@ -372,6 +372,11 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         // intercepts `mcp.list` like `skillhost.list`).
         "mcp.list" => &[Scope::ToolExecuteSafe],
         "mcp.invoke" => &[Scope::McpInvoke],
+        // Phase G4: usage counters (read-only) + auto-skill archival. Archive
+        // mutates only skill directories and is further guarded daemon-side by
+        // the fail-closed `auto-` name-prefix check, so the safe envelope
+        // scope suffices for both.
+        "skillhost.usage" | "skillhost.archive" => &[Scope::ToolExecuteSafe],
         "scheduler.list" => &[Scope::SchedulerRead],
         "scheduler.mutate" => &[Scope::SchedulerWrite],
         "agent.run" => &[Scope::AgentExecute],
@@ -1287,7 +1292,15 @@ mod tests {
         // gate to the inner ToolHost bash policy (execute_governed). All three
         // take the SAFE envelope so the wire authorize returns Allow (a dangerous
         // scope here would map to ConfirmRequired and break deferred confirm).
-        for cmd in ["skillhost.list", "skillhost.activate", "skillhost.run"] {
+        // Phase G4: usage (read) + archive (auto-* prefix guarded daemon-side)
+        // also take the safe envelope scope.
+        for cmd in [
+            "skillhost.list",
+            "skillhost.activate",
+            "skillhost.run",
+            "skillhost.usage",
+            "skillhost.archive",
+        ] {
             assert_eq!(
                 required_scopes(cmd),
                 Some(&[Scope::ToolExecuteSafe][..]),

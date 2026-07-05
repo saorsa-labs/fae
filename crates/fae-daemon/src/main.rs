@@ -479,7 +479,14 @@ async fn main() -> DaemonResult<()> {
     let skill_audit = std::sync::Arc::new(skillhost::audit::ConductorStoreSkillAudit::new(
         std::sync::Arc::clone(&toolhost_store),
     ));
-    let skill_host = std::sync::Arc::new(skillhost::SkillHost::new(skills_dir, skill_audit));
+    // Phase G4: usage counters persist next to the conductor store audit files
+    // (skillhost_usage.json) so lifecycle curation survives daemon restarts.
+    let usage_path = toolhost_store.dir().join("skillhost_usage.json");
+    let skill_host = std::sync::Arc::new(skillhost::SkillHost::with_usage_path(
+        skills_dir,
+        skill_audit,
+        usage_path,
+    ));
 
     // Phase G3: external MCP tool tier. Declared servers only (`FAE_MCP_CONFIG`).
     // No env / no config => `None` (MCP silently absent). A malformed config is

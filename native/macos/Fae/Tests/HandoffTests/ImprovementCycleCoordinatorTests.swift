@@ -1630,4 +1630,98 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let storedState = try await store.readState()
         XCTAssertNil(storedState.currentAdapterPath, "Nothing should be deployed")
     }
+
+    // MARK: - Skill Curation Eligibility (Phase G4)
+
+    private static let oneDayMs: Int64 = 24 * 60 * 60 * 1000
+
+    func testCurationEligibility_staleUnusedAutoSkillIsEligible() {
+        let nowMs: Int64 = 1_000_000_000_000
+        let usage: [[String: Any]] = [
+            [
+                "name": "auto-stale-skill",
+                "run_count": 0,
+                "first_seen_ms": NSNumber(value: nowMs - 15 * Self.oneDayMs),
+            ]
+        ]
+        let eligible = ImprovementCycleCoordinator.skillsEligibleForArchival(usage, nowMs: nowMs)
+        XCTAssertEqual(
+            eligible, ["auto-stale-skill"],
+            "An auto-* skill never run and >14 days old must be archived — that is the whole point of curation")
+    }
+
+    func testCurationEligibility_builtinSkillNeverEligible() {
+        let nowMs: Int64 = 1_000_000_000_000
+        let usage: [[String: Any]] = [
+            [
+                "name": "proactive-awareness",
+                "run_count": 0,
+                "first_seen_ms": NSNumber(value: nowMs - 100 * Self.oneDayMs),
+            ]
+        ]
+        let eligible = ImprovementCycleCoordinator.skillsEligibleForArchival(usage, nowMs: nowMs)
+        XCTAssertTrue(
+            eligible.isEmpty,
+            "Built-in skills (no auto- prefix) must NEVER be archived regardless of usage")
+    }
+
+    func testCurationEligibility_freshAutoSkillNotEligible() {
+        let nowMs: Int64 = 1_000_000_000_000
+        let usage: [[String: Any]] = [
+            [
+                "name": "auto-new-skill",
+                "run_count": 0,
+                "first_seen_ms": NSNumber(value: nowMs - 3 * Self.oneDayMs),
+            ]
+        ]
+        let eligible = ImprovementCycleCoordinator.skillsEligibleForArchival(usage, nowMs: nowMs)
+        XCTAssertTrue(
+            eligible.isEmpty,
+            "An auto-* skill under the 14-day threshold gets a fair chance to be used first")
+    }
+
+    func testCurationEligibility_usedAutoSkillNotEligible() {
+        let nowMs: Int64 = 1_000_000_000_000
+        let usage: [[String: Any]] = [
+            [
+                "name": "auto-used-skill",
+                "run_count": 5,
+                "first_seen_ms": NSNumber(value: nowMs - 30 * Self.oneDayMs),
+                "last_used_ms": NSNumber(value: nowMs - 20 * Self.oneDayMs),
+            ]
+        ]
+        let eligible = ImprovementCycleCoordinator.skillsEligibleForArchival(usage, nowMs: nowMs)
+        XCTAssertTrue(
+            eligible.isEmpty,
+            "A skill that has actually run is providing value — never archive it")
+    }
+
+    func testCurationEligibility_noTimestampAnchorSkipped() {
+        let nowMs: Int64 = 1_000_000_000_000
+        // Pre-G4 stores have no first_seen_ms; unknown age must fail safe (skip).
+        let usage: [[String: Any]] = [
+            ["name": "auto-legacy-skill", "run_count": 0]
+        ]
+        let eligible = ImprovementCycleCoordinator.skillsEligibleForArchival(usage, nowMs: nowMs)
+        XCTAssertTrue(
+            eligible.isEmpty,
+            "Unknown age must fail safe: never archive a skill we cannot date")
+    }
+
+    func testCurationEligibility_capsAtMaxPerCycleOldestFirst() {
+        let nowMs: Int64 = 1_000_000_000_000
+        let usage: [[String: Any]] = (1...5).map { i in
+            [
+                "name": "auto-skill-\(i)",
+                "run_count": 0,
+                "first_seen_ms": NSNumber(value: nowMs - (14 + Int64(i)) * Self.oneDayMs),
+            ]
+        }
+        let eligible = ImprovementCycleCoordinator.skillsEligibleForArchival(
+            usage, nowMs: nowMs, maxCount: 3)
+        XCTAssertEqual(eligible.count, 3, "Conservatism cap: at most 3 archives per night")
+        XCTAssertEqual(
+            eligible, ["auto-skill-5", "auto-skill-4", "auto-skill-3"],
+            "Oldest skills are archived first when over the cap")
+    }
 }

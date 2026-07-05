@@ -24,7 +24,7 @@
 //! calls INTO this host. No loop relocation, no conductor-as-`ModelProvider`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::skillhost::audit::{SkillEvent, SkillHostAudit, SkillHostAuditRecord};
 use crate::skillhost::manifest::{SkillIntegrity, SkillManifest};
@@ -34,6 +34,7 @@ pub mod audit;
 pub mod integrity;
 pub mod manifest;
 pub mod parse;
+pub mod usage;
 
 const SKILL_MD: &str = "SKILL.md";
 const MANIFEST_JSON: &str = "MANIFEST.json";
@@ -117,13 +118,26 @@ pub enum SkillHostError {
     /// The fail-closed audit write failed — the operation is refused.
     #[error("skill audit write failed: {0}")]
     Audit(String),
+    /// Archive was refused (Phase G4): only `auto-*` skills may be archived.
+    #[error("skill archive refused: {name}: {reason}")]
+    ArchiveRefused {
+        /// The skill name supplied.
+        name: String,
+        /// Why the archive was refused.
+        reason: String,
+    },
+    /// The filesystem move for an archive failed (Phase G4).
+    #[error("skill archive move failed: {0}")]
+    ArchiveMove(String),
 }
 
 /// The governed skill-discovery + execution-preparation host.
 pub struct SkillHost {
-    entries: Vec<SkillEntry>,
+    skills_dir: PathBuf,
+    entries: Mutex<Vec<SkillEntry>>,
     audit: Arc<dyn SkillHostAudit>,
     clock: Arc<dyn ToolHostClock>,
+    usage: Mutex<usage::UsageStore>,
 }
 
 impl SkillHost {
@@ -131,20 +145,54 @@ impl SkillHost {
     /// event. A missing/unreadable `skills_dir` yields an empty host (no skills)
     /// — never an error, so a fresh install with no skills serves cleanly.
     pub fn new(skills_dir: impl AsRef<Path>, audit: Arc<dyn SkillHostAudit>) -> Self {
-        Self::with_clock(skills_dir, audit, Arc::new(SystemToolHostClock))
+        Self::with_clock_inner(skills_dir, audit, Arc::new(SystemToolHostClock), None)
+    }
+
+    /// Construct with a persistent usage-counter file (Phase G4). Counters are
+    /// loaded from `usage_path` (corrupt file → fresh + warning) and persisted
+    /// on every increment/discovery.
+    pub fn with_usage_path(
+        skills_dir: impl AsRef<Path>,
+        audit: Arc<dyn SkillHostAudit>,
+        usage_path: PathBuf,
+    ) -> Self {
+        Self::with_clock_inner(
+            skills_dir,
+            audit,
+            Arc::new(SystemToolHostClock),
+            Some(usage_path),
+        )
     }
 
     /// Construct with an explicit clock (tests inject a fixed clock).
+    #[cfg(test)]
     pub fn with_clock(
         skills_dir: impl AsRef<Path>,
         audit: Arc<dyn SkillHostAudit>,
         clock: Arc<dyn ToolHostClock>,
     ) -> Self {
-        let entries = discover(skills_dir.as_ref());
+        Self::with_clock_inner(skills_dir, audit, clock, None)
+    }
+
+    fn with_clock_inner(
+        skills_dir: impl AsRef<Path>,
+        audit: Arc<dyn SkillHostAudit>,
+        clock: Arc<dyn ToolHostClock>,
+        usage_path: Option<PathBuf>,
+    ) -> Self {
+        let skills_dir = skills_dir.as_ref().to_path_buf();
+        let entries = discover(&skills_dir);
+        let mut usage_store = usage_path
+            .map(usage::UsageStore::load)
+            .unwrap_or_else(usage::UsageStore::empty);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        usage_store.note_discovered(&names, clock.now_ms());
         let host = Self {
-            entries,
+            skills_dir,
+            entries: Mutex::new(entries),
             audit,
             clock,
+            usage: Mutex::new(usage_store),
         };
         host.audit_discovery();
         host
@@ -154,7 +202,8 @@ impl SkillHost {
     /// effort: an audit-write failure at discovery does not abort startup (the
     /// per-run path re-audits and fails closed there).
     fn audit_discovery(&self) {
-        for e in &self.entries {
+        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        for e in entries.iter() {
             let (event, status) = match &e.availability {
                 Availability::Available => (
                     SkillEvent::Loaded,
@@ -181,6 +230,8 @@ impl SkillHost {
     #[must_use]
     pub fn list(&self) -> Vec<SkillListing> {
         self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|e| match &e.availability {
                 Availability::Available => SkillListing {
@@ -220,7 +271,7 @@ impl SkillHost {
         }
         // Re-verify executable skills against disk before handing out the body.
         if entry.kind == SkillKind::Executable {
-            self.reverify(entry)?;
+            self.reverify(&entry)?;
         }
         let md_path = entry.dir.join(SKILL_MD);
         let content = std::fs::read_to_string(&md_path)
@@ -258,7 +309,7 @@ impl SkillHost {
             return Err(SkillHostError::NotExecutable(entry.name.clone()));
         }
         // Immediately-before-execution integrity re-check (fresh from disk).
-        let integrity = self.reverify(entry)?;
+        let integrity = self.reverify(&entry)?;
 
         // Resolve the script to a DECLARED checksum key (defense in depth: even
         // past the integrity gate, only a declared+verified script may run).
@@ -281,10 +332,62 @@ impl SkillHost {
             })
             .map_err(|e| SkillHostError::Audit(e.to_string()))?;
 
+        // Phase G4: bump the usage counter on successful run preparation.
+        self.usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .increment(&entry.name, self.clock.now_ms());
+
         Ok(RunPlan {
             skill: entry.name.clone(),
             command: format!("uv run --script {}", shell_quote(&abs.to_string_lossy())),
         })
+    }
+
+    /// Return usage counters for all discovered skills, zero-filled for skills
+    /// that have never run (Phase G4).
+    #[must_use]
+    pub fn list_usage(&self) -> Vec<usage::UsageListing> {
+        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        self.usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .merged_listing(names.into_iter())
+    }
+
+    /// Move an `auto-*` skill to `<skills-parent>/skills-archived/<name>`
+    /// (Phase G4). Fail-closed: `name` must start with `"auto-"` and be a
+    /// currently discovered skill. Re-runs discovery after the move so
+    /// subsequent `list`/`activate`/`run` calls no longer see it.
+    ///
+    /// # Errors
+    /// [`SkillHostError::ArchiveRefused`] for non-`auto-` names,
+    /// [`SkillHostError::NotFound`] for unknown skills, and
+    /// [`SkillHostError::ArchiveMove`] for filesystem failures.
+    pub fn archive(&self, name: &str) -> Result<(), SkillHostError> {
+        if !name.starts_with("auto-") {
+            return Err(SkillHostError::ArchiveRefused {
+                name: name.to_string(),
+                reason: "only auto-generated skills (name prefix 'auto-') may be archived"
+                    .to_string(),
+            });
+        }
+        let entry = self.lookup(name)?;
+        let archive_root = self
+            .skills_dir
+            .parent()
+            .ok_or_else(|| SkillHostError::ArchiveMove("skills dir has no parent".to_string()))?
+            .join("skills-archived");
+        std::fs::create_dir_all(&archive_root)
+            .map_err(|e| SkillHostError::ArchiveMove(format!("create archive dir: {e}")))?;
+        let target = archive_root.join(name);
+        std::fs::rename(&entry.dir, &target).map_err(|e| {
+            SkillHostError::ArchiveMove(format!("rename {}: {e}", entry.dir.display()))
+        })?;
+        // Re-discover so the archived skill disappears from all surfaces.
+        *self.entries.lock().unwrap_or_else(PoisonError::into_inner) = discover(&self.skills_dir);
+        Ok(())
     }
 
     /// Re-load + re-validate + re-verify an executable skill from disk. Returns
@@ -299,14 +402,18 @@ impl SkillHost {
         }
     }
 
-    /// Find a skill by name, rejecting unsafe names.
-    fn lookup(&self, name: &str) -> Result<&SkillEntry, SkillHostError> {
+    /// Find a skill by name (cloned out of the entries lock), rejecting unsafe
+    /// names.
+    fn lookup(&self, name: &str) -> Result<SkillEntry, SkillHostError> {
         if !is_safe_skill_name(name) {
             return Err(SkillHostError::NotFound(name.to_string()));
         }
         self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .find(|e| e.name == name)
+            .cloned()
             .ok_or_else(|| SkillHostError::NotFound(name.to_string()))
     }
 }
@@ -623,6 +730,68 @@ mod tests {
         assert!(matches!(
             h.prepare_run("forge", None, "c"),
             Err(SkillHostError::Audit(_))
+        ));
+    }
+
+    #[test]
+    fn usage_counter_increments_on_prepare_run() {
+        let root = tempfile::tempdir().expect("tmp");
+        write_executable(root.path(), "forge");
+        let h = host(root.path(), Arc::new(CapturingSkillAudit::new()));
+        let before = h.list_usage();
+        let forge = before.iter().find(|l| l.name == "forge").expect("forge");
+        assert_eq!(forge.run_count, 0);
+        assert_eq!(forge.first_seen_ms, Some(1_700_000_000_000));
+        h.prepare_run("forge", None, "c1").expect("run");
+        let after = h.list_usage();
+        let forge = after.iter().find(|l| l.name == "forge").expect("forge");
+        assert_eq!(forge.run_count, 1);
+        assert_eq!(forge.last_used_ms, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn archive_non_auto_skill_refused() {
+        let root = tempfile::tempdir().expect("tmp");
+        write_instruction(root.path(), "collaborate");
+        let h = host(root.path(), Arc::new(CapturingSkillAudit::new()));
+        assert!(matches!(
+            h.archive("collaborate"),
+            Err(SkillHostError::ArchiveRefused { .. })
+        ));
+        // Still listed after the refused archive.
+        assert_eq!(h.list().len(), 1);
+    }
+
+    #[test]
+    fn archive_unknown_auto_skill_not_found() {
+        let root = tempfile::tempdir().expect("tmp");
+        let h = host(root.path(), Arc::new(CapturingSkillAudit::new()));
+        assert!(matches!(
+            h.archive("auto-ghost"),
+            Err(SkillHostError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn archive_auto_skill_moves_and_disappears_from_list() {
+        let root = tempfile::tempdir().expect("tmp");
+        // Skills live under <root>/skills so the archive lands at
+        // <root>/skills-archived (sibling of the skills dir).
+        let skills = root.path().join("skills");
+        std::fs::create_dir_all(&skills).expect("mkdir");
+        write_instruction(&skills, "auto-test-fixture");
+        let h = host(&skills, Arc::new(CapturingSkillAudit::new()));
+        assert_eq!(h.list().len(), 1);
+        h.archive("auto-test-fixture").expect("archive");
+        assert!(h.list().is_empty());
+        assert!(root
+            .path()
+            .join("skills-archived/auto-test-fixture/SKILL.md")
+            .is_file());
+        // Gone from all surfaces after re-discovery.
+        assert!(matches!(
+            h.activate("auto-test-fixture"),
+            Err(SkillHostError::NotFound(_))
         ));
     }
 

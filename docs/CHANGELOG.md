@@ -116,6 +116,18 @@ Detailed version history moved from CLAUDE.md. For current architecture, see `CL
 - **Unit — catalog (`mcp/mod.rs`)**: config parse + `deny_unknown_fields`, allowlist filtering (a server-offered-but-unallowlisted tool never enters the catalog), invoke round trip via a mock `McpServerConnection`, undeclared-tool deny WITHOUT touching the server, and server-error → typed `McpError::Invoke`.
 - **Unit — governed gate (`toolhost/mod.rs`)**: owner-interactive invoke runs + records an `isolation:"external"` audit row and an external receipt; proactive origin denies `mcp_origin_forbidden` without invoking; missing `McpInvoke` scope denies `missing_scope`; non-allowlisted tool denies `mcp_tool_not_declared`; no-catalog host denies `mcp_not_configured`.
 - **Integration (`tests/mcp_stdio.rs`)**: a REAL stdio spawn → initialize → tools/list → tools/call round trip against an in-repo `mock_mcp_server` bin, via the vendored `ProcessMcpConnection` (the exact transport `McpCatalog::spawn` uses).
+## Unreleased — Phase G commit 4 (auto-skill lifecycle curation)
+
+### New Features
+- **Daemon usage counters (`crates/fae-daemon/src/skillhost/usage.rs`)**: `SkillHost` now tracks `{run_count, last_used_ms, first_seen_ms}` per skill — incremented on each successful `prepare_run`, `first_seen_ms` stamped at discovery — persisted as `skillhost_usage.json` in the conductor store dir (sibling of the audit JSONLs, NEVER fae.db). A corrupt file starts fresh with a loud tracing warning (counters inform curation only, not security).
+- **`skillhost.usage` command (read, `ToolExecuteSafe`)**: returns `{usage: [{name, run_count, last_used_ms?, first_seen_ms?}]}` for every discovered skill — zero-run skills included, so curation can find stale ones.
+- **`skillhost.archive {name}` command (mutating, `ToolExecuteSafe`)**: moves `<skills>/<name>` → `<skills-parent>/skills-archived/<name>` — archival, never deletion. Fail-closed: the name MUST start with `auto-` (`archive_refused` otherwise) and be a currently discovered skill (`not_found`); discovery re-runs after the move so the skill disappears from `list`/`activate`/`run`.
+- **Swift nightly curation (`ImprovementCycleCoordinator`)**: during the metaOptimizing phase the cycle reads `skillhost.usage`, selects `auto-*` skills with `run_count == 0` older than 14 days (anchor: `last_used_ms` ?? `first_seen_ms`; unknown age fails safe), archives at most 3 per night (oldest first) via `skillhost.archive`, then triggers a `GitVaultManager.backup(reason: "skill-curation: archived <names>")`. Daemon unavailable ⇒ skip silently-with-log; a curation failure never fails the cycle. Wired from `FaeScheduler` (`setDaemonLLMEngine` + `setVaultManager`); `DaemonLLMEngine.sendDaemonCommand` is the new generic command round-trip returning the response body.
+- **`SkillManager.scanDirectory`** explicitly skips any `skills-archived` directory so archived skills are never re-discovered by the Swift skill surface.
+
+### Testing
+- **Rust**: `usage.rs` unit tests (zero-fill, increment, first-seen-once, corrupt-file-fresh, persist/reload round-trip); `skillhost/mod.rs` — counter increments on `prepare_run`, non-`auto-` archive refused, unknown skill `not_found`, successful archive moves the dir and vanishes from `list`/`activate`; control-plane scope test extended to `skillhost.usage`/`skillhost.archive`.
+- **Swift**: `ImprovementCycleCoordinatorTests` curation-eligibility suite — stale+unused auto-* eligible; built-in never eligible; fresh auto-* not eligible; used auto-* not eligible; missing timestamp anchor fails safe; cap of 3 oldest-first.
 
 ## Unreleased — Phase G commit 1 (context-compaction foundation)
 

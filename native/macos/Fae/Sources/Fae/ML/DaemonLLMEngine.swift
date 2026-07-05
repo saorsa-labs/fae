@@ -1416,6 +1416,19 @@ actor DaemonLLMEngine: LLMEngine {
         try await sendAdapterCommand(command: command, payload: payload)
     }
 
+    /// Send a command to the daemon and return the unwrapped response body.
+    /// Used by the nightly improvement cycle for `skillhost.usage` reads and
+    /// `skillhost.archive` mutations (Phase G4).
+    func sendDaemonCommand(_ command: String, payload: [String: Any]) async throws -> [String: Any]
+    {
+        guard isLoaded, let connection else { throw DaemonLLMEngineError.notLoaded }
+        let requestID = nextRequestID()
+        let frame = try DaemonWire.encodeFrame(
+            requestID: requestID, command: command, payload: payload)
+        let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
+        return try DaemonWire.unwrapResponse(raw)
+    }
+
     // MARK: - Audio two-pass helpers (S18)
 
     /// System prompt for the dedicated transcription pass. Tool-free and

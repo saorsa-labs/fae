@@ -1785,6 +1785,13 @@ actor FaeScheduler {
             await coordinator.setMetaOptimizer(optimizer)
         }
 
+        // Phase G4: wire the daemon engine + vault for nightly skill curation.
+        // A nil engine means curation skips silently-with-log inside the cycle.
+        await coordinator.setDaemonLLMEngine(daemonLLMEngine)
+        if let vault = vaultManager {
+            await coordinator.setVaultManager(vault)
+        }
+
         do {
             try await coordinator.runCycle()
         } catch {
