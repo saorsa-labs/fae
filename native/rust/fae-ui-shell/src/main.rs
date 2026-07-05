@@ -601,7 +601,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     // This shell exits as a process, so leaking the single orb window is acceptable
     // and avoids unsafe lifetime juggling around the OS window handle.
     let window: &'static Window = Box::leak(Box::new(window));
-    let orb_menu = OrbMenu::new()?;
+    // Read orb-menu config from env vars set by RustUiShellController at launch.
+    // `advanced`: FAE_ORB_ADVANCED_MENUS=1 reveals the engineering section.
+    // `fleet`:    FAE_ORB_FLEET=<agentId1>,<agentId2> builds the Hand-off submenu.
+    // Both apply at next launch after the user changes the Settings toggle.
+    let orb_advanced = std::env::var("FAE_ORB_ADVANCED_MENUS").ok().as_deref() == Some("1");
+    let orb_fleet: Vec<String> = std::env::var("FAE_ORB_FLEET")
+        .unwrap_or_default()
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    let orb_menu = OrbMenu::new(orb_advanced, &orb_fleet)?;
     let mut state = pollster::block_on(State::new(window, RenderMode::Floating))?;
     let mut orb_ui = OrbUiModel::new();
     let mut cursor_position = PhysicalPosition::new(210.0, 210.0);
@@ -658,6 +669,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     emit_menu_action(action);
                     handle_menu_action(action, target, &orb_ui, &mut web_panels, &panel_proxy);
                     window.request_redraw();
+                } else {
+                    // Dynamic items (e.g. handoff_<agentId>) bypass MenuAction —
+                    // emit the raw menu ID so Swift can dispatch them.
+                    let raw_id = event.id().as_ref();
+                    if !raw_id.is_empty() {
+                        emit_raw_menu_action(raw_id);
+                        window.request_redraw();
+                    }
                 }
             }
             // UX W1: a `request_input` command drives the pill's composer
@@ -1214,6 +1233,17 @@ fn emit_menu_action(action: MenuAction) {
             }
         }
         Err(error) => log::warn!("failed to encode menu action: {error}"),
+    }
+}
+
+/// Emit a dynamic menu action ID (e.g. `handoff_<agentId>`) that doesn't map
+/// to a `MenuAction` variant. Uses the same `{"type":"menu","action":"…"}` wire
+/// format as `emit_menu_action` so the Swift host handles it identically.
+fn emit_raw_menu_action(id: &str) {
+    let line = serde_json::json!({"type": "menu", "action": id}).to_string();
+    let mut stdout = io::stdout().lock();
+    if let Err(error) = writeln!(stdout, "{line}") {
+        log::warn!("failed to write raw menu action to stdout: {error}");
     }
 }
 

@@ -335,4 +335,44 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertFalse(config.startupIntroSeen)
         XCTAssertTrue(config.startupIntroSeenConfigured)
     }
+
+    // MARK: - UiConfig round-trip (W5 advanced menus)
+
+    func testUiAdvancedMenusDefaultIsFalse() {
+        let config = FaeConfig()
+        XCTAssertFalse(config.ui.advancedMenus,
+                       "advancedMenus must default false — non-experts must not see engineering menus")
+    }
+
+    func testUiAdvancedMenusRoundTripTrue() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [ui]
+        advancedMenus = true
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertTrue(config.ui.advancedMenus,
+                      "advancedMenus = true must parse and round-trip correctly")
+    }
+
+    func testUiAdvancedMenusSerializesAndReloads() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        var original = FaeConfig()
+        original.ui.advancedMenus = true
+        try original.save(to: fileURL)
+
+        let reloaded = FaeConfig.load(from: fileURL)
+        XCTAssertTrue(reloaded.ui.advancedMenus,
+                      "ui.advancedMenus must survive a serialize → reload cycle")
+    }
 }

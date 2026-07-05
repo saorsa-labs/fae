@@ -66,12 +66,14 @@ final class RustUiShellController: PillInputRouting {
     var onSkills: (() -> Void)?
     var onEditSoul: (() -> Void)?
     var onEditCustomInstructions: (() -> Void)?
-    var onAskAboutShortcuts: (() -> Void)?
-    var onAskAboutModels: (() -> Void)?
-    var onAskAboutPrivacy: (() -> Void)?
-    var onAskAboutTools: (() -> Void)?
+    /// Single "Ask Fae for Help" item — injects the canned discovery prompt.
+    /// Replaces the four "Ask About …" items removed in UX W5.
+    var onAskFaeForHelp: (() -> Void)?
     var onMemoryInbox: (() -> Void)?
     var onRescueMode: (() -> Void)?
+    /// Called when the user picks a "Hand off to…" agent from the orb context
+    /// menu. The argument is the full agent ID as stored in x0x.ownerFleet.
+    var onHandOff: ((String) -> Void)?
 
     /// Called after the orb host has crashed repeatedly and automatic
     /// restarts are exhausted. The app shows a Retry/Quit alert — the orb
@@ -146,6 +148,20 @@ final class RustUiShellController: PillInputRouting {
 
         let process = Process()
         process.executableURL = binaryURL
+
+        // Pass ui.advancedMenus and x0x.ownerFleet to the orb host so it can
+        // build the context menu at launch.  The orb menu is static after
+        // startup — the Swift bar picks up changes live via FaeConfig.load().
+        var orbEnv = ProcessInfo.processInfo.environment
+        let orbConfig = FaeConfig.load()
+        if orbConfig.ui.advancedMenus {
+            orbEnv["FAE_ORB_ADVANCED_MENUS"] = "1"
+        }
+        let fleet = orbConfig.x0x.ownerFleet
+        if !fleet.isEmpty {
+            orbEnv["FAE_ORB_FLEET"] = fleet.joined(separator: ",")
+        }
+        process.environment = orbEnv
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -740,15 +756,18 @@ final class RustUiShellController: PillInputRouting {
         case "skills": onSkills?()
         case "edit_soul": onEditSoul?()
         case "edit_custom_instructions": onEditCustomInstructions?()
-        case "ask_about_shortcuts": onAskAboutShortcuts?()
-        case "ask_about_models": onAskAboutModels?()
-        case "ask_about_privacy": onAskAboutPrivacy?()
-        case "ask_about_tools": onAskAboutTools?()
+        case "ask_fae_for_help": onAskFaeForHelp?()
         case "memory_inbox": onMemoryInbox?()
         case "rescue_mode": onRescueMode?()
         case "quit": onQuit?()
         default:
-            NSLog("RustUiShellController: unhandled menu action %@", action)
+            // Dynamic handoff items emitted as "handoff_<agentId>" by the orb host.
+            if action.hasPrefix("handoff_") {
+                let agentId = String(action.dropFirst("handoff_".count))
+                onHandOff?(agentId)
+            } else {
+                NSLog("RustUiShellController: unhandled menu action %@", action)
+            }
         }
     }
 
