@@ -534,11 +534,55 @@ impl ToolHost {
         let Some(tool) = registry.get(&req.tool) else {
             return Err(ToolHostError::UnknownTool(req.tool.clone()));
         };
+        // C1+C2: on the Host tier the fluers `bash` tool runs `sh -c <command>`
+        // over the bare `LocalSessionEnv` with the daemon's full ambient env and
+        // no OS sandbox. Rewrite the command so it runs env-scrubbed and (macOS)
+        // under a seatbelt that denies reads of the protected paths. Fails closed
+        // if isolation can't be enforced. Only `bash` needs this (read/write/edit/
+        // glob/grep are fd-anchored + path-confined by fluers already).
+        let input = self.effective_tool_input(req, isolation)?;
         let output = tool
-            .execute(ctx, req.input.clone())
+            .execute(ctx, input)
             .await
             .map_err(|e| ToolHostError::Tool(e.to_string()))?;
         Ok(ToolHostResult { output })
+    }
+
+    /// The tool input actually dispatched. Identity for every tool EXCEPT a
+    /// Host-tier `bash` call, whose `command` is rewritten by
+    /// [`isolation::wrap_host_bash_command`] (C1 env scrub + C2 macOS protected-
+    /// read deny). Fails closed (`Denied`) if isolation cannot be enforced —
+    /// never silently runs an unsandboxed Host bash.
+    fn effective_tool_input(
+        &self,
+        req: &ToolHostRequest,
+        isolation: IsolationMode,
+    ) -> Result<Value, ToolHostError> {
+        if isolation != IsolationMode::Host || req.tool != "bash" {
+            return Ok(req.input.clone());
+        }
+        let Some(command) = req.input.get("command").and_then(Value::as_str) else {
+            // No `command` field: let the fluers `bash` tool reject it itself.
+            return Ok(req.input.clone());
+        };
+        match isolation::wrap_host_bash_command(command, self.home.as_deref()) {
+            Ok(wrapped) => {
+                let mut input = req.input.clone();
+                if let Value::Object(map) = &mut input {
+                    map.insert("command".to_string(), Value::String(wrapped));
+                }
+                Ok(input)
+            }
+            Err(reason) => {
+                tracing::error!(
+                    tool = %req.tool,
+                    call_id = %req.call_id,
+                    reason,
+                    "host bash isolation unavailable — denying (fail closed)"
+                );
+                Err(ToolHostError::Denied(reason.into()))
+            }
+        }
     }
 
     /// Cheap existence probe for the file a write/edit targets (feeds the
@@ -782,6 +826,14 @@ impl ToolHost {
     /// path on a runner that actually has a backend).
     fn set_jail_available(&mut self, available: bool) {
         self.jail_available = available;
+    }
+
+    /// Override the resolved home dir WITHOUT mutating the process `HOME` env
+    /// (which would race concurrent host-constructing tests under `cargo test`).
+    /// Lets the C1+C2 host-bash test point the protected-read set at a hermetic
+    /// temp home.
+    fn set_home(&mut self, home: Option<String>) {
+        self.home = home;
     }
 }
 
@@ -1976,6 +2028,219 @@ mod tests {
     /// Quote a path for safe inclusion in a `sh -c` command (test helper).
     fn shell_quote(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
+    }
+
+    // -----------------------------------------------------------------------
+    // C1+C2: Host-tier `bash` hardening on the REAL execute_governed dispatch
+    // -----------------------------------------------------------------------
+
+    /// Concatenate the text chunks of a fluers `bash` ToolResult (the human
+    /// `[exit N] --- stdout --- … --- stderr --- …` blob).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn bash_result_text(r: &ToolHostResult) -> String {
+        r.output
+            .content
+            .iter()
+            .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The `exit_code` from a fluers `bash` ToolResult's structured details.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn bash_exit(r: &ToolHostResult) -> i64 {
+        r.output
+            .details
+            .as_ref()
+            .and_then(|d| d.get("exit_code"))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(i64::MIN)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn host_bash_denies_protected_reads_and_scrubs_env_on_real_dispatch() {
+        // THE CRUX: drive a HOST-origin `bash` through the REAL execute_governed →
+        // run_tool dispatch (the exact path a `None`-origin `toolhost.execute`
+        // takes) and prove the daemon (1) denies reading a protected file even
+        // when the command EVADES the substring DamageControl gate, (2) scrubs the
+        // planted provider secret from the child env, and (3) still runs legitimate
+        // bash (echo + a non-protected read).
+        if !isolation::jail_backend_available() {
+            eprintln!("skip: no seatbelt backend on this runner");
+            return;
+        }
+        // A hermetic temp "home" holding a planted protected file. We point the
+        // host's protected-read set at it via `set_home` (NOT `set_var("HOME")`,
+        // which would race concurrent host-constructing tests under `cargo test`).
+        let home = tempfile::tempdir().expect("home");
+        let home_path = home.path().to_path_buf();
+        let home_str = home_path.to_string_lossy().into_owned();
+        // Secret values built by concatenation (git push-protection).
+        let file_secret = format!("{}-{}", "PROTECTED", "secret-file-value-abc");
+        let api_key = format!("{}-{}", "planted", "env-key-value-xyz");
+        std::fs::write(home_path.join(".secrets"), &file_secret).expect("write .secrets");
+        std::fs::write(home_path.join("notsecret.txt"), "public-ok").expect("write notsecret");
+        // The env plant proves C1; the value is scrubbed regardless, so a
+        // concurrent env-scrub test cannot invalidate the "absent" assertion.
+        std::env::set_var("FAE_OPENROUTER_API_KEY", &api_key);
+
+        let root = tempfile::tempdir().expect("root");
+        let audit = Arc::new(CapturingAudit::new());
+        let mut host = ToolHost::with_wiring(
+            root.path().to_path_buf(),
+            Limits::default(),
+            Arc::clone(&audit) as Arc<dyn ToolHostAudit>,
+            Arc::new(CapturingReceipts::new()) as Arc<dyn ToolHostReceipts>,
+            Arc::new(FakeEgressGate::allow()),
+            Arc::new(FixedClock),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await
+        .expect("host");
+        host.set_home(Some(home_str.clone()));
+        let conf = FakeConfirmation::approve();
+        let run = |cmd: String| {
+            host.execute_governed(
+                req_origin(
+                    dangerous_client(),
+                    "bash",
+                    json!({ "command": cmd }),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+        };
+
+        // (1) Evasive protected read: the protected path is reached through a
+        //     shell var (`h=<home>; cat "$h/.secrets"`) so the command text never
+        //     spells `<home>/.secrets` literally — the substring DamageControl gate
+        //     ALLOWS it, and the seatbelt must deny the read at execution.
+        let protected = run(format!("h={}; cat \"$h/.secrets\"", shell_quote(&home_str)))
+            .await
+            .expect("bash runs");
+        // (2) Env exfil attempt.
+        let env_leak = run("printenv FAE_OPENROUTER_API_KEY".to_string())
+            .await
+            .expect("bash runs");
+        // (3a) Benign bash.
+        let echo = run("echo hello".to_string()).await.expect("bash runs");
+        // (3b) Legitimate non-protected read (same home dir, non-protected file).
+        let public = run(format!(
+            "h={}; cat \"$h/notsecret.txt\"",
+            shell_quote(&home_str)
+        ))
+        .await
+        .expect("bash runs");
+
+        std::env::remove_var("FAE_OPENROUTER_API_KEY");
+
+        // (1) protected read denied: no secret bytes + non-zero exit.
+        let ptext = bash_result_text(&protected);
+        assert!(
+            !ptext.contains(&file_secret),
+            "protected file contents leaked through host bash: {ptext}"
+        );
+        assert_ne!(
+            bash_exit(&protected),
+            0,
+            "protected read must fail under the seatbelt: {ptext}"
+        );
+
+        // (2) env scrub: the planted key is absent from the child's env view.
+        let etext = bash_result_text(&env_leak);
+        assert!(
+            !etext.contains(&api_key),
+            "provider secret leaked into host bash env: {etext}"
+        );
+
+        // (3a) benign bash still works.
+        let echotext = bash_result_text(&echo);
+        assert_eq!(bash_exit(&echo), 0, "echo must succeed: {echotext}");
+        assert!(
+            echotext.contains("hello"),
+            "echo output missing: {echotext}"
+        );
+
+        // (3b) non-protected read still works.
+        let pubtext = bash_result_text(&public);
+        assert_eq!(
+            bash_exit(&public),
+            0,
+            "non-protected read must succeed: {pubtext}"
+        );
+        assert!(
+            pubtext.contains("public-ok"),
+            "non-protected file content missing: {pubtext}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn host_bash_scrubs_env_on_linux_even_without_read_deny() {
+        // On Linux the env scrub closes C1 (secret exfil). The protected-READ
+        // deny is a documented residual (Landlock is grant-based, cannot express a
+        // deny-read for a general shell), so we assert ONLY the env scrub + that
+        // legitimate bash still runs — NOT a kernel read-deny.
+        // The env plant proves C1; the value is scrubbed regardless. `home` is
+        // irrelevant on Linux (no read-deny), so we do NOT mutate `HOME` (which
+        // would race concurrent host-constructing tests under `cargo test`).
+        let api_key = format!("{}-{}", "planted", "env-key-value-linux");
+        std::env::set_var("FAE_OPENROUTER_API_KEY", &api_key);
+
+        let root = tempfile::tempdir().expect("root");
+        let audit = Arc::new(CapturingAudit::new());
+        let host = ToolHost::with_wiring(
+            root.path().to_path_buf(),
+            Limits::default(),
+            Arc::clone(&audit) as Arc<dyn ToolHostAudit>,
+            Arc::new(CapturingReceipts::new()) as Arc<dyn ToolHostReceipts>,
+            Arc::new(FakeEgressGate::allow()),
+            Arc::new(FixedClock),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await
+        .expect("host");
+        let conf = FakeConfirmation::approve();
+
+        let leak = host
+            .execute_governed(
+                req_origin(
+                    dangerous_client(),
+                    "bash",
+                    json!({ "command": "printenv FAE_OPENROUTER_API_KEY" }),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect("bash runs");
+        let echo = host
+            .execute_governed(
+                req_origin(
+                    dangerous_client(),
+                    "bash",
+                    json!({ "command": "echo hello" }),
+                    ToolOrigin::OwnerInteractive,
+                ),
+                &conf,
+            )
+            .await
+            .expect("bash runs");
+
+        std::env::remove_var("FAE_OPENROUTER_API_KEY");
+
+        let ltext = bash_result_text(&leak);
+        assert!(
+            !ltext.contains(&api_key),
+            "provider secret leaked into Linux host bash env: {ltext}"
+        );
+        let etext = bash_result_text(&echo);
+        assert_eq!(bash_exit(&echo), 0, "echo must succeed on Linux: {etext}");
+        assert!(
+            etext.contains("hello"),
+            "echo output missing on Linux: {etext}"
+        );
     }
 
     // -----------------------------------------------------------------------

