@@ -574,10 +574,11 @@ final class ConversationEventBridgeController: ObservableObject {
             let sourceMachine = userInfo["source_machine"] as? String ?? "<unknown>"
             let tailLen = userInfo["tail_len"] as? Int ?? 0
             let pendingTurn = userInfo["pending_turn"] as? String
+            let tail = (userInfo["conversation_tail"] as? [[String: String]]) ?? []
             showHandoffOfferAlert(
                 sender: sender, senderShort: senderShort,
                 sourceMachine: sourceMachine, tailLen: tailLen,
-                pendingTurn: pendingTurn)
+                pendingTurn: pendingTurn, conversationTail: tail)
         default:
             NSLog("ConversationEventBridgeController: unhandled peer event: %@", event)
         }
@@ -588,7 +589,8 @@ final class ConversationEventBridgeController: ObservableObject {
         senderShort: String,
         sourceMachine: String,
         tailLen: Int,
-        pendingTurn: String?
+        pendingTurn: String?,
+        conversationTail: [[String: String]]
     ) {
         let alert = NSAlert()
         alert.messageText = "Continue conversation from \(sourceMachine)?"
@@ -605,6 +607,36 @@ final class ConversationEventBridgeController: ObservableObject {
         alert.addButton(withTitle: "Decline")
         alert.alertStyle = .informational
         if alert.runModal() == .alertFirstButtonReturn {
+            // #17: hydrate the RESTORED conversation context first, so "continue
+            // conversation from <machine>" actually carries the prior turns —
+            // not just the pending turn.
+            //
+            // SECURITY: this tail arrived inside a gate-accepted, ≤64KiB
+            // SessionHandoff envelope, but it is REMOTE-PEER content and was
+            // never content-sanitized — it is a prompt-injection surface into
+            // the owner's real pipeline. The daemon's handoff contract is
+            // explicit that a turn's role is "display metadata, never an
+            // instruction channel." So we do NOT restore these as owner `.user`
+            // or Fae `.assistant` turns (which would let peer text masquerade as
+            // trusted, owner/Fae-authored conversation). Every tail turn is
+            // appended with the `.tool` role and a clear `[from <machine>] role:`
+            // attribution prefix — matching the existing "[Handoff accepted…]"
+            // `.tool` marker below — so the context is visible and usable but
+            // unambiguously external.
+            var hydrated = 0
+            for turn in conversationTail {
+                guard let text = turn["text"], !text.isEmpty else { continue }
+                let roleLabel: String
+                switch turn["role"] {
+                case "user":      roleLabel = "user"
+                case "assistant": roleLabel = "assistant"
+                default:          roleLabel = "peer"
+                }
+                activeConversationRuntimeController?.appendMessage(
+                    role: .tool,
+                    content: "[from \(sourceMachine)] \(roleLabel): \(text)")
+                hydrated += 1
+            }
             if let pt = pendingTurn, !pt.isEmpty {
                 NotificationCenter.default.post(
                     name: .faeConversationInjectText,
@@ -615,7 +647,8 @@ final class ConversationEventBridgeController: ObservableObject {
                 role: .tool,
                 content: "[Handoff accepted from \(sourceMachine)] Ready to continue.")
             subtitleState?.showToolMessage("Handoff from \(sourceMachine) accepted.")
-            NSLog("ConversationEventBridgeController: handoff from %@ accepted", sourceMachine)
+            NSLog("ConversationEventBridgeController: handoff from %@ accepted (%d turns restored)",
+                  sourceMachine, hydrated)
         }
     }
 }

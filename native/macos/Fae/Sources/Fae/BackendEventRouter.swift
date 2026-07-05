@@ -266,6 +266,20 @@ final class BackendEventRouter: Sendable {
                 "tail_len": tailLen,
             ]
             if let pt = payload["pending_turn"] as? String { peerUserInfo["pending_turn"] = pt }
+            // #17: forward the full conversation tail (role + text turns) so the
+            // conversation bridge hydrates the RESTORED context, not just the
+            // pending turn. The tail arrived inside a gate-accepted, ≤64KiB
+            // `SessionHandoff` envelope; each turn is display metadata only —
+            // never an instruction channel — so we normalise to role/text pairs
+            // and drop anything malformed.
+            if let rawTail = payload["conversation_tail"] as? [[String: Any]] {
+                let tail: [[String: String]] = rawTail.compactMap { turn in
+                    guard let role = turn["role"] as? String,
+                          let text = turn["text"] as? String else { return nil }
+                    return ["role": role, "text": text]
+                }
+                if !tail.isEmpty { peerUserInfo["conversation_tail"] = tail }
+            }
             NotificationCenter.default.post(name: .faePeerEvent, object: nil, userInfo: peerUserInfo)
 
         case "peer.consent_result", "peer.info":
@@ -539,5 +553,7 @@ extension Notification.Name {
     /// - `source_machine` — origin host name (peer.handoff_offer only)
     /// - `tail_len`       — Int, prior-turn count (peer.handoff_offer only)
     /// - `pending_turn`   — optional pending user query (peer.handoff_offer only)
+    /// - `conversation_tail` — optional [[String: String]] of {role, text} turns
+    ///   to hydrate the restored context (peer.handoff_offer only)
     static let faePeerEvent = Notification.Name("faePeerEvent")
 }
