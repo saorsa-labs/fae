@@ -8357,7 +8357,8 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 [[package]]
 name = "x0x-symphony-core"
 version = "0.1.0"
-source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6610f0da1bc47b586f75707161b735c3f2e0edb5b203a8701e7044f46967e674"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8371,7 +8372,8 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-orchestrator"
 version = "0.1.0"
-source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb9bf2d8d23d18d8ca89ad77c88754344e5ea39d25480b90853a1db7d49b968e"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8391,7 +8393,8 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-signing"
 version = "0.1.0"
-source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aabcaaf64c4e1258dc60b4a89d2bd63bce85e9497660413a8df79e3521e97fca"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8404,7 +8407,8 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-tracker-x0x-crdt"
 version = "0.1.0"
-source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b994ba95ab24f229b4a9d3e0d5040a69360f175c33b63e948609ed8ee78e1186"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8424,7 +8428,8 @@ dependencies = [
 [[package]]
 name = "x0x-symphony-workspace"
 version = "0.1.0"
-source = "git+https://github.com/saorsa-labs/x0x-symphony.git?rev=6e872e31e23b7bfbbda0178d3e731ed59224bb06#6e872e31e23b7bfbbda0178d3e731ed59224bb06"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a64826514b721d023337e72728066c7c9905419bcd04d38cbf0e73b408580e"
 dependencies = [
  "async-trait",
  "nix 0.30.1",

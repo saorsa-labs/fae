@@ -35,30 +35,14 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-# ── x0x-symphony: quarantined git-rev deps ───────────────────────────────────
-# Pinned to the sibling's pushed HEAD. git-rev (not path) is deliberate: this
-# crate is developed inside a git WORKTREE whose depth under `projects/` differs
-# from the folded `projects/fae/` checkout, so a fixed *relative* path dep would
-# resolve to two different places. A git-rev pin is location-independent and
-# survives the worktree→main fold unchanged. It also matches the roadmap's
-# "no crates.io consumption — git-rev pin until symphony publishes".
-#
-# dev override (local sibling checkout, if you prefer editing symphony in-tree):
-#   x0x-symphony-core            = { path = "../../../x0x-symphony/crates/x0x-symphony-core" }
-#   x0x-symphony-orchestrator    = { path = "../../../x0x-symphony/crates/x0x-symphony-orchestrator" }
-#   x0x-symphony-tracker-x0x-crdt = { path = "../../../x0x-symphony/crates/x0x-symphony-tracker-x0x-crdt" }
-#   x0x-symphony-signing         = { path = "../../../x0x-symphony/crates/x0x-symphony-signing" }
-#   x0x-symphony-workspace       = { path = "../../../x0x-symphony/crates/x0x-symphony-workspace" }
-# (relative form above is for the *folded* projects/fae/crates/ layout.)
-#
-# TODO(publish): once x0x-symphony's release workflow publishes to crates.io,
-# switch these to `version = "…"` pins. The repo is public, so the https+rev
-# form fetches anonymously (CI included) with no credentials.
-x0x-symphony-core = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-orchestrator = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-tracker-x0x-crdt = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-signing = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
-x0x-symphony-workspace = { git = "https://github.com/saorsa-labs/x0x-symphony.git", rev = "6e872e31e23b7bfbbda0178d3e731ed59224bb06" }
+# ── x0x-symphony: crates.io 0.1.0 pins (published 2026-07-04) ───────────────
+# Local dev override: swap each `version = "0.1.0"` for the sibling path dep
+# `{ path = "../../../x0x-symphony/crates/<name>" }` when editing symphony in-tree.
+x0x-symphony-core             = "0.1.0"
+x0x-symphony-orchestrator     = "0.1.0"
+x0x-symphony-tracker-x0x-crdt = "0.1.0"
+x0x-symphony-signing          = "0.1.0"
+x0x-symphony-workspace        = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3"
