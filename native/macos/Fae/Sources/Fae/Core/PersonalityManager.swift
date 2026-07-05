@@ -552,6 +552,13 @@ enum PersonalityManager {
                 if let toolHint = ToolAugmentationManager.promptFragment(installed: installedTools) {
                     parts.append(toolHint)
                 }
+                // UX W3: brain awareness — tell Fae which other brains (ACP
+                // agents, local servers, cloud) are available so she can speak
+                // about them accurately. Cached (scanned by the brain_scout task),
+                // so this never triggers a probe during prompt assembly.
+                if let brainHint = BrainScout.promptFragment() {
+                    parts.append(brainHint)
+                }
                 // Compact self-config hint (~200 chars vs 7.8K full selfModificationPrompt).
                 // Full details loaded on-demand when self_config tool is actually called.
                 parts.append("Self-modification: Use the self_config tool to adjust settings (speed, temperature, directive). Use get_directive/set_directive for persistent instructions.")

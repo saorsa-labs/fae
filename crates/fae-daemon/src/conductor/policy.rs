@@ -11,7 +11,7 @@
 
 use crate::conductor::recipe::{
     ApprovalClass, ConductorTaskClass, ConductorTopology, ConductorTurnContext, OwnedRouteDecision,
-    PrivacyLane,
+    PrivacyLane, RouteHint, WorkerLocality,
 };
 use crate::conductor::workers::LOCAL_MODEL_WORKER_ID;
 
@@ -106,6 +106,34 @@ impl StaticDirectPolicy {
 
 impl ConductorRoutingPolicy for StaticDirectPolicy {
     fn decide(&self, ctx: &ConductorTurnContext) -> OwnedRouteDecision {
+        // UX W3 — honor an explicit owner cloud hint ONLY when BOTH preconditions
+        // hold: the turn's privacy lane already permits `RemoteAllowed`, AND a
+        // vetted `RemoteProvider` worker is registered for the turn. Any missing
+        // precondition (no hint, narrower lane, no remote worker) falls through
+        // to today's `LocalOnly` decision — the default stays local-always
+        // (fail-closed). The live inject_text path builds a `LocalOnly` context
+        // with no remote workers, so production turns are byte-identical until a
+        // later phase widens the lane + registers the cloud worker.
+        if ctx.route_hint == Some(RouteHint::Cloud)
+            && ctx.privacy_lane == PrivacyLane::RemoteAllowed
+        {
+            if let Some(worker) = ctx
+                .available_workers
+                .iter()
+                .find(|w| w.locality == WorkerLocality::RemoteProvider)
+            {
+                return OwnedRouteDecision {
+                    request_id: ctx.request_id.clone(),
+                    recipe_id: STATIC_DIRECT_RECIPE_ID.to_string(),
+                    topology: ConductorTopology::Direct,
+                    worker_id: worker.id.clone(),
+                    task_class: Self::classify(ctx),
+                    lane: PrivacyLane::RemoteAllowed,
+                    approval: ApprovalClass::None,
+                    reason: "route-hint-cloud".to_string(),
+                };
+            }
+        }
         OwnedRouteDecision {
             request_id: ctx.request_id.clone(),
             recipe_id: STATIC_DIRECT_RECIPE_ID.to_string(),
@@ -133,6 +161,21 @@ mod tests {
             available_workers: Vec::new(),
             working_directory: None,
             deadline_ms: None,
+            route_hint: None,
+        }
+    }
+
+    /// A vetted OpenRouter remote-provider worker selector, for the cloud-hint
+    /// tests. Mirrors the id shape `cloud:openrouter/<model>`.
+    fn remote_worker() -> crate::conductor::recipe::WorkerSelector {
+        crate::conductor::recipe::WorkerSelector {
+            id: crate::conductor::workers::openrouter_worker_id("openai/gpt-4.1-mini"),
+            kind: "remote".to_string(),
+            locality: WorkerLocality::RemoteProvider,
+            capabilities: Vec::new(),
+            provider: Some("openrouter".to_string()),
+            model: Some("openai/gpt-4.1-mini".to_string()),
+            trust_scope: None,
         }
     }
 
@@ -162,6 +205,66 @@ mod tests {
         assert_eq!(d_a.worker_id, d_b.worker_id);
         assert_eq!(d_a.topology, d_b.topology);
         assert_eq!(d_a.lane, PrivacyLane::LocalOnly);
+    }
+
+    #[test]
+    fn cloud_hint_honored_only_when_lane_and_worker_permit() {
+        let p = StaticDirectPolicy;
+        // All preconditions met: hint=cloud + RemoteAllowed lane + a registered
+        // RemoteProvider worker ⇒ the RemoteAllowed decision to the cloud worker.
+        let mut c = ctx("r");
+        c.route_hint = Some(RouteHint::Cloud);
+        c.privacy_lane = PrivacyLane::RemoteAllowed;
+        c.available_workers = vec![remote_worker()];
+        let d = p.decide(&c);
+        assert_eq!(d.lane, PrivacyLane::RemoteAllowed);
+        assert_eq!(d.worker_id, remote_worker().id);
+        assert!(d.worker_id.starts_with("cloud:openrouter/"));
+        assert_eq!(d.reason, "route-hint-cloud");
+    }
+
+    #[test]
+    fn cloud_hint_ignored_when_lane_is_local() {
+        // The lane fails closed: even with a hint + a remote worker, a narrower
+        // lane keeps the turn local (byte-identical to today).
+        let p = StaticDirectPolicy;
+        let mut c = ctx("r");
+        c.route_hint = Some(RouteHint::Cloud);
+        c.privacy_lane = PrivacyLane::LocalOnly;
+        c.available_workers = vec![remote_worker()];
+        let d = p.decide(&c);
+        assert_eq!(d.lane, PrivacyLane::LocalOnly);
+        assert_eq!(d.worker_id, LOCAL_MODEL_WORKER_ID);
+        assert_eq!(d.reason, "static-direct-local");
+    }
+
+    #[test]
+    fn cloud_hint_ignored_when_no_remote_worker_registered() {
+        // The lane permits remote but no RemoteProvider worker is registered ⇒
+        // local. There is no path by which an unregistered endpoint becomes
+        // routable.
+        let p = StaticDirectPolicy;
+        let mut c = ctx("r");
+        c.route_hint = Some(RouteHint::Cloud);
+        c.privacy_lane = PrivacyLane::RemoteAllowed;
+        c.available_workers = Vec::new();
+        let d = p.decide(&c);
+        assert_eq!(d.lane, PrivacyLane::LocalOnly);
+        assert_eq!(d.worker_id, LOCAL_MODEL_WORKER_ID);
+    }
+
+    #[test]
+    fn absent_hint_is_byte_identical_local() {
+        // No hint at all ⇒ today's static-direct-local decision, regardless of a
+        // widened lane / registered worker.
+        let p = StaticDirectPolicy;
+        let mut c = ctx("r");
+        c.privacy_lane = PrivacyLane::RemoteAllowed;
+        c.available_workers = vec![remote_worker()];
+        let d = p.decide(&c);
+        assert_eq!(d.lane, PrivacyLane::LocalOnly);
+        assert_eq!(d.worker_id, LOCAL_MODEL_WORKER_ID);
+        assert_eq!(d.reason, "static-direct-local");
     }
 
     #[test]

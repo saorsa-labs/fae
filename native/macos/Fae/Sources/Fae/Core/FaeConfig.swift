@@ -179,6 +179,13 @@ struct FaeConfig: Codable {
         var resolvedPrivacyLane: String {
             ["local", "fleet", "all"].contains(privacyLane) ? privacyLane : "local"
         }
+
+        /// UX W3: leading phrases that route a single turn to the cloud brain
+        /// (owner-initiated). Matched case-insensitively at the START of the
+        /// user's text; the matched phrase is stripped before the prompt reaches
+        /// the model/memory. Only honoured when the cloud lane is configured
+        /// (`privacyLane == "all"`). Fae-*initiated* cloud routing is a later phase.
+        var cloudRouteTriggers: [String] = ["ask the cloud", "use the cloud"]
     }
 
     /// True when the effective LLM context window is at or below 16K tokens.
@@ -1041,6 +1048,9 @@ struct FaeConfig: Codable {
                 case "cloudDailyBudgetUSD":
                     guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.cloudDailyBudgetUSD = min(max(Double(v), 0.01), 100.0)
+                case "cloudRouteTriggers":
+                    guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.cloudRouteTriggers = v
                 default: break
                 }
             case "tts":
@@ -1375,6 +1385,7 @@ struct FaeConfig: Codable {
         lines.append("daemonBinaryPath = \(encodeStringOrNil(llm.daemonBinaryPath))")
         lines.append("privacyLane = \(encodeString(llm.resolvedPrivacyLane))")
         lines.append("cloudDailyBudgetUSD = \(formatFloat(Float(min(max(llm.cloudDailyBudgetUSD, 0.01), 100.0))))")
+        lines.append("cloudRouteTriggers = \(encodeStringArray(llm.cloudRouteTriggers))")
         lines.append("")
 
         lines.append("[tts]")

@@ -213,6 +213,7 @@ impl CorpusEntry {
             available_workers: self.available_workers.clone(),
             working_directory: None,
             deadline_ms: None,
+            route_hint: None,
         }
     }
 }

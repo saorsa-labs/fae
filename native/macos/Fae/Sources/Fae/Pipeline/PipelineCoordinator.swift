@@ -525,6 +525,17 @@ actor PipelineCoordinator {
 
     private var assistantSpeaking: Bool = false
     private var assistantGenerating: Bool = false
+    /// UX W3: the cloud route hint for the current turn, computed from the trigger
+    /// prefix on the fresh user text and preserved across tool follow-ups within
+    /// the same turn (a fresh non-tool turn recomputes + overwrites it).
+    private var pendingTurnRouteHint: String?
+
+    /// Whether the assistant is currently generating a turn (LLM in flight).
+    /// Exposed so FaeCore can defer a daemon respawn (cloud-lane change) until the
+    /// pipeline is idle rather than killing an in-flight turn.
+    var isGenerating: Bool {
+        assistantGenerating || assistantGenerationTracker.hasActiveGeneration
+    }
     /// Whether the current turn includes explicit user authorization language.
     private var explicitUserAuthorizationForTurn: Bool = false
 
@@ -2794,8 +2805,34 @@ actor PipelineCoordinator {
     ///
     /// Streams tokens to TTS. If the model outputs `<tool_call>` markup, executes the
     /// tools and re-generates with the results. Recurses up to `maxToolTurns` times.
+    /// UX W3: detect an explicit owner cloud-routing trigger at the START of the
+    /// user's text. Returns the route hint (`"cloud"`) plus the text with the
+    /// trigger phrase stripped — but ONLY when the cloud lane is actually
+    /// configured (`privacyLane == "all"`); otherwise the text is returned
+    /// untouched with no hint, so a local-only user never has words silently
+    /// removed. Owner-initiated only — Fae choosing the cloud herself is a later
+    /// phase. An empty remainder (the user said only the trigger) yields no hint.
+    static func cloudRouteHint(
+        for text: String,
+        triggers: [String],
+        privacyLane: String
+    ) -> (hint: String?, text: String) {
+        guard privacyLane == "all" else { return (nil, text) }
+        let lowered = text.lowercased()
+        for trigger in triggers {
+            let t = trigger.lowercased()
+            guard !t.isEmpty, lowered.hasPrefix(t) else { continue }
+            let remainder = String(text.dropFirst(trigger.count))
+                .drop(while: { $0 == " " || $0 == "," || $0 == ":" || $0 == "." })
+            let stripped = String(remainder).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !stripped.isEmpty else { return (nil, text) }
+            return ("cloud", stripped)
+        }
+        return (nil, text)
+    }
+
     private func generateWithTools(
-        userText: String,
+        userText providedUserText: String,
         isToolFollowUp: Bool,
         turnCount: Int,
         forceSuppressThinking: Bool = false,
@@ -2806,6 +2843,20 @@ actor PipelineCoordinator {
         playsThinkingTone: Bool = true,
         allowsAudibleOutput: Bool = true
     ) async {
+        // UX W3: strip an owner cloud-routing trigger from the fresh turn's text
+        // (never on tool follow-ups or audio placeholders — those carry no typed
+        // trigger) and remember the hint for this turn's GenerationOptions. When
+        // no trigger matches or the cloud lane isn't configured, this is a no-op
+        // and the text is byte-identical.
+        let cloudRoute: (hint: String?, text: String) = isToolFollowUp
+            ? (nil, providedUserText)
+            : Self.cloudRouteHint(
+                for: providedUserText,
+                triggers: config.llm.cloudRouteTriggers,
+                privacyLane: config.llm.resolvedPrivacyLane)
+        let userText = cloudRoute.text
+        let turnRouteHint = isToolFollowUp ? pendingTurnRouteHint : cloudRoute.hint
+        pendingTurnRouteHint = turnRouteHint
         let tillDoneListActive = await TillDoneManager.shared.isListActive
         // Allow enough tool turns for thorough multi-step queries.
         // A web search chain alone can use 4-5 turns (search → fetch → fetch → search → summarize).
@@ -3354,7 +3405,8 @@ actor PipelineCoordinator {
             repetitionContextSize: config.llm.repetitionContextSize,
             prefillStepSize: prefillStep,
             audioWAVBase64: pttAudioForTurn,
-            pinnedSummary: pinnedSummary
+            pinnedSummary: pinnedSummary,
+            routeHint: turnRouteHint
         )
 
         // Cache options for speculative prefill on next turn. The audio clip

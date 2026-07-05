@@ -353,11 +353,15 @@ actor FaeScheduler {
         scheduleRepeating("tool_augmentation_check", interval: 24 * 3600) { [weak self] in
             await self?.runToolAugmentationCheck()
         }
-        // Run workspace + tool checks shortly after startup for immediate awareness.
+        scheduleRepeating("brain_scout", interval: 24 * 3600) { [weak self] in
+            await self?.runBrainScout()
+        }
+        // Run workspace + tool + brain checks shortly after startup for immediate awareness.
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 30_000_000_000) // 30s delay
             await self?.runToolAugmentationCheck()
             await self?.runWorkspaceDiscovery()
+            await self?.runBrainScout()
         }
 
         // Daily tasks (check every 60s, run if past due)
@@ -2129,6 +2133,7 @@ actor FaeScheduler {
         case "improvement_cycle":         await runImprovementCycle()
         case "workspace_discovery":       await runWorkspaceDiscovery()
         case "tool_augmentation_check":  await runToolAugmentationCheck()
+        case "brain_scout":              await runBrainScout()
         default:
             if await runUserTaskIfExists(id: id, at: runAt, silent: true, reason: "trigger") {
                 return
@@ -2362,6 +2367,60 @@ actor FaeScheduler {
         }
     }
 
+    // MARK: - Brain Scout (UX W3)
+
+    /// Discover the other brains available to Fae (ACP agent CLIs, local model
+    /// servers, cloud-key presence) and store them as a `fact` memory record so
+    /// Fae can speak about them accurately. Mirrors `runToolAugmentationCheck`.
+    /// NO dotfile/env/key scanning — the cloud key is checked for existence only.
+    private func runBrainScout() async {
+        guard let store = memoryStore else { return }
+        NSLog("FaeScheduler: brain_scout — running")
+
+        let findings = await BrainScout.scan()
+        let text = BrainScout.memorySummary(findings)
+
+        do {
+            let existing = try await store.findActiveByTag("brain_scout")
+            if let previous = existing.first {
+                if previous.text != text {
+                    let newRecord = try await store.supersedeRecord(
+                        oldId: previous.id,
+                        newText: text,
+                        confidence: 0.95,
+                        sourceTurnId: nil,
+                        tags: ["brain_scout", "available_brains"],
+                        note: "brain_scout: updated brain inventory",
+                        importanceScore: 0.70,
+                        staleAfterSecs: 604_800
+                    )
+                    await embedRecord(id: newRecord.id, text: text)
+                    NSLog("FaeScheduler: brain_scout — updated (acp=%d, ollama=%d, lmstudio=%d, cloud=%@)",
+                          findings.acpAgents.count, findings.ollamaModels.count,
+                          findings.lmStudioModels.count, findings.cloudKeyConfigured ? "yes" : "no")
+                } else {
+                    NSLog("FaeScheduler: brain_scout — no changes")
+                }
+            } else {
+                let record = try await store.insertRecord(
+                    kind: .fact,
+                    text: text,
+                    confidence: 0.95,
+                    sourceTurnId: nil,
+                    tags: ["brain_scout", "available_brains"],
+                    importanceScore: 0.70,
+                    staleAfterSecs: 604_800
+                )
+                await embedRecord(id: record.id, text: text)
+                NSLog("FaeScheduler: brain_scout — stored (acp=%d, ollama=%d, lmstudio=%d, cloud=%@)",
+                      findings.acpAgents.count, findings.ollamaModels.count,
+                      findings.lmStudioModels.count, findings.cloudKeyConfigured ? "yes" : "no")
+            }
+        } catch {
+            NSLog("FaeScheduler: brain_scout — error: %@", error.localizedDescription)
+        }
+    }
+
     /// Embed a memory record for ANN recall.
     private func embedRecord(id: String, text: String) async {
         guard let engine = embeddingEngine, let vs = vectorStore else { return }
@@ -2387,6 +2446,7 @@ actor FaeScheduler {
             "improvement_cycle",
             "workspace_discovery",
             "tool_augmentation_check",
+            "brain_scout",
         ]
         ids.formUnion(builtinIDs)
 

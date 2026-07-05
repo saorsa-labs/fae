@@ -297,6 +297,7 @@ mod tests {
             available_workers: vec![],
             working_directory: None,
             deadline_ms: None,
+            route_hint: None,
         }
     }
 

@@ -2,6 +2,24 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — UX W3 (brain discovery + conversational cloud setup + route hint)
+
+### New Features
+- **`BrainScout` (`native/macos/Fae/Sources/Fae/Core/BrainScout.swift`)**: discovers the "other brains" available to Fae, mirroring `ToolAugmentationManager`. Probes (a) ACP agent CLIs on PATH (`codex`, `claude`, `gemini`, `copilot`, `pi`, `acpx` — presence only, no execution); (b) local model servers — Ollama `127.0.0.1:11434/api/tags` and LM Studio `127.0.0.1:1234/v1/models`, loopback-bound with a hard 1s timeout, parsing the model lists; (c) whether an OpenRouter cloud key exists in the Keychain (existence ONLY — the value is never read, logged, or stored). NO dotfile scanning, NO env harvesting. Findings are stored as a `fact` memory record tagged `brain_scout` + `available_brains` and cached for a compact prompt hint.
+- **Scheduler task `brain_scout`** (`FaeScheduler.swift`, 24h + 30s after startup): runs `BrainScout.scan()` and stores/supersedes the brain-inventory fact (mirrors `tool_augmentation_check`). Registered in `statusAll`.
+- **Prompt awareness (`PersonalityManager.assemblePrompt()`)**: injects `BrainScout.promptFragment()` (from the cached scan — never triggers a probe during prompt assembly) so Fae can speak accurately about which brains exist and offer cloud setup when it isn't configured.
+- **`cloud-brain-setup` instruction skill** (`Resources/Skills/cloud-brain-setup/SKILL.md`, instruction-only): the conversational, privacy-first (EU/GDPR, "everything still goes through my privacy filter", local stays default) script for adding OpenRouter — including a plain-language walk-through for getting a key. ALWAYS collects the key via `input_request(secure: true, store_key: "openrouter.apiKey")`, then `self_config(llm.privacy_lane = "all")`, then the silent respawn ("give me a few seconds to wake my cloud connection"). Includes the reverse flow ("stop using cloud models").
+- **Silent daemon respawn on cloud-lane change**: `FaeCore.patchConfig("llm.privacy_lane", …)` now calls `applyCloudLaneRespawn()`, which defers until the pipeline is idle (no turn generating / no speech, up to ~60s), posts `runtimeProgress(stage: "cloud_lane")` for orb feedback, then `DaemonLLMEngine.applyCloudConfigChange(privacyLane:budgetUSD:)` cleanly tears down (`internalShutdown` — disarms the crash supervisor) and relaunches with the new `FAE_*` cloud env vars. Endpoints republish via `onEndpointsChanged`, so TTS/ACP reconnection follows. No-op (fields only) when the MLX fallback is active. A budget-only change does not respawn.
+- **Per-turn cloud route hint (Phase-D seed, minimal + honest)**:
+  - Swift: `GenerationOptions.routeHint` (mirrors `pinnedSummary`); `DaemonWire.injectTextPayload` forwards it as `route_hint` when set and OMITS the key otherwise (byte-identical, cache-stable). The transcription pass nulls it (`transcribeOptions.routeHint = nil`); the reasoning pass inherits it. `PipelineCoordinator.generateWithTools` sets it from a configurable leading trigger (`FaeConfig.llm.cloudRouteTriggers`, default `["ask the cloud", "use the cloud"]`, case-insensitive) — but ONLY when the cloud lane is configured (`privacyLane == "all"`); the trigger phrase is stripped from the prompt. Fae-*initiated* cloud routing is a later phase.
+  - Daemon: `conversation.inject_text` parses an optional `route_hint: "cloud"` via `payload_route_hint` (deny-unknown-safe, follows the `pinned_summary` precedent) into `ConductorTurnContext.route_hint`. `StaticDirectPolicy.decide` emits a `RemoteAllowed` decision to a registered `cloud:openrouter/<model>` worker ONLY when hint == cloud AND the lane permits `RemoteAllowed` AND a `RemoteProvider` worker is registered — otherwise exactly today's `LocalOnly`. The live inject_text path builds a `LocalOnly` context with no remote workers, so production turns stay local (default local-always).
+
+### Testing
+- **Daemon (`conductor::policy`)**: `cloud_hint_honored_only_when_lane_and_worker_permit`, `cloud_hint_ignored_when_lane_is_local`, `cloud_hint_ignored_when_no_remote_worker_registered`, `absent_hint_is_byte_identical_local`.
+- **Daemon (`session`)**: `build_turn_context_parses_cloud_route_hint`, `build_turn_context_absent_or_unknown_route_hint_is_none`.
+- **Swift (`DaemonLLMEngineTests`)**: `testInjectTextPayloadAttachesRouteHintWhenSet`, `testInjectTextPayloadOmitsRouteHintWhenAbsentOrBlank` (byte-identical key-surface assertion).
+- **Swift (`PipelineCoordinatorStaticTests`)**: five `cloudRouteHint` cases — match+strip, case-insensitive+separators, lane-gating (local ⇒ untouched), no-match, trigger-only.
+
 ## Unreleased — UX W4 (conversational first-launch onboarding + location capture)
 
 ### Changed

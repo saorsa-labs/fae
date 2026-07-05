@@ -269,6 +269,14 @@ public struct GenerationOptions: Sendable {
     /// engine ignores it. `nil`/empty ⇒ no pinned block (today's behaviour).
     public var pinnedSummary: String?
 
+    /// UX W3: an explicit owner-initiated cloud routing hint for this turn.
+    /// Currently only `"cloud"`. Only the daemon engine honours it — it is
+    /// forwarded as the `route_hint` field on `conversation.inject_text`, where
+    /// the conductor policy routes to the cloud lane ONLY when the privacy lane
+    /// permits it and a remote worker is registered (otherwise local, unchanged).
+    /// The MLX engine ignores it. `nil` ⇒ no hint (byte-identical to today).
+    public var routeHint: String?
+
     public init(
         temperature: Float = 0.7,
         topP: Float = 0.9,
@@ -285,7 +293,8 @@ public struct GenerationOptions: Sendable {
         repetitionContextSize: Int = 64,
         prefillStepSize: Int? = nil,
         audioWAVBase64: String? = nil,
-        pinnedSummary: String? = nil
+        pinnedSummary: String? = nil,
+        routeHint: String? = nil
     ) {
         self.temperature = temperature
         self.topP = topP
@@ -303,6 +312,7 @@ public struct GenerationOptions: Sendable {
         self.prefillStepSize = prefillStepSize
         self.audioWAVBase64 = audioWAVBase64
         self.pinnedSummary = pinnedSummary
+        self.routeHint = routeHint
     }
 }
 

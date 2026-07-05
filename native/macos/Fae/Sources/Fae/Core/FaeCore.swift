@@ -2005,6 +2005,36 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
+    /// UX W3: apply a cloud privacy-lane change by respawning the daemon so the
+    /// new cloud env vars take effect — the "give me a few seconds to wake my
+    /// cloud connection" moment. Non-blocking: spawns a task that waits until the
+    /// pipeline is idle (no turn generating, no speech playing) before the clean
+    /// teardown+relaunch, so an in-flight turn is never killed. Posts brief
+    /// `runtimeProgress` so the orb shows activity. A no-op when the daemon lane
+    /// isn't active (MLX fallback) — the new lane applies on the next daemon load.
+    private func applyCloudLaneRespawn() {
+        guard let daemonEngine = llmEngine as? DaemonLLMEngine else {
+            NSLog("FaeCore: cloud lane change — daemon lane inactive (MLX fallback); applies on next load")
+            return
+        }
+        let lane = config.llm.resolvedPrivacyLane
+        let budget = config.llm.cloudDailyBudgetUSD
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Defer until idle (up to ~60s) so a live generation/playback isn't
+            // aborted by the daemon teardown.
+            for _ in 0..<600 {
+                let speaking = await self.pipelineCoordinator?.isSpeaking ?? false
+                let generating = await self.pipelineCoordinator?.isGenerating ?? false
+                if !speaking && !generating { break }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            }
+            self.eventBus.send(.runtimeProgress(stage: "cloud_lane", progress: 0.1))
+            await daemonEngine.applyCloudConfigChange(privacyLane: lane, budgetUSD: budget)
+            self.eventBus.send(.runtimeProgress(stage: "cloud_lane", progress: 1.0))
+        }
+    }
+
     func patchConfig(key: String, payload: [String: Any]) {
         NSLog("FaeCore: config.patch key='%@'", key)
 
@@ -2068,11 +2098,19 @@ final class FaeCore: ObservableObject, HostCommandSender {
             else { return }
             config.llm.privacyLane = value
             persistConfig(reason: "config.patch.llm.privacy_lane")
+            // UX W3: bring the cloud connection up/down NOW so "give me a few
+            // seconds to wake my cloud connection" is real — a clean daemon
+            // respawn with the new FAE_* env vars, deferred until the pipeline is
+            // idle so an in-flight turn isn't killed.
+            applyCloudLaneRespawn()
 
         case "llm.cloud_daily_budget_usd":
             guard let raw = value as? Double else { return }
             config.llm.cloudDailyBudgetUSD = min(max(raw, 0.01), 100.0)
             persistConfig(reason: "config.patch.llm.cloud_daily_budget_usd")
+            // A budget change alone does not require a respawn (the daemon reads
+            // the budget at launch); it takes effect on the next lane change or
+            // restart. No teardown here — cheaper + non-disruptive.
 
         case "llm.thinking_enabled":
             guard let value = value as? Bool else { return }
