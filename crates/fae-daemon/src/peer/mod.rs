@@ -706,23 +706,17 @@ mod tests {
     }
 
     #[test]
-    fn send_direct_message_allows_benign_text_past_the_membrane() {
-        // Benign text must NOT be blocked by the membrane; it proceeds to the send
-        // path (which then fails at the dead network address, a DIFFERENT error).
-        let outbound = PeerOutbound::new(
-            X0xPeerClient::new("http://127.0.0.1:1", "tok").unwrap(),
-            OWN.to_owned(),
-            HashSet::new(),
-            std::env::temp_dir().join("unused-egress-audit.jsonl"),
-        );
-        let result = tokio_test_block(
-            outbound.send_direct_message("peer-1", "The weather in Edinburgh is mild today."),
-        );
-        let err = result.expect_err("dead address must fail the network send");
-        assert!(
-            !err.contains("membrane"),
-            "benign text must not be membrane-blocked, got: {err}"
-        );
+    fn membrane_does_not_over_block_benign_text() {
+        // The gate `send_direct_message` applies must let ordinary replies through
+        // (only credential shapes are blocked). This guards against an over-broad
+        // membrane that would silence normal peer conversation. Asserted on the
+        // exact predicate the send path uses, so no network/timer is required.
+        assert!(!fae_pii_membrane::should_block_remote_egress(
+            "The weather in Edinburgh is mild today."
+        ));
+        assert!(!fae_pii_membrane::should_block_remote_egress(
+            "Sure, I can help summarise that document for you."
+        ));
     }
 
     // ── event-bus mapping ──
