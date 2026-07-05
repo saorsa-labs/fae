@@ -127,8 +127,24 @@ final class OrbStateBridgeController: ObservableObject {
             }
 
         case "state_changed":
-            // Palette/feeling only. We deliberately do NOT act on a `mode` key
-            // here — the orb host owns the mode now.
+            // Mode: the orb host owns thinking/speaking/idle (daemon-derived) and
+            // we must NOT fight it. The ONE exception is `listening` — Right-⌥
+            // push-to-talk is a Swift NSEvent the host can't see, so PTT capture
+            // start (`pttStart` → mode "listening") is the one Swift-owned mode
+            // signal, and `sendState(forMode:)` forwards ONLY listening to the
+            // host. Without this the listening cue never reaches the orb, so the
+            // owner gets no feedback that the key registered. On capture end
+            // (`finishPTTCapture`/`pttStop` → mode "idle") we hand the mode back:
+            // clear listening so the host resumes its own state machine (the next
+            // daemon event flips it to thinking). Any other mode value is ignored.
+            if let modeName = userInfo["mode"] as? String {
+                if modeName == "listening" {
+                    orbState.mode = .listening
+                } else if modeName == "idle", orbState.mode == .listening {
+                    orbState.mode = .idle
+                }
+            }
+            // Palette/feeling.
             if let feelingName = userInfo["feeling"] as? String,
                let feeling = OrbFeeling(rawValue: feelingName)
             {

@@ -240,9 +240,16 @@ actor ModelManager {
         config: FaeConfig
     ) async throws {
         let (modelId, recommendedContext) = FaeConfig.recommendedModel(preset: config.llm.voiceModelPreset)
+        // The daemon lane serves its own model (Gemma-4-E4B) with a fixed,
+        // RAM-scaled llama.cpp window that is independent of the MLX preset. Use
+        // the daemon's real window as the conversation budget so history
+        // compaction bounds the prompt to what the sidecar actually accepts —
+        // otherwise Swift assumes the 32K MLX context while the daemon runs a
+        // smaller `-c` window and every long chat overflows.
+        let baseContext = (llm as? DaemonLLMEngine)?.contextTokens ?? recommendedContext
         let effectiveContext = config.llm.contextSizeTokens > 0
-            ? min(recommendedContext, config.llm.contextSizeTokens)
-            : recommendedContext
+            ? min(baseContext, config.llm.contextSizeTokens)
+            : baseContext
         self.recommendedContextSize = effectiveContext
         var failedEngines: [String] = []
 
