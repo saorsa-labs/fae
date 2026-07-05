@@ -2,6 +2,29 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Production-readiness audit + fixes (2026-07-05)
+
+Full 8-dimension adversarial audit (`docs/reviews/production-readiness-audit-2026-07-05.md`). Two CRITICAL security release-blockers and ~15 HIGH findings fixed on `main`; MEDIUM/LOW tracked in the report.
+
+### Security (CRITICAL)
+- **C1 — daemon child spawns no longer inherit provider secrets.** New shared `crate::child_env::scrubbed_child_env()` positive-allowlist (PATH/HOME/LANG/LC_*/FAE_LLAMA*, plus an `is_sensitive_name` denylist). Wired into the Linux jail (`env_clear` + scrubbed env), the MCP server spawn (scrubbed map instead of `None`, with a one-line vendored `mistralrs-mcp` `env_clear`-when-`Some`), and the macOS jail (`/usr/bin/env -i <allowlist>` prefix in `exec_jailed_macos` — `fluers-runtime 0.5.0` does not scrub). A jailed/delegated bash turn or a declared MCP server can no longer exfiltrate `FAE_OPENROUTER_API_KEY`/ACP keys.
+- **C2 — bash protected-path gate is now an OS sandbox, not a substring match.** `SafeBashExecutor` runs every command under `sandbox-exec` with `(allow default)` + `(deny file-read* <protected>)` (secrets, `~/.ssh`/`~/.aws`/…, `~/.fae-vault`, `speakers.json`, `directive.md`), canonicalizing firmlinked paths; fails closed if `sandbox-exec` is unavailable. (Residual same-volume hardlink vector documented.)
+
+### Security (HIGH)
+- SessionStore redacts at the `appendMessage` choke point so `session_search` can never surface a raw secret; corrected the dead `private_key_block` PEM regex.
+- Secure-input withholding also runs `SensitiveContentPolicy.scan` (PEM/seed/`password is`); URLs with basic-auth userinfo or `?token=`/`?api_key=` are treated as credentials.
+- `fae-pii-membrane`: added AWS `AKIA…` rule + case-insensitive PEM; rule-table compile now fails closed (abort on a bad pattern) instead of silently dropping it.
+- Mesh `auto_reply`/`send_direct_message` outbound text runs the PII egress membrane before send (audit + refuse).
+
+### Correctness / perf / reliability (HIGH)
+- `agent.prompt` runs in `tool_tasks` racing `session_cancel` (teardown no longer blocks); fan-out children spawn into a `JoinSet` that aborts them on cancel (new `Cancelled` status); deny-path audit failures are logged loudly; per-connection event queue bounded (drop-oldest for `audio.level`).
+- `improvement_cycle` honors `AwarenessThrottle` (no 03:00 hill-climb on battery); `recommendedMaxHistory` system budget 18K→8K (16 GB machines keep ~10 history turns, not 6); `respawnDaemonWhenIdle` surfaces failure + clears the stuck indicator on timeout; `DaemonEventSubscriber.stop()` no longer risks a deadlock (flips state + closes fd under `stateLock`, not over a blocking `recv` in `queue.sync`).
+
+### CI / supply-chain / docs
+- CI nextest now covers `fae-symphony-runner` + `fae-acp`; 3 `SkillBypassRegression` security tests run in CI (uv installed in the macOS job); `crates/just check` clippy matches CI strict lints.
+- All GitHub Actions pinned to commit SHAs; `cargo-deny` license/bans/sources gate added (`crates/deny.toml`).
+- CLAUDE.md corrected (skill count 30→33; voice identity → PTT engagement gate, post-S18).
+
 ## Unreleased — UX W3 (brain discovery + conversational cloud setup + route hint)
 
 ### New Features
