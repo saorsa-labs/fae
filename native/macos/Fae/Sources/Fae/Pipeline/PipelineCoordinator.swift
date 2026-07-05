@@ -172,6 +172,16 @@ actor PipelineCoordinator {
     /// capture records what the user actually said, not the placeholder.
     private var pttHeardTranscriptForTurn: String?
 
+    /// Secure-input pre-detector (`SecureInputIntent`) opened a Keychain-store
+    /// card for THIS turn. Prevents the model from also popping a second card
+    /// via `input_request`, and drives the anti-hallucination backstop wording.
+    /// Reset at the top of every turn.
+    private var secureCaptureOpenedThisTurn = false
+    /// Snapshot of `InputRequestBridge.secureStoreCount()` at the start of the
+    /// user turn, so the backstop can detect a "saved your key" claim that no
+    /// Keychain write actually backed.
+    private var secureStoresAtTurnStart = 0
+
     /// System-prompt block for audio turns — proven against Gemma 4 E4B (the
     /// daemon strips nothing; Swift strips the [heard] line + tool residue).
     private static let pttHeardInstruction = """
@@ -1023,6 +1033,42 @@ actor PipelineCoordinator {
             placeholder: placeholder,
             isSecure: isSecure
         )
+    }
+
+    // MARK: - Secure-input pre-detector (deterministic)
+
+    /// Deterministic secure-input routing: when the owner clearly asks Fae to
+    /// store a secret, open the secure Keychain-store card in Swift rather than
+    /// trusting the 4B model to call `input_request` (which it does unreliably —
+    /// leaking the secret into chat, or hallucinating success). Returns a short
+    /// system-style note to prepend to the turn so the model's narration matches
+    /// reality, or nil when no secret-store intent was detected.
+    ///
+    /// Narrow by design (`SecureInputIntent` requires a store-verb AND a
+    /// secret-noun, rejects questions and messages already carrying a secret) —
+    /// a false positive (an unwanted card) is a worse UX than a miss.
+    private func maybeOpenSecureInputCard(for text: String) -> String? {
+        guard speakerGate.currentSpeakerIsOwner else { return nil }
+        guard !secureCaptureOpenedThisTurn else { return nil }
+        guard let intent = SecureInputIntent.secretStorageIntent(text) else { return nil }
+
+        secureCaptureOpenedThisTurn = true
+        let key = intent.storeKey
+        NSLog("PipelineCoordinator: secure-input intent detected → opening Keychain-store card for %@", key)
+        // Detached: the card suspends for up to 120s while the user types, and
+        // the turn must not block on it. The value flows straight to the Keychain
+        // via the shared commitSecureStore path — never into model context.
+        Task {
+            _ = await InputRequestBridge.shared.requestSecureStore(
+                storeKey: key,
+                prompt: "Enter the value for \(key). It goes straight to your Keychain — never into our chat.",
+                title: "Secure value",
+                placeholder: "Paste it here"
+            )
+        }
+        return "[A secure input card is open for the user to enter \(key); it is stored "
+            + "directly to the Keychain. Do NOT ask them to type it in chat, and do NOT "
+            + "claim it is saved until the card is submitted.]"
     }
 
     // MARK: - Text Injection
@@ -2264,6 +2310,11 @@ actor PipelineCoordinator {
     ) async {
         currentTurnID = UUID().uuidString
         ttsState.resetForNewTurn()
+        // Per-turn reset for the deterministic secure-input pre-detector, and a
+        // snapshot of the Keychain-store count so the anti-hallucination backstop
+        // can tell a real save from a hallucinated one.
+        secureCaptureOpenedThisTurn = false
+        secureStoresAtTurnStart = await InputRequestBridge.shared.secureStoreCount()
         if proactiveContext != nil {
             ttsState.lastUserTurnEndedAt = nil
         } else if ttsState.lastUserTurnEndedAt == nil {
@@ -2358,6 +2409,16 @@ actor PipelineCoordinator {
            )
         {
             return
+        }
+
+        // Deterministic secure-input routing (typed turns): the real user text
+        // is present here pre-dispatch, so open the Keychain-store card BEFORE
+        // the model sees the turn and prepend a note so its narration matches
+        // reality. Voice turns carry only the "(voice message)" placeholder here;
+        // they are handled at the [heard]-transcript seam in generateWithTools.
+        if turnSource == .text, proactiveContext == nil,
+           let note = maybeOpenSecureInputCard(for: queryText) {
+            queryText = note + "\n\n" + queryText
         }
 
         // Unified pipeline: LLM decides when to use tools via <tool_call> markup.
@@ -3739,6 +3800,15 @@ actor PipelineCoordinator {
                             var transcript = TextProcessing.correctNameRecognition(rawTranscript)
                             transcript = await vocabularyCorrector.correct(transcript)
                             pttHeardTranscriptForTurn = transcript
+                            // Deterministic secure-input routing (voice turns):
+                            // the transcript only exists now, after the daemon
+                            // returned the full reply, so open the Keychain-store
+                            // card here. The model has already narrated, so the
+                            // anti-hallucination backstop at end-of-turn corrects
+                            // any premature "I saved your key" claim.
+                            if proactiveContext == nil {
+                                _ = maybeOpenSecureInputCard(for: transcript)
+                            }
                             await conversationState.updateLastUserMessage(
                                 transcript,
                                 speakerDisplayName: speakerGate.currentSpeakerDisplayName,
@@ -4533,6 +4603,31 @@ actor PipelineCoordinator {
                 // Sentiment → orb feeling.
                 if let feeling = SentimentClassifier.classify(assistantTextForStorage) {
                     eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
+                }
+
+                // Anti-hallucination backstop (secure input): if the model claims
+                // it saved a credential but NO Keychain store completed this turn,
+                // do not let the false claim stand. Scoped tightly to credential
+                // nouns (SecureInputIntent.claimsCredentialSaved) so "I saved that
+                // to your reminders" never trips it. The pre-detector's card fires
+                // async — it is still open while the model narrates — so a "saved"
+                // claim is premature there and is corrected here. When no card was
+                // opened (the detector missed), we only correct the narration; we
+                // do NOT auto-open a card, keeping precision over an unwanted pop.
+                if proactiveContext == nil,
+                   speakerGate.currentSpeakerIsOwner,
+                   await InputRequestBridge.shared.secureStoreCount() == secureStoresAtTurnStart,
+                   SecureInputIntent.claimsCredentialSaved(assistantTextForStorage) {
+                    NSLog("PipelineCoordinator: SECURITY — model claimed a credential was saved but no Keychain write occurred this turn; correcting narration")
+                    let note = secureCaptureOpenedThisTurn
+                        ? "Actually — I haven't stored it yet. I've opened a secure box for you to type it into; it saves to your Keychain the moment you submit."
+                        : "Actually — I haven't stored anything yet. To keep a secret safe I need to open a secure box for you to type it into, so it goes straight to your Keychain and never into our chat."
+                    sendAssistantText(note, isFinal: true)
+                    if generationContext.allowsAudibleOutput {
+                        enqueueTTS(note, isFinal: true, generationID: generationID)
+                    }
+                    await conversationState.addAssistantMessage(note, tag: proactiveContext?.conversationTag)
+                    await persistFinalAssistantTurnIfNeeded(note)
                 }
             } else if let proactiveContext,
                       !visibleResponse.isEmpty
@@ -6234,6 +6329,16 @@ actor PipelineCoordinator {
         ToolExecutor.toolTimeoutSeconds(for: toolName)
     }
 
+    /// True when an `input_request` call is for a credential (has a store_key or
+    /// requests secure entry) — used to no-op a duplicate card after the
+    /// deterministic secure-input pre-detector already opened one this turn.
+    private static func toolCallTargetsSecureStore(_ call: ToolCall) -> Bool {
+        if let storeKey = call.arguments["store_key"] as? String, !storeKey.isEmpty {
+            return true
+        }
+        return (call.arguments["secure"] as? Bool) == true
+    }
+
     private func executeTool(
         _ call: ToolCall,
         explicitUserAuthorizationOverride: Bool? = nil,
@@ -6243,6 +6348,17 @@ actor PipelineCoordinator {
         traceToolCallID: String? = nil
     ) async -> ToolResult {
         let workflowTurnID = traceTurnID ?? currentTurnID
+
+        // Deterministic secure-input coexistence: the pre-detector already opened
+        // a Keychain-store card this turn. If the model ALSO calls input_request
+        // for a credential, do NOT pop a second card — no-op onto the already-open
+        // request. Gated on store_key / secure so a legitimate non-secret
+        // input_request in the same turn is unaffected.
+        if call.name == "input_request",
+           secureCaptureOpenedThisTurn,
+           Self.toolCallTargetsSecureStore(call) {
+            return .success("[a secure input card is already open for the user; not opening another]")
+        }
 
         // Build per-call context from coordinator state.
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score

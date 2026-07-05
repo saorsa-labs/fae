@@ -849,7 +849,11 @@ struct InputRequestTool: Tool {
                 return .error("store_key contains invalid characters.")
             }
             do {
-                try CredentialManager.store(key: storeKey, value: value)
+                // Route through the bridge so there is exactly ONE Keychain-write
+                // path — shared with the deterministic secure-input pre-detector
+                // (SecureInputIntent) — and the secure-store completion counter
+                // stays accurate for the anti-hallucination backstop.
+                try await InputRequestBridge.shared.commitSecureStore(key: storeKey, value: value)
                 return .success("[input stored securely in keychain: \(storeKey)]")
             } catch {
                 return .error("Failed to store secure input: \(error.localizedDescription)")
@@ -981,6 +985,68 @@ actor InputRequestBridge {
                 try? await Task.sleep(for: .seconds(120))
                 await self.resolveWithTimeout(requestId: requestId)
             }
+        }
+    }
+
+    // MARK: - Secure Keychain store (shared path)
+
+    /// Number of secure values committed to the Keychain this process lifetime.
+    /// Snapshotted around a turn so the anti-hallucination backstop can tell
+    /// whether the model's "I saved your key" claim is actually backed by a
+    /// write.
+    private var secureStoreCompletions = 0
+
+    /// store_keys with a secure-capture card currently open, so a duplicate
+    /// request for the same key does not pop a second card.
+    private var activeSecureStoreKeys: Set<String> = []
+
+    /// Read the running secure-store completion count.
+    func secureStoreCount() -> Int { secureStoreCompletions }
+
+    /// The single Keychain-write path, shared by `InputRequestTool` (store_key
+    /// branch) and the deterministic secure-input pre-detector. Increments the
+    /// completion counter on success so exactly one code path both writes and
+    /// accounts for secure stores.
+    func commitSecureStore(key: String, value: String) throws {
+        try CredentialManager.store(key: key, value: value)
+        secureStoreCompletions += 1
+    }
+
+    /// Open a secure input card and, on submit, store the value to the Keychain
+    /// under `storeKey`. Deduplicates concurrent cards for the same key (a
+    /// second request while one is open no-ops). Returns a short status string —
+    /// never the raw secret.
+    func requestSecureStore(
+        storeKey: String,
+        prompt: String,
+        title: String?,
+        placeholder: String,
+        isMultiline: Bool = false
+    ) async -> String {
+        guard InputRequestTool.isSafeKeychainKey(storeKey) else {
+            return "[store_key contains invalid characters]"
+        }
+        if activeSecureStoreKeys.contains(storeKey) {
+            return "[a secure input card is already open for \(storeKey)]"
+        }
+        activeSecureStoreKeys.insert(storeKey)
+        defer { activeSecureStoreKeys.remove(storeKey) }
+
+        let value = await request(
+            prompt: prompt,
+            title: title,
+            placeholder: placeholder,
+            isSecure: true,
+            isMultiline: isMultiline
+        )
+        guard let value, !value.isEmpty else {
+            return "[user cancelled secure input]"
+        }
+        do {
+            try commitSecureStore(key: storeKey, value: value)
+            return "[input stored securely in keychain: \(storeKey)]"
+        } catch {
+            return "[failed to store secure input: \(error.localizedDescription)]"
         }
     }
 
