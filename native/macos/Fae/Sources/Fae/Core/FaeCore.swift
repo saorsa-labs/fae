@@ -2013,12 +2013,41 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// `runtimeProgress` so the orb shows activity. A no-op when the daemon lane
     /// isn't active (MLX fallback) — the new lane applies on the next daemon load.
     private func applyCloudLaneRespawn() {
-        guard let daemonEngine = llmEngine as? DaemonLLMEngine else {
-            NSLog("FaeCore: cloud lane change — daemon lane inactive (MLX fallback); applies on next load")
-            return
-        }
         let lane = config.llm.resolvedPrivacyLane
         let budget = config.llm.cloudDailyBudgetUSD
+        respawnDaemonWhenIdle(stage: "cloud_lane", reason: "cloud lane") { daemonEngine in
+            await daemonEngine.applyCloudConfigChange(privacyLane: lane, budgetUSD: budget)
+        }
+    }
+
+    /// UX W6: apply an x0x peer allow-list change by silently respawning the
+    /// daemon so the new `FAE_X0X_ALLOW` / `FAE_X0X_OWNER_FLEET` env vars (injected
+    /// at spawn) take effect — the same in-flight-safe shape as the W3 cloud lane.
+    private func applyX0xConfigRespawn() {
+        let enabled = config.x0x.enabled
+        let ownerFleet = config.x0x.ownerFleet
+        let allowList = config.x0x.allowList
+        respawnDaemonWhenIdle(stage: "x0x_peers", reason: "x0x peers") { daemonEngine in
+            await daemonEngine.applyX0xConfigChange(
+                enabled: enabled, ownerFleet: ownerFleet, allowList: allowList)
+        }
+    }
+
+    /// Shared silent-respawn scaffold (W3 + W6): waits until the pipeline is idle
+    /// (no turn generating, no speech playing — up to ~60s) so an in-flight turn is
+    /// never killed by the daemon teardown, brackets the work with `runtimeProgress`
+    /// so the orb shows activity, then runs `apply` against the live daemon engine.
+    /// A no-op when the daemon lane isn't active (MLX fallback) — the change applies
+    /// on the next daemon load.
+    private func respawnDaemonWhenIdle(
+        stage: String,
+        reason: String,
+        _ apply: @escaping (DaemonLLMEngine) async -> Void
+    ) {
+        guard let daemonEngine = llmEngine as? DaemonLLMEngine else {
+            NSLog("FaeCore: %@ change — daemon lane inactive (MLX fallback); applies on next load", reason)
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Defer until idle (up to ~60s) so a live generation/playback isn't
@@ -2029,9 +2058,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 if !speaking && !generating { break }
                 try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
             }
-            self.eventBus.send(.runtimeProgress(stage: "cloud_lane", progress: 0.1))
-            await daemonEngine.applyCloudConfigChange(privacyLane: lane, budgetUSD: budget)
-            self.eventBus.send(.runtimeProgress(stage: "cloud_lane", progress: 1.0))
+            self.eventBus.send(.runtimeProgress(stage: stage, progress: 0.1))
+            await apply(daemonEngine)
+            self.eventBus.send(.runtimeProgress(stage: stage, progress: 1.0))
         }
     }
 
@@ -2111,6 +2140,26 @@ final class FaeCore: ObservableObject, HostCommandSender {
             // A budget change alone does not require a respawn (the daemon reads
             // the budget at launch); it takes effect on the next lane change or
             // restart. No teardown here — cheaper + non-disruptive.
+
+        case "x0x.allowList.append", "x0x.ownerFleet.append":
+            // UX W6: consent bridge — add an imported contact's agent id as an
+            // inbound Fae peer. Idempotent (no duplicates). The value must be a
+            // valid 64-hex agent id; a silent daemon respawn republishes the
+            // FAE_X0X_* env so the new peer is honoured without a visible restart.
+            guard let agentID = sanitizedString(value)?.lowercased(),
+                  SelfConfigTool.isHex64(agentID)
+            else { return }
+            if key == "x0x.allowList.append" {
+                if !config.x0x.allowList.contains(agentID) {
+                    config.x0x.allowList.append(agentID)
+                }
+            } else {
+                if !config.x0x.ownerFleet.contains(agentID) {
+                    config.x0x.ownerFleet.append(agentID)
+                }
+            }
+            persistConfig(reason: "config.patch.\(key)")
+            applyX0xConfigRespawn()
 
         case "llm.thinking_enabled":
             guard let value = value as? Bool else { return }

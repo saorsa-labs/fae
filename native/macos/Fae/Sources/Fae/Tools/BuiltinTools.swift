@@ -189,12 +189,13 @@ struct SelfConfigTool: Tool {
         Manage Fae's behavior settings and standing directives. \
         Actions: adjust_setting (change a live setting like speed, temperature, thinking mode), \
         get_settings (view all adjustable settings and current values), \
+        append_list_value (add an x0x agent id to a peer allow-list — x0x.allowList or x0x.ownerFleet), \
         get_directive, set_directive, append_directive, clear_directive (manage standing orders), \
         rollback_improvement (undo the most recent overnight self-improvement change). \
         Legacy aliases: get_instructions, set_instructions, append_instructions, clear_instructions.
         """
     let parametersSchema = #"""
-        {"action": "string (required: adjust_setting|get_settings|get_directive|set_directive|append_directive|clear_directive|rollback_improvement)", "key": "string (required for adjust_setting)", "value": "any (required for adjust_setting and set/append)"}
+        {"action": "string (required: adjust_setting|get_settings|append_list_value|get_directive|set_directive|append_directive|clear_directive|rollback_improvement)", "key": "string (required for adjust_setting and append_list_value)", "value": "any (required for adjust_setting, append_list_value, and set/append)"}
         """#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
@@ -428,6 +429,29 @@ struct SelfConfigTool: Tool {
             let currentConfig = FaeConfig.load()
             return .success(Self.formatCurrentSettings(currentConfig))
 
+        case "append_list_value":
+            // UX W6: append an x0x agent id to a peer allow-list. Only the two x0x
+            // list keys are accepted — this is the consent step that turns an
+            // imported contact into an inbound Fae peer. The value must be a valid
+            // 64-hex agent id. FaeCore.patchConfig performs the append (idempotent)
+            // and triggers a silent daemon respawn so the new FAE_X0X_* env applies.
+            guard let key = input["key"] as? String else {
+                return .error("Missing required parameter: key")
+            }
+            guard Self.appendableListKeys.contains(key) else {
+                return .error(
+                    "append_list_value only accepts \(Self.appendableListKeys.sorted().joined(separator: " or ")).")
+            }
+            guard let rawValue = input["value"] as? String else {
+                return .error("Missing required parameter: value (an agent id)")
+            }
+            let agentID = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard Self.isHex64(agentID) else {
+                return .error("That isn't a valid agent id (needs 64 hexadecimal characters).")
+            }
+            await MainActor.run { Self.configPatcher?("\(key).append", agentID) }
+            return .success("Added agent \(agentID.prefix(12))… to \(key). The change is live.")
+
         case "get_directive", "get_instructions":
             let current = Self.readInstructions()
             if current.isEmpty {
@@ -483,9 +507,18 @@ struct SelfConfigTool: Tool {
 
         default:
             return .error(
-                "Unknown action: \(action). Use: adjust_setting, get_settings, get_directive, set_directive, append_directive, clear_directive, rollback_improvement"
+                "Unknown action: \(action). Use: adjust_setting, get_settings, append_list_value, get_directive, set_directive, append_directive, clear_directive, rollback_improvement"
             )
         }
+    }
+
+    /// Config keys `append_list_value` may append to — the x0x peer allow-lists.
+    /// Restricting the action to these keys keeps it from mutating arbitrary config.
+    static let appendableListKeys: Set<String> = ["x0x.allowList", "x0x.ownerFleet"]
+
+    /// True when `s` is exactly 64 lowercase hexadecimal characters (an agent id).
+    static func isHex64(_ s: String) -> Bool {
+        s.count == 64 && s.allSatisfy { $0.isHexDigit && ($0.isNumber || $0.isLowercase) }
     }
 
     static func readInstructions() -> String {

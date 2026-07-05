@@ -12,7 +12,8 @@ Actions (params.action):
   list   (default) — list contacts.
   mycard — produce the user's OWN shareable card link and show it on screen, so
            they can hand their identity to someone out-of-band (optional display_name).
-  import — import a peer's agent card (param: card; optional trust_level).
+  import — import a peer's agent card (param: card, OR card_ref for a pasted
+           card handed over by file path; optional trust_level).
   add    — add a contact by agent_id (param: agent_id; optional trust_level, label).
   trust  — set the trust level of a known agent_id (params: agent_id, level).
 """
@@ -176,17 +177,35 @@ def do_mycard(client: X0x, params: dict) -> dict:
 
 def do_import(client: X0x, params: dict) -> dict:
     card = params.get("card")
+    # card_ref is a local file PATH (Fae's PasteRegistry spill file): the pasted
+    # ~20 KB card is handed to us by path, never through the model's context.
+    card_ref = params.get("card_ref")
+    if (not card) and card_ref and isinstance(card_ref, str):
+        try:
+            card = Path(card_ref).read_text(encoding="utf-8").strip()
+        except OSError as e:
+            raise X0xError(f"I couldn't read the pasted card ({e}). Ask them to paste it again.")
     if not card or not isinstance(card, str):
         raise X0xError("To import a contact I need their agent card (an x0x:// link or code).")
     trust = (params.get("trust_level") or "known").strip().lower()
     if trust not in TRUST_LEVELS:
         raise X0xError(f"trust_level must be one of {', '.join(TRUST_LEVELS)}.")
-    client.post("/agent/card/import", {"card": card, "trust_level": trust})
+    resp = client.post("/agent/card/import", {"card": card, "trust_level": trust}) or {}
+    # Surface who we imported so Fae can offer the peer-connection consent step.
+    agent_id = resp.get("agent_id") or resp.get("agent", {}).get("agent_id")
+    display_name = (
+        resp.get("display_name")
+        or resp.get("label")
+        or resp.get("agent", {}).get("display_name")
+    )
+    who = display_name or (agent_id[:12] + "…" if agent_id else "the contact")
     return {
         "ok": True,
         "imported": True,
         "trust_level": trust,
-        "summary": f"Imported the contact and set trust to {trust}.",
+        "agent_id": agent_id,
+        "display_name": display_name,
+        "summary": f"Imported {who} and set trust to {trust}.",
     }
 
 

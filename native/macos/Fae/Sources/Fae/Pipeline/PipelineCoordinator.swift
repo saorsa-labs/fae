@@ -1032,6 +1032,23 @@ actor PipelineCoordinator {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        // UX W6: intercept a pasted x0x contact card BEFORE it reaches the LLM.
+        // A card is a ~20 KB `x0x://agent/…` blob; flooding it into context is both
+        // wasteful and unsafe, so we stash the blob in the PasteRegistry and inject
+        // only a short stub that tells Fae to offer importing it via the collaborate
+        // skill. All injectText callers (pill sends, channel typing, test inject)
+        // benefit — this is the single common seam before processTranscription.
+        var effectiveText = trimmed
+        if let card = Self.detectX0xCard(in: trimmed) {
+            let id = await PasteRegistry.shared.store(card)
+            let ref = PasteRegistry.reference(for: id)
+            effectiveText = "[the user pasted an x0x contact card — ref: \(ref). "
+                + "Ask if they want to add this person as a contact; to import, run the "
+                + "collaborate skill's contacts import with card_ref \"\(ref)\".]"
+            NSLog("PipelineCoordinator: intercepted pasted x0x card → %@ (%d bytes stashed)",
+                  ref, card.count)
+        }
+
         // Do NOT run the keyword spotter on typed/pasted text. The spotter uses
         // fuzzy matching designed for misheard voice — it false-positives on normal
         // text (e.g. "discord channel" → "cancel"). Text injection is a deliberate
@@ -1062,18 +1079,39 @@ actor PipelineCoordinator {
         // This allows test injection and typed input to trigger governance shortcuts (tool mode,
         // thinking toggle, barge-in toggle) without routing through the LLM, which would require
         // approval for self_config even in full_no_approval mode.
-        let voiceCmd = VoiceCommandParser.parse(trimmed)
+        let voiceCmd = VoiceCommandParser.parse(effectiveText)
         if voiceCmd != .none {
-            if await handleVoiceCommandIfNeeded(voiceCmd, originalText: trimmed) { return }
+            if await handleVoiceCommandIfNeeded(voiceCmd, originalText: effectiveText) { return }
         }
 
         await processTranscription(
-            text: trimmed,
-            wakeMatch: wakeAddressMatch(in: trimmed),
+            text: effectiveText,
+            wakeMatch: wakeAddressMatch(in: effectiveText),
             rms: nil,
             durationSecs: nil,
             turnSource: .text
         )
+    }
+
+    /// UX W6: detect a pasted x0x contact card and return its `x0x://agent/…`
+    /// link, or nil if `text` is not (essentially) a bare card.
+    ///
+    /// Accepts the paste when it contains EXACTLY ONE `x0x://agent/…` link AND
+    /// either starts with it or wraps it in ≤ 40 characters of other text. This
+    /// keeps normal prose that merely mentions a link from being intercepted.
+    static func detectX0xCard(in text: String) -> String? {
+        let pattern = "x0x://agent/[A-Za-z0-9_\\-]+"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: range)
+        guard matches.count == 1,
+              let match = matches.first,
+              let matchRange = Range(match.range, in: text)
+        else { return nil }
+        let link = String(text[matchRange])
+        let surroundingCount = text.count - link.count
+        guard text.hasPrefix("x0x://agent/") || surroundingCount <= 40 else { return nil }
+        return link
     }
 
     /// Inject a normalised channel message with per-sender conversation isolation.
