@@ -29,7 +29,7 @@ enum SensitiveContentPolicy {
     }
 
     private static let rules: [Rule] = [
-        Rule(label: "private_key_block", level: .highlySensitive, pattern: "-----BEGIN (?:RSA |EC |OPENSSH |PGP |PRIVATE)KEY-----"),
+        Rule(label: "private_key_block", level: .highlySensitive, pattern: "(?i)-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----"),
         Rule(label: "seed_phrase", level: .highlySensitive, pattern: "(?i)\\b(?:seed phrase|recovery phrase|mnemonic phrase|wallet seed)\\b"),
         Rule(label: "password_assignment", level: .highlySensitive, pattern: "(?i)\\b(?:my |the )?(?:password|passphrase|pin)\\b\\s*(?:is|=|:)\\s*[^\\s,;]+"),
         Rule(label: "api_key_assignment", level: .likelyCredential, pattern: "(?i)\\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|bearer token|secret key|client secret)\\b\\s*(?:is|=|:)\\s*[^\\s,;]+"),
