@@ -711,6 +711,30 @@ struct FaeConfig: Codable {
         return min(max(computed, 6), 100)
     }
 
+    /// Context window (in tokens) for the daemon llama.cpp lane, scaled by RAM.
+    ///
+    /// The daemon serves Gemma-4-E4B, which supports a 128K window, but the KV
+    /// cache grows linearly with context so we cap it by available memory. This
+    /// value is passed to the daemon as `FAE_LLAMA_CTX` (the llama-server `-c`
+    /// arg) AND used as the conversation budget for the daemon lane, so history
+    /// compaction bounds the prompt to exactly what the sidecar accepts.
+    ///
+    /// An 8K window overflowed after a few turns (base prompt ≈ 6K before any
+    /// history) and every subsequent turn failed; 32K on capable machines gives
+    /// real headroom, with 16K/8K fallbacks so we never force a large KV cache
+    /// onto a low-RAM machine.
+    static func daemonContextTokens(totalMemoryBytes: UInt64? = nil) -> Int {
+        let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory)
+            / (1024 * 1024 * 1024)
+        if totalGB >= 32 {
+            return 32_768
+        } else if totalGB >= 16 {
+            return 16_384
+        } else {
+            return 8_192
+        }
+    }
+
     /// Auto-tune prefill step size based on model size.
     ///
     /// Larger models benefit from smaller prefill chunks to reduce memory spikes.

@@ -1910,14 +1910,20 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
 #line.multi #txt::-webkit-scrollbar{width:6px}
 #line.multi #txt::-webkit-scrollbar-thumb{background:rgba(180,168,196,.22);border-radius:9999px}
 #shell.multi{border-radius:20px}
-/* Speaker glyph: a small mute toggle at the end of the caption. Not emoji — an
- * inline SVG (DESIGN.md). Click posts a toggle_mute menu action to Swift. */
-#vmute{flex:none;width:20px;height:20px;margin-left:4px;cursor:pointer;opacity:.65;
- display:flex;align-items:center;justify-content:center;color:var(--muted);border-radius:50%;
- transition:opacity .15s,color .15s,background .15s}
-#vmute:hover{opacity:1;color:var(--text);background:rgba(255,255,255,.08)}
-#vmute.muted{color:var(--fae);opacity:.9}
-#vmute svg{width:15px;height:15px;display:block}
+/* Speaker glyph: the mute toggle at the end of the caption. Not emoji — an
+ * inline SVG (DESIGN.md). Click posts a toggle_mute menu action to Swift.
+ * Rendered as an always-visible frosted-glass button (soft fill + border) so
+ * the owner can find and read it as a tappable control; gold (fae-gold) fill
+ * + border when muted (DESIGN.md on-state accent). Visual prominence only —
+ * the click action is unchanged. */
+#vmute{flex:none;width:26px;height:26px;margin-left:6px;cursor:pointer;
+ display:flex;align-items:center;justify-content:center;color:var(--text);
+ background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.18);border-radius:8px;
+ transition:color .15s,background .15s,border-color .15s}
+#vmute:hover{background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.30)}
+#vmute.muted{color:var(--fae);background:rgba(212,169,52,.15);border-color:rgba(212,169,52,.55)}
+#vmute.muted:hover{background:rgba(212,169,52,.24)}
+#vmute svg{width:17px;height:17px;display:block}
 #line.multi #vmute{align-self:flex-start;margin-top:2px}
 /* Info indicator: a second line under the caption — a green dot + summary,
  * shown only when the daemon has pushed `info.update` items. Click opens the

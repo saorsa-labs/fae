@@ -796,6 +796,11 @@ actor DaemonLLMEngine: LLMEngine {
     /// so ModelManager can report the REAL model in UI labels instead of the
     /// ignored MLX preset id.
     let daemonModelID: String
+    /// The llama.cpp context window (tokens) the daemon is launched with,
+    /// RAM-scaled. Passed to the daemon as `FAE_LLAMA_CTX` at spawn AND surfaced
+    /// to ModelManager so the daemon lane's conversation budget matches the
+    /// sidecar's real `-c` window (prevents long-chat context overflow).
+    let contextTokens: Int
     private let eventBus: FaeEventBus?
     private let audioFallbackTranscriber: AudioFallbackTranscribing?
     private let audioFallbackMode: AudioFallbackMode
@@ -944,6 +949,7 @@ actor DaemonLLMEngine: LLMEngine {
     ) {
         self.configuredBinaryPath = binaryPath
         self.daemonModelID = modelID
+        self.contextTokens = FaeConfig.daemonContextTokens()
         self.eventBus = eventBus
         self.audioFallbackTranscriber = audioFallbackTranscriber
         self.audioFallbackMode = audioFallbackMode
@@ -1819,6 +1825,13 @@ actor DaemonLLMEngine: LLMEngine {
         daemonProcess.executableURL = binary
         var environment = ProcessInfo.processInfo.environment
         environment["FAE_MODEL_ID"] = daemonModelID
+        // RAM-scaled context window for the llama.cpp sidecar (`-c`). Swift is the
+        // RAM authority; a user/dev override via the env is respected. Matches the
+        // conversation budget ModelManager derives from `contextTokens`, so the
+        // Swift-side history compaction and the daemon's real window agree.
+        if environment["FAE_LLAMA_CTX"] == nil {
+            environment["FAE_LLAMA_CTX"] = String(contextTokens)
+        }
         if environment["FAE_ISQ"] == nil,
            ProcessInfo.processInfo.physicalMemory >= 32 * 1024 * 1024 * 1024
         {

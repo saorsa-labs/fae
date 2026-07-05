@@ -1874,7 +1874,14 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
         enable_thinking,
         mtp_draft_tokens,
         port: env_parsed("FAE_LLAMA_PORT", 18080),
-        ctx_size: env_parsed("FAE_LLAMA_CTX", 8192),
+        // Fae's base system prompt (37 tools + 30 skills + soul + directive +
+        // memory) is ~6k tokens BEFORE any history, so an 8k window overflowed
+        // after a few turns and every subsequent turn failed with "I hit a local
+        // model problem". Gemma-4-E4B supports 128K; 32K is a safe memory
+        // tradeoff. On macOS the Swift host is the RAM authority and passes a
+        // RAM-scaled `FAE_LLAMA_CTX` (32768 / 16384 / 8192) that overrides this;
+        // this raised default only applies to standalone/headless launches.
+        ctx_size: env_parsed("FAE_LLAMA_CTX", 32_768),
         ngl: env_parsed("FAE_LLAMA_NGL", 999),
     };
     config
