@@ -49,6 +49,23 @@ actor DaemonTTSEngine: TTSEngine {
     private var connection: DaemonSocketConnection?
     private var requestCounter = 0
 
+    /// Install progress for the bundled fae voice embedding. Kept separate from
+    /// `loadState` so a failed first install (e.g. a transient FS error, or a
+    /// synthesis attempt that beat the daemon to readiness) is retried on the
+    /// next synthesis entry instead of being skipped forever behind `load`'s
+    /// idempotent early-return — the live-pass regression where daemon TTS fell
+    /// back to `af_heart` because `<data dir>/voices/fae.safetensors` was never
+    /// populated.
+    private enum VoiceInstallState {
+        /// Not yet confirmed installed — retry on the next `load`/synthesis entry.
+        case pending
+        /// Installed and byte-consistent with the bundled embedding.
+        case installed
+        /// No embedding is bundled — stop retrying (the daemon serves repo voices).
+        case unavailable
+    }
+    private var voiceInstallState: VoiceInstallState = .pending
+
     private(set) var loadState: MLEngineLoadState = .notStarted
 
     var isLoaded: Bool { loadState.isLoaded }
@@ -90,7 +107,7 @@ actor DaemonTTSEngine: TTSEngine {
     func load(modelID: String) async throws {
         if isLoaded { return }
         loadState = .loading
-        Self.installBundledVoices()
+        ensureBundledVoiceInstalled()
         do {
             try await connectAndAuthenticate()
             loadState = .loaded
@@ -172,6 +189,9 @@ actor DaemonTTSEngine: TTSEngine {
         text: String, voiceInstruct: String?
     ) async throws -> AVAudioPCMBuffer? {
         guard isLoaded, let connection else { throw DaemonTTSEngineError.notLoaded }
+        // Self-heal a prior failed install so a "fae" request never resolves to
+        // the daemon's generic fallback voice for the whole session.
+        ensureBundledVoiceInstalled()
         let voice = Self.requestVoice(instruct: voiceInstruct, current: voice)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -230,6 +250,9 @@ actor DaemonTTSEngine: TTSEngine {
         text: String, voiceInstruct: String?, speed: Float
     ) async throws -> String? {
         guard isLoaded, let connection else { throw DaemonTTSEngineError.notLoaded }
+        // Self-heal a prior failed install so a "fae" request never resolves to
+        // the daemon's generic fallback voice for the whole session.
+        ensureBundledVoiceInstalled()
         let voice = Self.requestVoice(instruct: voiceInstruct, current: voice)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -272,6 +295,29 @@ actor DaemonTTSEngine: TTSEngine {
     private func nextRequestID() -> String {
         requestCounter += 1
         return "t\(requestCounter)"
+    }
+
+    /// Ensure the bundled fae voice is installed in the daemon's voices
+    /// directory, retrying until it succeeds. Cheap after the first success
+    /// (returns immediately) and skips forever when nothing is bundled — but a
+    /// prior *failed* attempt stays `.pending`, so it is retried on the next
+    /// `load` or synthesis call rather than leaving Fae on the fallback voice.
+    private func ensureBundledVoiceInstalled() {
+        switch voiceInstallState {
+        case .installed, .unavailable:
+            return
+        case .pending:
+            break
+        }
+        guard Self.bundledFaeVoiceURL() != nil else {
+            voiceInstallState = .unavailable
+            NSLog("DaemonTTSEngine: no bundled fae.safetensors — daemon serves repo voices only")
+            return
+        }
+        if Self.installBundledVoices() {
+            voiceInstallState = .installed
+        }
+        // On failure stay `.pending`: the next synthesis attempt retries.
     }
     /// Connect to the existing daemon's socket (no launch, no polling — the
     /// daemon is already serving the LLM lane) and authenticate with the
@@ -345,38 +391,85 @@ actor DaemonTTSEngine: TTSEngine {
         return candidate
     }
 
-    /// Copy bundled custom voice embeddings into the daemon's voices
-    /// directory (`<fae data dir>/voices/`), where `VoiceTtsAdapter` looks
-    /// before the HF repo. Idempotent and best-effort: a failed install only
-    /// costs the custom voice (the daemon falls back), never speech.
-    static func installBundledVoices() {
-        guard let bundled = Bundle.faeResources.url(forResource: "fae", withExtension: "safetensors")
-        else {
-            NSLog("DaemonTTSEngine: no bundled fae.safetensors — daemon serves repo voices only")
-            return
-        }
-        let voicesDir = FileManager.default.homeDirectoryForCurrentUser
+    /// Bundle URL of the fae voice embedding (`Resources/Voices/fae.safetensors`,
+    /// flattened to the resource root by SwiftPM's per-file `.copy`), or nil
+    /// when the app ships without it.
+    static func bundledFaeVoiceURL() -> URL? {
+        Bundle.faeResources.url(forResource: "fae", withExtension: "safetensors")
+    }
+
+    /// The daemon's custom-voices directory (`<fae data dir>/voices/`), where
+    /// `voice_tts_adapter` looks before the HF repo.
+    ///
+    /// The daemon is NOT dev-isolated: like `models.lock`, its `data_directory()`
+    /// resolves to the production `~/Library/Application Support/fae` even under
+    /// `FAE_DEV`, so the voice installs here regardless of app mode — mirroring
+    /// fae-daemon's `local_voices_directory()`. Using `FaeDirectories.voices`
+    /// (which is `fae-dev` in dev) would install to a directory the daemon never
+    /// reads, which is exactly the live-pass regression.
+    static var daemonVoicesDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent("fae", isDirectory: true)
             .appendingPathComponent("voices", isDirectory: true)
+    }
+
+    /// Copy the bundled fae voice embedding into the daemon's voices directory.
+    /// Idempotent and best-effort: a failed install only costs the custom voice
+    /// (the daemon falls back), never speech. Returns whether the voice is
+    /// present and byte-consistent with the bundle afterwards — the caller
+    /// caches success and retries on `false`.
+    @discardableResult
+    static func installBundledVoices() -> Bool {
+        guard let bundled = bundledFaeVoiceURL() else {
+            NSLog("DaemonTTSEngine: no bundled fae.safetensors — daemon serves repo voices only")
+            return false
+        }
+        return installBundledVoice(from: bundled, into: daemonVoicesDirectory)
+    }
+
+    /// Pure, filesystem-only installer (unit-testable): ensure `voicesDir`
+    /// exists and holds `fae.safetensors` byte-consistent with `bundled`.
+    ///
+    /// Self-healing: an already-present file of the right size is left in place
+    /// (idempotent), while a missing, truncated, or size-mismatched file (the
+    /// footprint of a prior failed copy) is replaced. Returns whether the
+    /// target is present and byte-consistent with the bundle afterwards; a
+    /// thrown FS error is caught and reported as `false` so the caller can
+    /// retry. `copyItem` completes or throws — no partial copy — so a returned
+    /// copy is trusted (avoids `URL` resource-value caching returning a stale
+    /// size after replacement).
+    static func installBundledVoice(from bundled: URL, into voicesDir: URL) -> Bool {
+        let fm = FileManager.default
         let target = voicesDir.appendingPathComponent("fae.safetensors")
+        let bundledSize = fileSize(of: bundled)
         do {
-            let fm = FileManager.default
             try fm.createDirectory(at: voicesDir, withIntermediateDirectories: true)
-            let bundledSize = (try? bundled.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
-            let installedSize = (try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -2
-            guard bundledSize != installedSize else { return }
             if fm.fileExists(atPath: target.path) {
+                if bundledSize >= 0, fileSize(of: target) == bundledSize {
+                    return true
+                }
                 try fm.removeItem(at: target)
             }
             try fm.copyItem(at: bundled, to: target)
             NSLog("DaemonTTSEngine: installed fae voice embedding at %@", target.path)
+            return true
         } catch {
             NSLog(
                 "DaemonTTSEngine: voice install failed (%@) — daemon will fall back",
                 error.localizedDescription)
+            return false
         }
+    }
+
+    /// On-disk byte size of `url`, or -1 when it can't be read. Uses
+    /// `FileManager` attributes (fresh each call) rather than
+    /// `URL.resourceValues`, whose per-URL cache can return a stale size after
+    /// the file is replaced.
+    private static func fileSize(of url: URL) -> Int {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? Int) ?? -1
     }
 
     /// Wrap mono Float32 samples in an `AVAudioPCMBuffer` for the playback path.
