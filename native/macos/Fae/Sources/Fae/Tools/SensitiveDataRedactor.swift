@@ -80,6 +80,13 @@ enum SensitiveDataRedactor {
         // EMBEDDED in a URL is still caught by the explicit provider-prefix
         // patterns above (checked first).
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A URL that embeds a credential in its userinfo (https://user:pass@host)
+        // or a sensitive query parameter (?access_token=…, ?api_key=…) is NOT a
+        // clean link — it leaks a secret. Treat those as credentials before the
+        // exemption so they are withheld.
+        if urlContainsEmbeddedCredential(trimmed) {
+            return true
+        }
         if isEmailOrUrlShaped(trimmed) {
             return false
         }
@@ -121,5 +128,41 @@ enum SensitiveDataRedactor {
         }
         let lower = value.lowercased()
         return lower.hasPrefix("http://") || lower.hasPrefix("https://")
+    }
+
+    /// True when an http(s) URL carries a secret in its userinfo component
+    /// (basic-auth `user:pass@host`) or in a well-known credential query
+    /// parameter (access_token, token, api_key, apikey, key, secret, password).
+    /// Such URLs must NOT be exempted by the email/URL shape rule.
+    private static func urlContainsEmbeddedCredential(_ value: String) -> Bool {
+        let lower = value.lowercased()
+        guard lower.hasPrefix("http://") || lower.hasPrefix("https://") else {
+            return false
+        }
+        guard let components = URLComponents(string: value) else {
+            return false
+        }
+
+        // Userinfo: any user or password component is a basic-auth secret.
+        if let password = components.password, !password.isEmpty {
+            return true
+        }
+        if let user = components.user, !user.isEmpty {
+            return true
+        }
+
+        // Sensitive query-parameter keys.
+        let sensitiveKeys: Set<String> = [
+            "access_token", "token", "api_key", "apikey", "key", "secret", "password",
+        ]
+        if let items = components.queryItems {
+            for item in items where sensitiveKeys.contains(item.name.lowercased()) {
+                if let itemValue = item.value, !itemValue.isEmpty {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 }

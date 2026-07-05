@@ -248,7 +248,14 @@ actor SessionStore {
         contentClass: SessionContentClass = .privateLocalOnly,
         createdAt: Date = Date()
     ) throws -> SessionMessageRecord {
-        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        // S-H1: this store is durable and FTS-indexed, and `session_search` feeds
+        // its rows back into LLM context. Redact secrets at this single choke point
+        // — the same defense-in-depth chain the memory-capture path uses
+        // (SensitiveContentPolicy.redactForStorage → SensitiveDataRedactor.redact) —
+        // so no caller can persist a raw credential, deliberately or by omission.
+        let sanitizedContent =
+            SensitiveDataRedactor.redact(SensitiveContentPolicy.redactForStorage(content)) ?? content
+        let trimmedContent = sanitizedContent.trimmingCharacters(in: .whitespacesAndNewlines)
         let record = SessionMessageRecord(
             id: Self.newID(prefix: "session_msg"),
             sessionId: sessionId,

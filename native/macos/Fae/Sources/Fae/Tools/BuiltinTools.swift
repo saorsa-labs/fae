@@ -871,8 +871,15 @@ struct InputRequestTool: Tool {
         // cannot opt out by setting secure:false or returnToModel:true.
         // The value is discarded here (never logged). The user can re-provide it
         // via input_request(secure:true, store_key:<name>) for safe keychain storage.
+        // Two complementary detectors, either of which withholds: looksLikeCredential
+        // needs a whitespace-free token, so it misses multi-line/whitespace secrets
+        // (PEM blocks, seed phrases, "password is …"). SensitiveContentPolicy.scan
+        // catches those pattern/phrase shapes. Withhold if EITHER fires (fail-closed;
+        // false positives just prompt a safe secure+store_key re-ask).
         let hint = [prompt, title ?? ""].joined(separator: " ")
-        if SensitiveDataRedactor.looksLikeCredential(value, hint: hint) {
+        if SensitiveDataRedactor.looksLikeCredential(value, hint: hint)
+            || SensitiveContentPolicy.scan(value).containsSensitiveContent
+        {
             return .success(
                 "[input looked like a credential and was withheld; " +
                 "re-ask with secure:true and store_key:<name> to store it safely]"
