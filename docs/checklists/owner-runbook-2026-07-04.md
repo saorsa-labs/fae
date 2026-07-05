@@ -73,3 +73,25 @@ The live gate proved task-lease no-double-claim under one x0xd identity. The
 two-identity, two-node version (:12700 + :12701 replicating one task list) is
 the documented next step in ADR-015 — needs x0x-level list replication between
 the two identities first.
+
+---
+
+# Addendum (2026-07-05): Phase G + UX overhaul items
+
+## 8. Pill + UX visual pass (one `source ~/.secrets && just run-dev` session)
+1. Paste a multiline block into the expanded pill — newlines preserved, textarea grows then scrolls.
+2. Paste >800 chars — "pasted · N chars" chip appears, ✕ removes, send ships full text.
+3. Enter sends; Shift+Enter newline.
+4. Click the expanded pill body → collapses; caret clicks inside the field don't.
+5. Ask Fae to store an API key → pill expands with a gold prompt caption, masked field, Keychain storage; Esc cancels cleanly; overlay card appears instead if the orb host is stopped.
+6. Menus: both layers show the purged defaults; Settings → "Show engineering menus" reveals the Advanced set (orb menu applies at next launch).
+7. Fresh-install path (FAE_DEV data dir): first launch runs the CONVERSATIONAL onboarding — name, city (check it lands in memory), one live demonstration, awareness offered as a choice.
+
+## 9. Cloud brain conversational setup (extends item 3)
+Say "set up a cloud brain" → the skill walks through OpenRouter, collects the key via the masked pill input, flips the lane, daemon respawns silently ("ready now"). Then say "ask the cloud what…" → verify the turn routes RemoteAllowed (budget/membrane receipts) and a normal turn stays local.
+
+## 10. x0x friend connection (two identities — the pi test bed works)
+"Share my card" → card page renders with Copy. From the fae-test-peer identity, produce its card; paste it into the owner pill → verify the stub (no 20KB blob in the transcript), import succeeds with the right name, "Shall I let them talk to you through me?" → yes appends to x0x.allowList + silent respawn → the peer's direct message renders attributed in the conversation.
+
+## 11. Context compression sanity
+A long conversation (15+ turns): verify no mid-conversation amnesia (pinned summary carries context), no ttfa regression on the turn after compaction, and `runtime.status` shows the context telemetry block.
