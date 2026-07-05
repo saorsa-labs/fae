@@ -280,6 +280,51 @@ final class DaemonWireTests: XCTestCase {
         XCTAssertNil(blank["pinned_summary"], "blank summary omits the key")
     }
 
+    // MARK: injectTextPayload — route hint (UX W3)
+
+    func testInjectTextPayloadAttachesRouteHintWhenSet() throws {
+        // An explicit owner cloud hint rides the payload as `route_hint`; the
+        // daemon's conductor policy honours it only when the lane + worker permit.
+        var options = GenerationOptions(maxTokens: 128)
+        options.routeHint = "cloud"
+
+        let payload = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "research quantum error correction")],
+            systemPrompt: "You are Fae.",
+            options: options)
+
+        XCTAssertEqual(payload["route_hint"] as? String, "cloud")
+        // Everything else is untouched by the hint.
+        XCTAssertEqual(payload["system"] as? String, "You are Fae.")
+        let wire = try XCTUnwrap(payload["messages"] as? [[String: Any]])
+        XCTAssertEqual(wire[0]["content"] as? String, "research quantum error correction")
+    }
+
+    func testInjectTextPayloadOmitsRouteHintWhenAbsentOrBlank() throws {
+        // No hint ⇒ NO `route_hint` key at all — byte-identical to today's
+        // payload (cache-stability contract: a non-cloud turn is unchanged).
+        let none = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hi")],
+            systemPrompt: "You are Fae.",
+            options: GenerationOptions(maxTokens: 64))
+        XCTAssertNil(none["route_hint"], "no key when the caller has no hint")
+
+        // An all-whitespace hint is treated as absent — never a dangling key.
+        var blankOptions = GenerationOptions(maxTokens: 64)
+        blankOptions.routeHint = "   "
+        let blank = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hi")],
+            systemPrompt: "You are Fae.",
+            options: blankOptions)
+        XCTAssertNil(blank["route_hint"], "blank hint omits the key")
+
+        // The full keyset must match the no-hint payload exactly (byte-identical
+        // key surface) so a non-cloud turn never perturbs the daemon prefix cache.
+        XCTAssertEqual(
+            Set(none.keys), Set(blank.keys),
+            "absent and blank hints produce the same payload key surface")
+    }
+
     // MARK: parseTurn
 
     func testParseTurnExtractsTextAndToolCalls() {

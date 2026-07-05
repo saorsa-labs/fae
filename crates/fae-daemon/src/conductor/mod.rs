@@ -151,7 +151,7 @@ pub use recipe::{
     AggregationPolicy, ApprovalClass, BudgetPolicy, ConductorRecipeError, ConductorRole,
     ConductorTaskClass, ConductorTopology, ConductorTurnContext, EscalationPolicy,
     FaeConductorRecipe, OwnedRouteDecision, PrivacyLane, RecipeSet, RoleSlot, RouteFailure,
-    StopPolicy, WorkerLocality, WorkerSelector,
+    RouteHint, StopPolicy, WorkerLocality, WorkerSelector,
 };
 pub use reward::{
     aggregate_reward, OutcomeMetrics, Reward, RewardComponents, RewardRoutingSource, RewardSignals,

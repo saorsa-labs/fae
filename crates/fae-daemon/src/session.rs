@@ -2171,6 +2171,23 @@ fn payload_pinned_summary(payload: &serde_json::Value) -> Option<&str> {
         .filter(|summary| !summary.is_empty())
 }
 
+/// UX W3 — read the optional `route_hint` field off a `conversation.inject_text`
+/// payload. Only the literal `"cloud"` (trimmed) maps to
+/// [`RouteHint::Cloud`](crate::conductor::recipe::RouteHint::Cloud); absent,
+/// blank, or any other value ⇒ `None` (local, today's behavior). Deny-unknown
+/// safe: this reads a lenient `serde_json::Value` — it never widens a strict
+/// (`deny_unknown_fields`) payload struct.
+fn payload_route_hint(payload: &serde_json::Value) -> Option<crate::conductor::recipe::RouteHint> {
+    match payload
+        .get("route_hint")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+    {
+        Some("cloud") => Some(crate::conductor::recipe::RouteHint::Cloud),
+        _ => None,
+    }
+}
+
 /// Phase G2 — fold an optional pinned conversation summary into the system prompt
 /// as ONE stable block placed immediately after the base system text, before the
 /// retained turns.
@@ -2325,6 +2342,12 @@ fn build_turn_context_with_classifier(
         available_workers: Vec::new(),
         working_directory: None,
         deadline_ms: None,
+        // UX W3: carry the owner's explicit cloud hint (if any). The lane is
+        // still `LocalOnly` and no remote worker is registered here, so the
+        // policy stays local — the hint only becomes live once a later phase
+        // widens the lane + registers the cloud worker. Parsing it now keeps the
+        // wire contract honest and gives the policy its seam.
+        route_hint: payload_route_hint(&cmd.payload),
     }
 }
 
@@ -3059,6 +3082,35 @@ mod tests {
             .iter()
             .any(|p| p == "credential_shaped"));
         assert_eq!(ctx.request_id, "r1");
+    }
+
+    #[test]
+    fn build_turn_context_parses_cloud_route_hint() {
+        use crate::conductor::recipe::RouteHint;
+        // UX W3: an explicit `route_hint: "cloud"` is carried into the context.
+        // The live lane is still LocalOnly with no remote workers, so the policy
+        // stays local — but the hint is parsed (the honest seam).
+        let cmd = command_named(
+            "conversation.inject_text",
+            serde_json::json!({ "text": "what's the news", "route_hint": "cloud" }),
+        );
+        let ctx = build_turn_context(&cmd);
+        assert_eq!(ctx.route_hint, Some(RouteHint::Cloud));
+    }
+
+    #[test]
+    fn build_turn_context_absent_or_unknown_route_hint_is_none() {
+        // Absent, blank, or any non-"cloud" value ⇒ None (local, byte-identical).
+        for payload in [
+            serde_json::json!({ "text": "hi" }),
+            serde_json::json!({ "text": "hi", "route_hint": "" }),
+            serde_json::json!({ "text": "hi", "route_hint": "  " }),
+            serde_json::json!({ "text": "hi", "route_hint": "local" }),
+            serde_json::json!({ "text": "hi", "route_hint": 7 }),
+        ] {
+            let cmd = command_named("conversation.inject_text", payload);
+            assert_eq!(build_turn_context(&cmd).route_hint, None);
+        }
     }
 
     #[test]

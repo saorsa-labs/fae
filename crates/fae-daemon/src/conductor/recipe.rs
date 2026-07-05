@@ -441,6 +441,18 @@ pub(crate) fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
 
 // ────────────────────────── Turn context / decision ─────────────
 
+/// UX W3 — an explicit, owner-initiated per-turn cloud routing hint carried on
+/// `conversation.inject_text`. Only `Cloud` exists today; the policy honors it
+/// **solely** when the privacy lane already permits `RemoteAllowed` AND a
+/// `RemoteProvider` worker is registered for the turn — otherwise it is inert
+/// and `LocalOnly` stays the default (fail-closed). Fae-*initiated* cloud
+/// routing (the model choosing the cloud on its own) is a later phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteHint {
+    /// The owner explicitly asked to route this turn to the cloud brain.
+    Cloud,
+}
+
 /// Inputs to one conductor routing decision. Deliberately carries **no user
 /// text** — correlation with telemetry is via `request_id` only (see
 /// [`crate::conductor::fingerprint::RequestFingerprint`], F-4).
@@ -464,6 +476,11 @@ pub struct ConductorTurnContext {
     /// Optional hard deadline (millis since epoch).
     #[allow(dead_code)] // TODO(M2): budget enforcement
     pub deadline_ms: Option<u64>,
+    /// UX W3: optional explicit cloud routing hint (owner-initiated). `None` for
+    /// every legacy turn — the policy stays `LocalOnly` unless this is
+    /// `Some(RouteHint::Cloud)` AND both the lane and worker registration permit
+    /// the remote lane.
+    pub route_hint: Option<RouteHint>,
 }
 
 /// What approval gate, if any, a route decision must pass before execution.

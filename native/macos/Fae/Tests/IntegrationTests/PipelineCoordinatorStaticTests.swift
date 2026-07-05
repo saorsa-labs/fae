@@ -90,4 +90,51 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
         let serialized = PipelineCoordinator.serializeArguments(["key": "value"])
         XCTAssertFalse(serialized.isEmpty)
     }
+
+    // MARK: - cloudRouteHint (UX W3)
+
+    private let triggers = ["ask the cloud", "use the cloud"]
+
+    func testCloudRouteHintMatchesAndStripsWhenLanePermits() {
+        let r = PipelineCoordinator.cloudRouteHint(
+            for: "ask the cloud to research quantum computing",
+            triggers: triggers, privacyLane: "all")
+        XCTAssertEqual(r.hint, "cloud")
+        XCTAssertEqual(r.text, "to research quantum computing")
+    }
+
+    func testCloudRouteHintIsCaseInsensitiveAndDropsSeparators() {
+        let r = PipelineCoordinator.cloudRouteHint(
+            for: "Use The Cloud: what's the weather",
+            triggers: triggers, privacyLane: "all")
+        XCTAssertEqual(r.hint, "cloud")
+        XCTAssertEqual(r.text, "what's the weather")
+    }
+
+    func testCloudRouteHintIgnoredWhenLaneIsLocal() {
+        // Not configured for cloud ⇒ no hint AND the text is returned untouched
+        // (never silently strip words from a local-only user).
+        let r = PipelineCoordinator.cloudRouteHint(
+            for: "ask the cloud to do X",
+            triggers: triggers, privacyLane: "local")
+        XCTAssertNil(r.hint)
+        XCTAssertEqual(r.text, "ask the cloud to do X")
+    }
+
+    func testCloudRouteHintNoMatchLeavesTextUnchanged() {
+        let r = PipelineCoordinator.cloudRouteHint(
+            for: "what's on my calendar today",
+            triggers: triggers, privacyLane: "all")
+        XCTAssertNil(r.hint)
+        XCTAssertEqual(r.text, "what's on my calendar today")
+    }
+
+    func testCloudRouteHintTriggerOnlyYieldsNoHint() {
+        // "use the cloud" with nothing after ⇒ no usable prompt ⇒ no hint, and the
+        // original text is preserved rather than sending an empty turn.
+        let r = PipelineCoordinator.cloudRouteHint(
+            for: "use the cloud", triggers: triggers, privacyLane: "all")
+        XCTAssertNil(r.hint)
+        XCTAssertEqual(r.text, "use the cloud")
+    }
 }

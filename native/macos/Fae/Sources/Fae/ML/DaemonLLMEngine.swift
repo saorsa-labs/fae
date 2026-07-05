@@ -260,6 +260,14 @@ enum DaemonWire {
            !pinned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             payload["pinned_summary"] = pinned
         }
+        // UX W3: forward an explicit owner cloud routing hint. Absent (or
+        // all-whitespace) ⇒ the key is omitted entirely so a non-cloud turn is
+        // byte-identical to today's payload. The daemon's conductor policy honours
+        // it only when the lane + worker registration permit the remote lane.
+        if let hint = options.routeHint,
+           !hint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["route_hint"] = hint
+        }
         return payload
     }
 
@@ -964,6 +972,48 @@ actor DaemonLLMEngine: LLMEngine {
         cloudDailyBudgetUSD = min(max(budgetUSD, 0.01), 100.0)
     }
 
+    /// UX W3: apply a runtime privacy-lane / cloud-budget change by cleanly
+    /// respawning the daemon so the new `FAE_REMOTE_*` / `FAE_PRIVACY_LANE`
+    /// env vars (injected at launch) take effect. Reuses the intentional
+    /// teardown + relaunch path (`internalShutdown` disarms the crash supervisor,
+    /// `launchAndConnect` re-arms it via `recordLaunch`) so no restart-loop budget
+    /// is consumed. Endpoints are republished by `launchAndConnect` via
+    /// `onEndpointsChanged`, so FaeCore's TTS/ACP reconnection follows for free.
+    ///
+    /// The caller (FaeCore) is responsible for deferring this until no turn is in
+    /// flight — `internalShutdown` kills the daemon connection, which would abort a
+    /// live generation. When the daemon lane isn't active (MLX fallback), this only
+    /// updates the fields; the new lane applies on the next `load()`.
+    func applyCloudConfigChange(privacyLane: String, budgetUSD: Double) async {
+        cloudPrivacyLane = ["local", "fleet", "all"].contains(privacyLane) ? privacyLane : "local"
+        cloudDailyBudgetUSD = min(max(budgetUSD, 0.01), 100.0)
+        guard isLoaded else {
+            NSLog(
+                "DaemonLLMEngine: cloud lane change (lane=%@) — daemon not loaded, applies on next load",
+                cloudPrivacyLane)
+            return
+        }
+        NSLog(
+            "DaemonLLMEngine: applying cloud lane change (lane=%@) — respawning daemon",
+            cloudPrivacyLane)
+        // Intentional teardown: disarms the supervisor so the terminationHandler
+        // does NOT schedule a crash relaunch that would race this respawn.
+        internalShutdown()
+        loadState = .notStarted
+        do {
+            loadState = .loading
+            try await launchAndConnect()
+            loadState = .loaded
+            NSLog("DaemonLLMEngine: daemon respawned with cloud lane=%@", cloudPrivacyLane)
+        } catch {
+            loadState = .failed(error.localizedDescription)
+            clearFailedLaunchState()
+            NSLog(
+                "DaemonLLMEngine: ⚠️ cloud-lane respawn FAILED (lane=%@) — %@",
+                cloudPrivacyLane, error.localizedDescription)
+        }
+    }
+
     /// Set x0x peer lane parameters before `load()` is called.
     /// Called by FaeCore immediately after constructing the engine.
     func setX0xConfig(enabled: Bool, ownerFleet: [String], allowList: [String]) {
@@ -1088,6 +1138,10 @@ actor DaemonLLMEngine: LLMEngine {
         // context — folding it into the transcribe system prompt would only
         // distract pass 1. Pass 2 (reasoning) keeps it.
         transcribeOptions.pinnedSummary = nil
+        // UX W3: the transcription pass never routes to the cloud — it is a
+        // tool-free, local-only mechanical pass. The reasoning pass (below,
+        // `reasonOptions = options`) inherits any cloud route hint.
+        transcribeOptions.routeHint = nil
         transcribeOptions.suppressThinking = true
         // Scale the pass-1 cap with duration (~12 tokens/sec ≈ the
         // duration*25-char gate with headroom) so a 30s clip isn't truncated
