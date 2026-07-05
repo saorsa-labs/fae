@@ -2211,6 +2211,25 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 Task { await coordinator.setPlaybackSpeed(speed) }
             }
 
+        case "tts.speak_replies", "tts.speakReplies":
+            let enabled: Bool
+            if let v = value as? Bool {
+                enabled = v
+            } else if let v = value as? String {
+                enabled = (v as NSString).boolValue
+            } else {
+                return
+            }
+            config.tts.speakReplies = enabled
+            persistConfig(reason: "config.patch.tts.speak_replies")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setSpeakReplies(enabled) }
+            }
+            // Reflect the new mute state on the orb pill glyph immediately. The
+            // shell controller observes this and forwards it to the orb host.
+            NotificationCenter.default.post(
+                name: .faeVoiceMuteChanged, object: nil, userInfo: ["muted": !enabled])
+
         case "tts.emotional_prosody", "tts.warmth":
             break // Legacy keys — silently ignored (emotional prosody removed in v2.0).
 

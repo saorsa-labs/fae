@@ -385,6 +385,13 @@ extension Notification.Name {
     /// - `flash_type: String?` — flash type (present for `"flash"`)
     static let faeOrbStateChanged = Notification.Name("faeOrbStateChanged")
 
+    /// Posted when voice output is muted/unmuted (`tts.speakReplies`) so the orb
+    /// host can reflect the state on the pill speaker glyph.
+    ///
+    /// userInfo keys:
+    /// - `muted: Bool` — true when Fae's voice is muted (text-first)
+    static let faeVoiceMuteChanged = Notification.Name("faeVoiceMuteChanged")
+
     // MARK: Audio
 
     /// Posted continuously during TTS playback with the current audio RMS level.

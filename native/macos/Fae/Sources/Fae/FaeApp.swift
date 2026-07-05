@@ -1138,6 +1138,17 @@ struct FaeApp: App {
                 }
                 .keyboardShortcut(".", modifiers: .command)
 
+                Divider()
+
+                // Voice mute (text-first). Menus read config on open, so the
+                // title reflects the live state like the Engineering menu does.
+                let voiceMuted = !FaeConfig.load().tts.speakReplies
+                Button(voiceMuted ? "Unmute Fae\u{2019}s Voice" : "Mute Fae\u{2019}s Voice") {
+                    // Toggle: if currently muted, enable voice (true); else mute (false).
+                    appDelegate.faeCore.patchConfig(
+                        key: "tts.speak_replies", payload: ["value": voiceMuted])
+                }
+
                 let fleet = FaeConfig.load().x0x.ownerFleet
                 if !fleet.isEmpty {
                     Divider()

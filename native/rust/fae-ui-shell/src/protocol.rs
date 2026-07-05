@@ -106,6 +106,12 @@ pub enum ShellCommand {
     /// so the abandoned card is cancelled and the pill returns to its normal
     /// composer. Idempotent — a no-op when the pill is not hosting a request.
     CancelInput,
+    /// Voice-mute state (`tts.speakReplies`): drives the pill speaker glyph so a
+    /// muted (text-first) reply reads as intentional, not broken. Pushed by
+    /// Swift on connect and whenever the mute toggles.
+    VoiceMute {
+        muted: bool,
+    },
     ClearConversation,
     Show,
     Hide,
@@ -305,6 +311,23 @@ mod tests {
         assert!(
             matches!(command, ShellCommand::CancelInput),
             "cancel_input must decode to CancelInput"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_voice_mute_command() -> Result<(), serde_json::Error> {
+        // Text-first: Swift pushes the mute state so the pill speaker glyph
+        // reflects whether Fae will speak.
+        let muted: ShellCommand = serde_json::from_str(r#"{"type":"voice_mute","muted":true}"#)?;
+        assert!(
+            matches!(muted, ShellCommand::VoiceMute { muted: true }),
+            "voice_mute must decode with its muted flag"
+        );
+        let unmuted: ShellCommand = serde_json::from_str(r#"{"type":"voice_mute","muted":false}"#)?;
+        assert!(
+            matches!(unmuted, ShellCommand::VoiceMute { muted: false }),
+            "voice_mute must decode muted=false"
         );
         Ok(())
     }

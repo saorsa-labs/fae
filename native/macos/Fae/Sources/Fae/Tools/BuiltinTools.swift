@@ -303,6 +303,10 @@ struct SelfConfigTool: Tool {
             valueType: .bool,
             description: "Force canonical bundled fae.wav voice"
         ),
+        "tts.speak_replies": SettingSpec(
+            valueType: .bool,
+            description: "Speak replies aloud (true=voice on, false=muted/text-only)"
+        ),
         "llm.temperature": SettingSpec(
             valueType: .float(min: 0.3, max: 1.0),
             description: "Creativity (0.3=precise, 0.7=balanced, 1.0=creative)"
@@ -539,6 +543,7 @@ struct SelfConfigTool: Tool {
         var lines: [String] = ["Current settings:"]
         lines.append("  tts.speed = \(config.tts.speed) — Speaking speed (0.8=slow, 1.0=normal, 1.4=fast)")
         lines.append("  tts.voice_identity_lock = \(config.tts.voiceIdentityLock) — Force canonical bundled fae.wav")
+        lines.append("  tts.speak_replies = \(config.tts.speakReplies) — Speak replies aloud (false=muted/text-only)")
         lines.append("  llm.temperature = \(config.llm.temperature) — Creativity (0.3=precise, 1.0=creative)")
         lines.append("  llm.thinking_enabled = \(config.llm.thinkingEnabled) — Extended reasoning")
         lines.append(

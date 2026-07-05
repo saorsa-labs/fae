@@ -375,4 +375,46 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertTrue(reloaded.ui.advancedMenus,
                       "ui.advancedMenus must survive a serialize → reload cycle")
     }
+
+    // MARK: - Voice mute (tts.speakReplies)
+
+    func testTTSSpeakRepliesDefaultIsTrue() {
+        // Voice ON by default — muting is an opt-in, text-first preference.
+        let config = FaeConfig()
+        XCTAssertTrue(config.tts.speakReplies,
+                      "speakReplies must default true so Fae speaks out of the box")
+    }
+
+    func testTTSSpeakRepliesParsesSnakeAndCamelCase() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+
+        let snakeURL = tempRoot.appendingPathComponent("snake.toml")
+        try "[tts]\nspeak_replies = false\n".write(to: snakeURL, atomically: true, encoding: .utf8)
+        XCTAssertFalse(FaeConfig.load(from: snakeURL).tts.speakReplies,
+                       "speak_replies = false (snake_case) must mute the voice")
+
+        let camelURL = tempRoot.appendingPathComponent("camel.toml")
+        try "[tts]\nspeakReplies = false\n".write(to: camelURL, atomically: true, encoding: .utf8)
+        XCTAssertFalse(FaeConfig.load(from: camelURL).tts.speakReplies,
+                       "speakReplies = false (camelCase) must mute the voice")
+    }
+
+    func testTTSSpeakRepliesSerializesAndReloads() throws {
+        // Round-trip the muted state: a text-first user's preference must
+        // survive a serialize → reload cycle (like tts.speed / ui.advancedMenus).
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        var original = FaeConfig()
+        original.tts.speakReplies = false
+        try original.save(to: fileURL)
+
+        let reloaded = FaeConfig.load(from: fileURL)
+        XCTAssertFalse(reloaded.tts.speakReplies,
+                       "tts.speakReplies must survive a serialize → reload cycle")
+    }
 }

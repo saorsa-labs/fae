@@ -141,6 +141,9 @@ struct OrbUiModel {
     /// Orb-host-owns-state: the current info-indicator set (green-dot pill line).
     /// Populated by `info.update` events from the daemon bridge.
     info_items: orb_state::InfoItems,
+    /// Voice-mute state (`tts.speakReplies`): drives the pill speaker glyph.
+    /// Pushed by Swift on connect and whenever the mute toggles.
+    voice_muted: bool,
 }
 
 impl OrbUiModel {
@@ -156,6 +159,7 @@ impl OrbUiModel {
             settings_sections: Vec::new(),
             settings_cards: Vec::new(),
             info_items: orb_state::InfoItems::default(),
+            voice_muted: false,
         }
     }
 
@@ -185,6 +189,10 @@ impl OrbUiModel {
 
     fn clear_messages(&mut self) {
         self.messages.clear();
+    }
+
+    fn set_voice_muted(&mut self, muted: bool) {
+        self.voice_muted = muted;
     }
 
     fn set_scheduler_tasks(&mut self, tasks: Vec<SchedulerTask>) {
@@ -785,7 +793,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 .and_then(|value| value.get("height"))
                                 .and_then(serde_json::Value::as_u64)
                             {
-                                let height = (height as u32).clamp(52, 240);
+                                // Cap generously so a longer reply stays readable
+                                // in the collapsed caption; beyond the cap the
+                                // caption text scrolls internally (see PILL_HTML).
+                                let height = (height as u32).clamp(52, 320);
                                 if height != last_pill_height {
                                     last_pill_height = height;
                                     pill.window.set_inner_size(LogicalSize::new(
@@ -1508,6 +1519,11 @@ fn apply_bridge_command(
         ShellCommand::ClearConversation => {
             orb_ui.clear_messages();
         }
+        ShellCommand::VoiceMute { muted } => {
+            // Store on the model; the pill glyph is refreshed by
+            // push_pill_messages after this command returns.
+            orb_ui.set_voice_muted(muted);
+        }
         ShellCommand::SchedulerSnapshot { tasks } => {
             orb_ui.set_scheduler_tasks(tasks);
             refresh_scheduler_panels(web_panels, orb_ui);
@@ -1786,6 +1802,13 @@ fn push_pill_messages(pill: &PillPanel, orb_ui: &OrbUiModel) {
     {
         log::warn!("failed to push pill messages: {error}");
     }
+    // Keep the pill speaker glyph in sync with the voice-mute state.
+    if let Err(error) = pill.webview.evaluate_script(&format!(
+        "window.__faeSetVoiceMute&&window.__faeSetVoiceMute({});",
+        orb_ui.voice_muted
+    )) {
+        log::warn!("failed to push pill voice-mute state: {error}");
+    }
 }
 
 const PILL_HTML: &str = r#"<!doctype html><html class=""><head><meta charset='utf-8'><style>
@@ -1877,10 +1900,25 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
 #hl.secure{color:#E6C05A}
 #line{transition:opacity .35s ease}
 #line.fading{opacity:0}
-#line.multi{height:auto;align-items:flex-start;padding:11px 16px;white-space:normal}
+/* Multi-line caption: the line fills the shell so a long reply SCROLLS inside
+ * the pill (readable, not truncated) once it exceeds the grow-to-fit cap. */
+#line.multi{height:auto;align-items:flex-start;padding:11px 16px;white-space:normal;
+ flex:1 1 auto;min-height:0;overflow:hidden}
 #line.multi #dot{margin-top:6px}
-#line.multi #txt{white-space:pre-wrap;overflow:hidden;text-overflow:clip;line-height:1.5}
+#line.multi #txt{white-space:pre-wrap;overflow-y:auto;overflow-x:hidden;text-overflow:clip;
+ line-height:1.5;max-height:100%}
+#line.multi #txt::-webkit-scrollbar{width:6px}
+#line.multi #txt::-webkit-scrollbar-thumb{background:rgba(180,168,196,.22);border-radius:9999px}
 #shell.multi{border-radius:20px}
+/* Speaker glyph: a small mute toggle at the end of the caption. Not emoji — an
+ * inline SVG (DESIGN.md). Click posts a toggle_mute menu action to Swift. */
+#vmute{flex:none;width:20px;height:20px;margin-left:4px;cursor:pointer;opacity:.65;
+ display:flex;align-items:center;justify-content:center;color:var(--muted);border-radius:50%;
+ transition:opacity .15s,color .15s,background .15s}
+#vmute:hover{opacity:1;color:var(--text);background:rgba(255,255,255,.08)}
+#vmute.muted{color:var(--fae);opacity:.9}
+#vmute svg{width:15px;height:15px;display:block}
+#line.multi #vmute{align-self:flex-start;margin-top:2px}
 /* Info indicator: a second line under the caption — a green dot + summary,
  * shown only when the daemon has pushed `info.update` items. Click opens the
  * item's action (url/app/research page) via the orb-host router. */
@@ -1893,7 +1931,7 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
 #info:hover .itxt{color:#C7D9CE}
 </style></head><body>
 <div id='shell'>
- <div id='line'><span id='dot'></span><span id='txt'></span></div>
+ <div id='line'><span id='dot'></span><span id='txt'></span><span id='vmute' title='Mute Fae'></span></div>
  <div id='info'><span class='idot'></span><span class='itxt'></span></div>
  <div id='exp'>
   <div id='head'><span class='l' id='hl'>Conversation</span><span id='cl'>⌄</span></div>
@@ -1910,8 +1948,8 @@ var shell=document.getElementById('shell'),line=document.getElementById('line'),
  input=document.getElementById('in'),snd=document.getElementById('snd'),cl=document.getElementById('cl'),
  exp=document.getElementById('exp'),cmp=document.getElementById('cmp'),hl=document.getElementById('hl'),
  chip=document.getElementById('chip'),chiptxt=document.getElementById('chiptxt'),chipx=document.getElementById('chipx'),
- reqx=document.getElementById('reqx');
-var messages=[],status=null,infoItems=[];
+ reqx=document.getElementById('reqx'),vmute=document.getElementById('vmute');
+var messages=[],status=null,infoItems=[],muted=false;
 // UX W1 composer state: a Swift request_input in flight (request_id or null),
 // whether the field is masked, and the full text of a long paste held as a chip.
 var pendingInput=null,secureMode=false,pastedFull=null;
@@ -1935,11 +1973,17 @@ function sizePill(isMsg){
  requestAnimationFrame(function(){
   var sh=txt.scrollHeight,multi=sh>26;
   line.classList.toggle('multi',multi);shell.classList.toggle('multi',multi);
-  var h=multi?Math.min(240,Math.max(60,sh+30)):baseHeight();
+  // Grow to fit, capped generously; beyond the cap the caption text scrolls.
+  var h=multi?Math.min(320,Math.max(60,sh+30)):baseHeight();
   post({type:'pill_resize',height:h});});}
-function armFade(){fadeTimer=setTimeout(function(){line.classList.add('fading');
+// Dwell: keep a reply visible long enough to READ before fading to the hint.
+// Scaled to length (base + ~50ms/char, capped 30s); longer while muted, since a
+// text-first reply is only read, never heard.
+function fadeDelay(text){var len=(text||'').length;var base=muted?9000:6000;
+ return Math.min(30000,base+50*len);}
+function armFade(ms){fadeTimer=setTimeout(function(){line.classList.add('fading');
  fadeOut=setTimeout(function(){line.className='muted';dot.className='';
-  txt.textContent='Hold right ⌥ to talk · click to see conversation';line.classList.remove('fading');sizePill(false);},360);},7000);}
+  txt.textContent='Hold right ⌥ to talk · click to see conversation';line.classList.remove('fading');sizePill(false);},360);},ms);}
 // Make a spoken reply readable: keep any real structure (newlines), else break
 // a run-on paragraph into one line per sentence (caption style) so it doesn't
 // read as a single dense block.
@@ -1952,7 +1996,7 @@ function renderLine(){
   txt.textContent=status.text;line.classList.toggle('muted',status.muted===true);sizePill(false);return;}
  var m=messages[messages.length-1];
  if(m){line.className='';dot.className=rc(m.role);txt.textContent=formatBody(m.text);
-  if(!shell.classList.contains('expanded')){sizePill(true);armFade();}}
+  if(!shell.classList.contains('expanded')){sizePill(true);armFade(fadeDelay(m.text));}}
  else{line.className='muted';dot.className='';txt.textContent='Hold right ⌥ to talk · click to see conversation';sizePill(false);}
 }
 function renderLog(){log.innerHTML='';messages.forEach(function(m){
@@ -1965,6 +2009,16 @@ window.__faeSetMessages=function(a){messages=a||[];shell.classList.add('show');r
 window.__faeSetStatus=function(kind,text,opts){opts=opts||{};
  status=kind?{kind:kind,text:text,live:opts.live===true,muted:opts.muted===true}:null;
  shell.classList.add('show');renderLine();};
+// Speaker glyph (voice mute toggle). Inline SVG — never emoji (DESIGN.md).
+var SPK_ON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg>';
+var SPK_OFF='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9l5 6M21 9l-5 6"/></svg>';
+function renderVMute(){vmute.innerHTML=muted?SPK_OFF:SPK_ON;
+ vmute.classList.toggle('muted',muted);
+ vmute.title=muted?'Fae muted — click to unmute':'Mute Fae';}
+window.__faeSetVoiceMute=function(m){muted=(m===true);renderVMute();};
+vmute.addEventListener('click',function(e){e.stopPropagation();
+ post({type:'menu',action:'toggle_mute'});});
+renderVMute();
 // Auto-growing textarea: reset then grow to fit, capped (~6 rows) with internal
 // scroll beyond. Send button lights when there's something to send.
 function autoGrow(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,120)+'px';}
