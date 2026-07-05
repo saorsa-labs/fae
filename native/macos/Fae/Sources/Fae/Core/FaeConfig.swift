@@ -697,14 +697,17 @@ struct FaeConfig: Codable {
     /// Compute a sensible `maxHistoryMessages` from context size and generation budget.
     ///
     /// Formula: available = contextSize - systemPromptBudget - maxTokens.
-    /// System prompt budget: ~12K base + tool schemas (~5K) + potential skill injection (~5K) = ~18K.
+    /// System prompt budget: after the prompt-budget trim the assembled base prompt
+    /// (identity + soul + tools + typical memory/skill injection) measures ≈6K, so
+    /// we reserve 8K (≈6K actual + headroom). The old 18K figure predated the trim
+    /// and starved 16K-context machines down to the 6-message floor.
     /// Each conversation turn ≈ 400 tokens (user ~100 + assistant ~300).
     /// Clamped to [6, 100].
     static func recommendedMaxHistory(contextSize: Int, maxTokens: Int) -> Int {
-        // Conservative estimate: base system prompt (~12K) + tool schemas (~5K)
-        // + headroom for skill injection. PipelineCoordinator dynamically adjusts
-        // reserved tokens per turn, but this sets the max message count ceiling.
-        let systemBudget = 18_000
+        // Post prompt-budget-trim the base prompt is ≈6K; 8K adds headroom for tool
+        // schemas + skill injection. PipelineCoordinator recalculates reserved tokens
+        // per turn — this only sets the max message-count ceiling.
+        let systemBudget = 8_000
         let available = contextSize - systemBudget - maxTokens
         guard available > 0 else { return 6 }
         let computed = available / 400

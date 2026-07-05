@@ -462,11 +462,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     contextSize: contextSize, maxTokens: effectiveMaxTokens
                 )
                 await conversationState.setMaxHistory(maxHistory)
-                // Reserve tokens for system prompt (~12K base + skills + tools ≈ 18K)
-                // plus generation budget. This is a conservative initial estimate;
-                // PipelineCoordinator.generateWithTools() recalculates dynamically
-                // each turn based on the actual assembled prompt.
-                let initialReservedTokens = 18_000 + effectiveMaxTokens
+                // Reserve tokens for the system prompt (post prompt-budget-trim the
+                // base prompt is ≈6K; 8K adds headroom for skills + tools) plus the
+                // generation budget. Mirrors FaeConfig.recommendedMaxHistory's 8K
+                // system budget so the reserved total never exceeds the window on 16K
+                // machines. PipelineCoordinator.generateWithTools() recalculates this
+                // dynamically each turn from the actual assembled prompt.
+                let initialReservedTokens = 8_000 + effectiveMaxTokens
                 await conversationState.setContextBudget(
                     contextSize: contextSize,
                     reservedTokens: initialReservedTokens
@@ -2052,16 +2054,46 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let self else { return }
             // Defer until idle (up to ~60s) so a live generation/playback isn't
             // aborted by the daemon teardown.
-            for _ in 0..<600 {
+            let becameIdle = await FaeCore.waitUntilIdle(maxPolls: 600, pollNanos: 100_000_000) {
+                [weak self] in
+                guard let self else { return true }
                 let speaking = await self.pipelineCoordinator?.isSpeaking ?? false
                 let generating = await self.pipelineCoordinator?.isGenerating ?? false
-                if !speaking && !generating { break }
-                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                return !speaking && !generating
+            }
+            // R-H1: on timeout the pipeline is STILL busy. Applying now would kill the
+            // in-flight turn (the whole reason we waited), so abort the respawn instead.
+            // The config change is already persisted, so the new env vars take effect on
+            // the next daemon spawn — this is recoverable, not lost. Clear the
+            // "setting up…" indicator with a `.failed` stage and log loudly so the user
+            // learns it did not apply now and can retry from an idle state.
+            guard becameIdle else {
+                NSLog(
+                    "FaeCore: %@ respawn timed out — pipeline busy for 60s; change persisted, applies on next daemon load",
+                    reason)
+                self.eventBus.send(.runtimeProgress(stage: "\(stage).failed", progress: 1.0))
+                return
             }
             self.eventBus.send(.runtimeProgress(stage: stage, progress: 0.1))
             await apply(daemonEngine)
             self.eventBus.send(.runtimeProgress(stage: stage, progress: 1.0))
         }
+    }
+
+    /// Poll `isIdle` up to `maxPolls` times (sleeping `pollNanos` between checks),
+    /// returning `true` as soon as it reports idle, or `false` if the whole budget is
+    /// exhausted while still busy. Extracted from `respawnDaemonWhenIdle` so the R-H1
+    /// timeout path is unit-testable without a live daemon (inject a short budget).
+    nonisolated static func waitUntilIdle(
+        maxPolls: Int,
+        pollNanos: UInt64,
+        isIdle: () async -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxPolls {
+            if await isIdle() { return true }
+            try? await Task.sleep(nanoseconds: pollNanos)
+        }
+        return false
     }
 
     func patchConfig(key: String, payload: [String: Any]) {

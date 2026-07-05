@@ -1673,6 +1673,23 @@ actor FaeScheduler {
     }
 
     private func runImprovementCycle() async {
+        // P-H1: the nightly cycle drives MetaOptimizer + (optional) weight training,
+        // both heavy. It MUST honour the same battery/thermal/consent throttle as the
+        // other proactive tasks — otherwise it fires at 03:00 on battery. Gate FIRST,
+        // before any store/coordinator/bridge work, identical to runTrainingCycle().
+        let throttle = AwarenessThrottle.check(
+            config: awarenessConfig,
+            taskId: "improvement_cycle",
+            lastUserSeenAt: lastUserSeenAt
+        )
+        switch throttle {
+        case .skip(let reason):
+            NSLog("FaeScheduler: improvement_cycle skipped — %@", reason)
+            return
+        case .silentOnly, .normal:
+            break
+        }
+
         // Lazy-open the improvement store if needed.
         if improvementStore == nil {
             let store = ImprovementStore()
