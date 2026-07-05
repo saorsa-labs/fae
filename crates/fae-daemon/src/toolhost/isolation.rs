@@ -232,16 +232,47 @@ impl JailedSessionEnv {
         cancel: &CancellationToken,
     ) -> RuntimeResult<ShellResult> {
         let profile = seatbelt_profile(&self.root);
-        // The inner env runs `sh -c "<wrapped>"`; `<wrapped>` invokes
-        // sandbox-exec with the profile and the original command, each
+        // C1: the jailed shell must NOT inherit the daemon's provider secrets
+        // (`FAE_OPENROUTER_API_KEY`, the ACP keys). fluers' `LocalSessionEnv::exec`
+        // spawns `sh` with the daemon's full ambient env and offers no env seam,
+        // so scrub at the command level instead: run the whole sandboxed pipeline
+        // under `/usr/bin/env -i <allowlist>`. `env -i` clears the environment
+        // unconditionally — it can never fall back to the full env (fail-closed) —
+        // and we re-add only the vetted, non-secret allowlist (`crate::child_env`,
+        // the SAME map the Linux jail applies via `env_clear() + envs(...)`).
+        //
+        // The inner env runs `sh -c "<wrapped>"`; `<wrapped>` scrubs the env, then
+        // invokes sandbox-exec with the profile and the original command, each
         // single-quoted for the outer shell.
         let wrapped = format!(
-            "/usr/bin/sandbox-exec -p {} /bin/sh -c {}",
+            "{} /usr/bin/sandbox-exec -p {} /bin/sh -c {}",
+            scrubbed_env_i_prefix(),
             sh_single_quote(&profile),
             sh_single_quote(command),
         );
         self.inner.exec(&wrapped, cwd, timeout_ms, cancel).await
     }
+}
+
+/// Build the `/usr/bin/env -i K=V …` prefix that scrubs a child's environment
+/// down to the shared allowlist (`crate::child_env::scrubbed_child_env`). Each
+/// `K=V` is single-quoted for the outer shell, so an arbitrary value (spaces,
+/// quotes, `$VAR`, backticks) reaches `env` as one exact literal argv element —
+/// `env -i` then applies them as the *complete* environment. This is the macOS
+/// twin of the Linux jail's `env_clear() + envs(scrubbed_child_env())`; because
+/// `env -i` always clears first, even an empty allowlist fails closed (the child
+/// runs with an empty env, never the daemon's secrets).
+#[cfg(target_os = "macos")]
+fn scrubbed_env_i_prefix() -> String {
+    let mut parts = vec!["/usr/bin/env".to_string(), "-i".to_string()];
+    let mut pairs: Vec<(String, String)> =
+        crate::child_env::scrubbed_child_env().into_iter().collect();
+    // Deterministic argv order (the map is unordered); purely cosmetic.
+    pairs.sort();
+    for (k, v) in pairs {
+        parts.push(sh_single_quote(&format!("{k}={v}")));
+    }
+    parts.join(" ")
 }
 
 /// Generate a seatbelt profile that denies by default, allows reads / process
@@ -518,6 +549,84 @@ mod tests {
         assert_eq!(sh_single_quote("abc"), "'abc'");
         // A single quote is closed, escaped, and reopened.
         assert_eq!(sh_single_quote("a'b"), "'a'\\''b'");
+    }
+
+    // -- macOS env-scrub prefix (C1) --
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn env_i_prefix_starts_with_env_dash_i_and_omits_secrets() {
+        // Plant a provider secret; the `env -i` prefix must clear it while
+        // keeping PATH so the sandboxed shell can still find its binaries.
+        // Value built by concatenation so no secret-shaped literal reaches git.
+        let secret = format!("{}-{}", "planted", "must-not-leak-abc123");
+        std::env::set_var("FAE_OPENROUTER_API_KEY", &secret);
+        let prefix = scrubbed_env_i_prefix();
+        std::env::remove_var("FAE_OPENROUTER_API_KEY");
+
+        assert!(
+            prefix.starts_with("/usr/bin/env -i "),
+            "prefix must clear the env via `env -i`: {prefix}"
+        );
+        // The secret value never appears in the argv prefix.
+        assert!(!prefix.contains(&secret), "secret leaked into prefix");
+        assert!(
+            !prefix.contains("FAE_OPENROUTER_API_KEY"),
+            "secret var name leaked into prefix: {prefix}"
+        );
+        // PATH survives (single-quoted `PATH=...`) so the child can exec.
+        assert!(
+            prefix.contains("'PATH="),
+            "PATH dropped from prefix: {prefix}"
+        );
+    }
+
+    /// End-to-end: run a real jailed `exec` under `exec_jailed_macos` and prove a
+    /// planted `FAE_OPENROUTER_API_KEY` is absent from the jailed shell's view —
+    /// the macOS twin of the Linux jail's env scrub. nextest runs each test in
+    /// its own process, so the process-global env plant is race-free under the
+    /// gate.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn jailed_macos_exec_does_not_expose_planted_api_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = std::fs::canonicalize(dir.path()).expect("canonicalize");
+        let root = real.clone();
+
+        let secret = format!("{}-{}", "planted", "must-not-leak-xyz789");
+        std::env::set_var("FAE_OPENROUTER_API_KEY", &secret);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        let result = rt.block_on(async {
+            let inner = LocalSessionEnv::new(root.clone(), fluers_runtime::Limits::default())
+                .await
+                .expect("inner env");
+            let jail = JailedSessionEnv::new(Arc::new(inner), root.clone());
+            // A command with quotes/spaces/`$VAR` exercising the escaping: it
+            // prints the secret var if present, else the sentinel.
+            let cmd = "printf '%s' \"${FAE_OPENROUTER_API_KEY:-__ABSENT__}\"";
+            jail.exec(cmd, Path::new("."), Some(10_000), &CancellationToken::new())
+                .await
+                .expect("jailed exec")
+        });
+
+        std::env::remove_var("FAE_OPENROUTER_API_KEY");
+
+        assert_eq!(result.exit_code, 0, "jailed exec failed: {result:?}");
+        assert!(
+            !result.stdout.contains(&secret),
+            "planted API key leaked into jailed stdout: {:?}",
+            result.stdout
+        );
+        assert_eq!(
+            result.stdout.trim(),
+            "__ABSENT__",
+            "jailed shell saw the secret (expected sentinel): {:?}",
+            result.stdout
+        );
     }
 
     // -- Linux landlock ruleset construction --
