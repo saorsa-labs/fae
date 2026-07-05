@@ -5,6 +5,12 @@
 //! catalog relies on actually round-trip; the catalog's allowlist/namespace/gate
 //! logic is covered by the unit tests in `mcp` + `toolhost`.
 
+// Test code is exempt from the production unwrap/expect/panic ban; ci-linux's
+// crate gate passes `-D clippy::{expect_used,unwrap_used,panic}` with
+// `--all-targets`, which sweeps integration-test targets in — allow here
+// (same exemption as tests/peer_x0x_live.rs).
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use mistralrs_mcp::client::ProcessMcpConnection;
 use mistralrs_mcp::McpServerConnection;
 
