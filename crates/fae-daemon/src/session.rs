@@ -2648,6 +2648,52 @@ async fn peer_consent_respond(backends: &SessionBackends<'_>, cmd: &Command) -> 
     Ok(serde_json::json!({ "recorded": true }))
 }
 
+/// RAII guard for the `assistant.generating` paired signal.
+///
+/// Publishing `active:false` as a bare statement at the end of a turn is
+/// skipped when the turn future is **dropped mid-await** (cancellation): Swift
+/// kills the daemon connection to interrupt a turn (barge-in / a new PTT
+/// capture — see `DaemonLLMEngine.internalShutdown`) and overlapping proactive
+/// turns get aborted. Either drops `inject_text_core` after the `active:true`
+/// publish but before the paired `active:false`. Because the orb host holds its
+/// **own** daemon subscription (unaffected by Swift closing its connection), it
+/// keeps the orphaned `generating(true)` with no `false` to arm its grace-idle
+/// — the orb sticks on "Thinking" forever.
+///
+/// Emitting `active:false` from `Drop` closes the hole: it fires on every exit
+/// — normal return, `?`-error, panic unwind, AND future cancellation — exactly
+/// once. Construct AFTER a successful parse so a malformed payload never
+/// publishes `active:true`.
+struct GeneratingGuard {
+    events: EventBus,
+}
+
+impl GeneratingGuard {
+    /// Publish `active:true` and arm the paired `active:false` for `Drop`.
+    fn begin(events: &EventBus) -> Self {
+        events.publish(
+            "assistant.generating",
+            Scope::ConversationRead,
+            serde_json::json!({ "active": true }),
+        );
+        Self {
+            events: events.clone(),
+        }
+    }
+}
+
+impl Drop for GeneratingGuard {
+    fn drop(&mut self) {
+        // The orb host's grace-hold turns this into an armed (not immediate)
+        // idle transition — see `native/rust/fae-ui-shell/src/orb_state.rs`.
+        self.events.publish(
+            "assistant.generating",
+            Scope::ConversationRead,
+            serde_json::json!({ "active": false }),
+        );
+    }
+}
+
 /// Core conversation turn: FAE_DUMP → parse → `assistant.generating` event
 /// pair → NaN-logits retry loop → `run_turn`. Extracted from `inject_text` so
 /// the conductor's `direct` arm can run the exact same code path (the M1
@@ -2657,8 +2703,9 @@ async fn peer_consent_respond(backends: &SessionBackends<'_>, cmd: &Command) -> 
 /// User-visible behavior lives here: the `assistant.generating {active:true}`
 /// publish (the orb host's generating indicator), the NaN-logits retry loop
 /// (`NAN_RETRY_PADS = [4,24,80]`, rescues a known Metal failure), and the
-/// exactly-once `active:false` publish on every return path. Any re-route MUST
-/// call this verbatim, never a bare `run_turn`.
+/// exactly-once `active:false` publish on every exit path — including
+/// cancellation — via [`GeneratingGuard`]. Any re-route MUST call this
+/// verbatim, never a bare `run_turn`.
 pub(crate) async fn inject_text_core(
     backends: &SessionBackends<'_>,
     cmd: &Command,
@@ -2686,14 +2733,13 @@ pub(crate) async fn inject_text_core(
 
     // Orb-host-owns-state: signal that the assistant is generating. Published
     // ONLY after a successful parse (a malformed payload returns above before
-    // this, so it never publishes `active:true`). The paired `active:false` is
-    // guaranteed exactly once by the run loop below — every return path runs
-    // through it. Scope `ConversationRead` (the orb host's subscribe grant).
-    backends.events.publish(
-        "assistant.generating",
-        Scope::ConversationRead,
-        serde_json::json!({ "active": true }),
-    );
+    // the guard is built, so it never publishes `active:true`). The paired
+    // `active:false` is guaranteed exactly once by the guard's `Drop` — so it
+    // fires on every exit path INCLUDING future cancellation (a bare statement
+    // at the end would be skipped when the turn is interrupted mid-await,
+    // orphaning the orb host on "Thinking"). Scope `ConversationRead` (the orb
+    // host's subscribe grant).
+    let _generating = GeneratingGuard::begin(backends.events);
 
     // Gemma 4 on Metal produces NaN logits when a prompt's TOTAL length lands
     // in a narrow window of sequence lengths (mistral.rs kernel tiling edge;
@@ -2737,14 +2783,9 @@ pub(crate) async fn inject_text_core(
     }
     .await;
 
-    // Exactly-once `active:false` — success, inference failure, OR retry
-    // exhaustion all reach here. The orb host's grace-hold turns this into an
-    // armed (not immediate) idle transition.
-    backends.events.publish(
-        "assistant.generating",
-        Scope::ConversationRead,
-        serde_json::json!({ "active": false }),
-    );
+    // The paired `active:false` is published by `_generating`'s `Drop` at the
+    // end of this scope — success, inference failure, retry exhaustion, AND a
+    // dropped (cancelled) future all balance the signal exactly once.
 
     // Phase G1/G2: record this turn's context telemetry (best-effort). On
     // success the completion estimate comes from the returned text; a failed turn
@@ -5251,6 +5292,71 @@ mod tests {
             })
             .collect();
         assert_eq!(actives, vec![true, false], "paired generating signal");
+    }
+
+    /// Regression: the orb-stuck-on-"Thinking" strand. When a turn future is
+    /// **dropped mid-await** (Swift kills the daemon connection to interrupt a
+    /// turn, or an overlapping proactive turn is aborted), the paired
+    /// `active:false` must still be published so the orb host's grace-hold can
+    /// idle. A bare `active:false` statement is skipped on cancellation; the
+    /// `GeneratingGuard`'s `Drop` fires on the drop and balances the signal.
+    ///
+    /// Modelled without a runtime: poll the guard-holding future once (runs to
+    /// the never-completing await → publishes `true`, then parks), then DROP the
+    /// still-pending future — exactly the cancellation shape — and assert the
+    /// paired `false` was emitted.
+    #[test]
+    fn generating_guard_publishes_false_when_turn_future_is_cancelled() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let bus = crate::events::EventBus::new();
+        let (sink, captured) = CapturingSink::new();
+        let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
+        bus.subscribe(
+            std::sync::Arc::downgrade(&sink_dyn),
+            [Scope::ConversationRead].into_iter().collect(),
+        );
+
+        let actives = |store: &[serde_json::Value]| -> Vec<bool> {
+            store
+                .iter()
+                .filter(|v| v.get("event").and_then(|e| e.as_str()) == Some("assistant.generating"))
+                .filter_map(|v| {
+                    v.get("payload")
+                        .and_then(|p| p.get("active"))
+                        .and_then(serde_json::Value::as_bool)
+                })
+                .collect()
+        };
+
+        let bus_for_turn = bus.clone();
+        let mut turn = Box::pin(async move {
+            // The guard is live for the whole "turn". `pending` never resolves,
+            // so this future only ever leaves the executor by being dropped.
+            let _generating = GeneratingGuard::begin(&bus_for_turn);
+            std::future::pending::<()>().await;
+        });
+
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        // First poll: publishes `active:true`, then parks on the pending await.
+        assert!(matches!(turn.as_mut().poll(&mut cx), Poll::Pending));
+        {
+            let store = captured.lock().expect("captured lock");
+            assert_eq!(actives(&store), vec![true], "true published, not yet false");
+        }
+
+        // Cancel the in-flight turn by dropping its future (the daemon-side
+        // effect of Swift killing the connection / aborting an overlapping turn).
+        drop(turn);
+
+        let store = captured.lock().expect("captured lock");
+        assert_eq!(
+            actives(&store),
+            vec![true, false],
+            "cancelled turn still balances the generating signal"
+        );
     }
 
     #[tokio::test]
