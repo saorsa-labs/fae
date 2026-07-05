@@ -59,6 +59,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::compaction::{self, PromptBudget, Watermark};
 use crate::conductor::ConductorStore;
+use crate::mcp::MCP_TOOL_PREFIX;
 use crate::toolhost::confirm::ToolConfirmation;
 use crate::toolhost::isolation::{jail_backend_available, ToolOrigin};
 use crate::toolhost::receipts::sha256_hex;
@@ -719,14 +720,33 @@ fn delegated_worker_system_prompt() -> String {
 /// Build the RESTRICTED model tool schemas for `toolset` from the host's tool
 /// definitions. A `ParameterSchema` that cannot serialize degrades to an empty
 /// object rather than dropping the tool.
+///
+/// (#18) An `mcp:<server>:<tool>` name is NOT a fluers registry tool — it routes
+/// to the governed MCP tier. Its raw JSON schema is emitted verbatim (MCP schemas
+/// may not round-trip fluers `ParameterSchema`), and it surfaces ONLY when the
+/// host's catalog declares + allowlists it — the SAME fail-closed gate
+/// `ToolHost::execute_mcp` applies. The `Delegated` origin is already permitted for
+/// MCP, so a declared tool in the toolset is genuinely callable; a name the catalog
+/// does not hold (MCP absent or not declared) is dropped rather than advertised as a
+/// tool the worker cannot actually invoke. No permission is widened: the toolset
+/// still gates membership and the runtime `execute_mcp` gate still runs per call.
 fn build_tool_specs(host: &ToolHost, toolset: &[String]) -> Vec<ToolSpec> {
-    host.tool_definitions(toolset)
-        .into_iter()
-        .map(|def| ToolSpec {
-            name: def.name,
-            description: def.description,
-            parameters: serde_json::to_value(&def.parameters)
-                .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
+    toolset
+        .iter()
+        .filter_map(|name| {
+            if name.starts_with(MCP_TOOL_PREFIX) {
+                return host.mcp_tool_spec(name).map(|spec| ToolSpec {
+                    name: name.clone(),
+                    description: spec.description,
+                    parameters: spec.parameters,
+                });
+            }
+            host.tool_definition(name).map(|def| ToolSpec {
+                name: def.name,
+                description: def.description,
+                parameters: serde_json::to_value(&def.parameters)
+                    .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
+            })
         })
         .collect()
 }
@@ -1696,6 +1716,73 @@ mod tests {
             outcome.receipt.child_ids.len(),
             2,
             "the orchestrator receipt records both children"
+        );
+    }
+
+    /// (#18) `build_tool_specs` surfaces an `mcp:` tool's raw schema into the
+    /// delegate loop's tool list ONLY when the host's catalog declares +
+    /// allowlists it — the same fail-closed gate `execute_mcp` applies. A tool the
+    /// catalog does not hold (offered but not allowlisted, or MCP absent entirely)
+    /// must NOT appear even when named in the toolset, so a delegated turn is never
+    /// advertised a tool it cannot actually invoke. No permission is widened.
+    #[tokio::test]
+    async fn build_tool_specs_surfaces_mcp_only_when_declared() {
+        use crate::mcp::{catalog_from_mock, MockConn};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = store_at(dir.path());
+        let host = ToolHost::new_durable(dir.path().to_path_buf(), Limits::default(), store)
+            .await
+            .expect("host build");
+
+        // The mock server offers `echo` (allowlisted) + `secret` (offered but NOT
+        // allowlisted → never enters the catalog, mirroring a policy that does not
+        // permit the Delegated origin for it).
+        let conn = MockConn::new(
+            "fs",
+            vec![("echo", "echo it back"), ("secret", "must not leak")],
+            "mcp-result",
+        );
+        let catalog = Arc::new(catalog_from_mock("fs", conn, &["echo"]).await);
+        let host = host.with_mcp_catalog(catalog);
+
+        let toolset = vec![
+            "mcp:fs:echo".to_owned(),   // declared + allowlisted → surfaces
+            "mcp:fs:secret".to_owned(), // offered but not allowlisted → dropped
+            "read".to_owned(),          // a normal fluers registry tool
+        ];
+        let specs = build_tool_specs(&host, &toolset);
+
+        let echo = specs
+            .iter()
+            .find(|s| s.name == "mcp:fs:echo")
+            .expect("a declared+allowlisted mcp tool must surface");
+        assert_eq!(echo.description, "echo it back");
+        // The raw MCP input schema is emitted verbatim (the mock lists this).
+        assert_eq!(echo.parameters, serde_json::json!({"type": "object"}));
+
+        assert!(
+            specs.iter().all(|s| s.name != "mcp:fs:secret"),
+            "a non-declared mcp tool must NOT surface even when named in the toolset"
+        );
+        assert!(
+            specs.iter().any(|s| s.name == "read"),
+            "a normal fluers registry tool still surfaces alongside mcp tools"
+        );
+
+        // A host with NO catalog drops the SAME declared name (execute_mcp would
+        // deny `mcp_not_configured`), proving the schema path is catalog-gated.
+        let bare = ToolHost::new_durable(
+            dir.path().to_path_buf(),
+            Limits::default(),
+            store_at(dir.path()),
+        )
+        .await
+        .expect("bare host build");
+        let bare_specs = build_tool_specs(&bare, &["mcp:fs:echo".to_owned()]);
+        assert!(
+            bare_specs.is_empty(),
+            "with no MCP catalog, an mcp: tool must not be advertised"
         );
     }
 }

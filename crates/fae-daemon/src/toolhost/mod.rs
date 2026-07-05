@@ -164,6 +164,17 @@ pub struct ToolHost {
     mcp: Option<Arc<McpCatalog>>,
 }
 
+/// (Phase G3 / #18) The delegation-loop LLM-facing spec for a declared `mcp:`
+/// tool: the raw JSON input schema (verbatim — NOT a fluers `ParameterSchema`)
+/// plus its description. Produced by [`ToolHost::mcp_tool_spec`].
+#[derive(Debug, Clone)]
+pub struct McpToolSpec {
+    /// The tool's human description (empty string if the server gave none).
+    pub description: String,
+    /// The tool's raw JSON Schema for inputs, emitted verbatim.
+    pub parameters: serde_json::Value,
+}
+
 impl ToolHost {
     /// Build a host over a fresh sandbox root with the default (fail-closed)
     /// audit + egress wiring.
@@ -290,9 +301,37 @@ impl ToolHost {
     pub fn tool_definitions(&self, allowed: &[String]) -> Vec<fluers_core::tool::ToolDefinition> {
         allowed
             .iter()
-            .filter_map(|name| self.registry.get(name))
-            .map(|tool| tool.definition())
+            .filter_map(|name| self.tool_definition(name))
             .collect()
+    }
+
+    /// The fluers registry [`ToolDefinition`] for a SINGLE tool, or `None` if the
+    /// name is not a registered fluers tool. The delegation loop's
+    /// `build_tool_specs` calls this per-name so it can branch `mcp:` names off to
+    /// the raw-schema path ([`mcp_tool_spec`](Self::mcp_tool_spec)) — MCP tools are
+    /// external subprocesses, never fluers registry tools.
+    #[must_use]
+    pub fn tool_definition(&self, name: &str) -> Option<fluers_core::tool::ToolDefinition> {
+        self.registry.get(name).map(|tool| tool.definition())
+    }
+
+    /// (Phase G3 / #18) The delegation-loop LLM-facing schema for a declared
+    /// `mcp:<server>:<tool>` tool, or `None` unless MCP is configured AND the tool
+    /// is declared + allowlisted in the catalog — the SAME fail-closed catalog gate
+    /// [`execute_mcp`](Self::execute_mcp) steps 1 + 4 apply, so this never widens
+    /// what a delegated turn may call. The `Delegated` origin is already permitted
+    /// for MCP (`execute_mcp` step 2), so a declared tool in the delegated toolset
+    /// is genuinely invocable; a non-declared name would earn a runtime
+    /// `mcp_tool_not_declared` deny and so must NOT be advertised. The raw JSON
+    /// input schema is returned verbatim (MCP schemas may not round-trip fluers
+    /// `ParameterSchema`).
+    #[must_use]
+    pub fn mcp_tool_spec(&self, name: &str) -> Option<McpToolSpec> {
+        let mtool = self.mcp.as_ref()?.get(name)?;
+        Some(McpToolSpec {
+            description: mtool.description.clone().unwrap_or_default(),
+            parameters: mtool.input_schema.clone(),
+        })
     }
 
     /// The governed entry point. Runs the policy; on `Allow` dispatches the
