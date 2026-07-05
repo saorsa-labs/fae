@@ -570,6 +570,75 @@ actor MemoryOrchestrator {
         return candidate.isEmpty ? nil : candidate
     }
 
+    /// Extract a home location from explicit statements such as
+    /// "I live in X", "we're based in X", or "I'm located in X".
+    ///
+    /// Deliberately conservative: anchors only on live/based/located so that
+    /// figurative phrases ("I live for music", "living the dream") do not
+    /// register as places. Returns the place text with its original casing.
+    static func extractLocation(from text: String) -> String? {
+        let lower = text.lowercased()
+        // Ordered so the more specific ("we're based in") matches before the
+        // bare fallback ("based in") — first hit wins.
+        let anchors = [
+            "i live in ", "i'm living in ", "i am living in ",
+            "we live in ", "we're living in ", "we are living in ",
+            "i'm based in ", "i am based in ",
+            "we're based in ", "we are based in ",
+            "i'm located in ", "i am located in ",
+            "we're located in ", "we are located in ",
+            "based in ", "located in ",
+        ]
+        for anchor in anchors {
+            guard let range = lower.range(of: anchor) else { continue }
+            let original = text[range.upperBound...]
+            let raw = original
+                .prefix(while: { $0.isLetter || $0 == " " || $0 == "-" || $0 == "'" })
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Trim trailing filler ("Ayr now", "Glasgow at the moment").
+            let fillers: Set<String> = [
+                "now", "currently", "today", "still", "too", "also",
+                "these", "days", "at", "the", "moment", "right",
+            ]
+            var words = raw.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            while let last = words.last, fillers.contains(last.lowercased()) {
+                words.removeLast()
+            }
+            let candidate = words.joined(separator: " ")
+            if isLikelyPlaceName(candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    /// Heuristic guard rejecting non-place phrases captured after a location
+    /// anchor (e.g. "a hurry", "trouble"). Mirrors `isLikelyHumanName`.
+    static func isLikelyPlaceName(_ candidate: String) -> Bool {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 40 else { return false }
+
+        let words = trimmed
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !words.isEmpty, words.count <= 4 else { return false }
+
+        let blockedTokens: Set<String> = [
+            "a", "an", "the", "trouble", "love", "charge", "control",
+            "bed", "here", "there", "denial", "danger", "debt", "fact",
+            "general", "particular", "a-hurry", "hurry",
+        ]
+
+        for word in words {
+            let lowered = word.lowercased()
+            if blockedTokens.contains(lowered) { return false }
+            if word.rangeOfCharacter(from: CharacterSet.decimalDigits) != nil { return false }
+            if word.count < 2 { return false }
+        }
+
+        return true
+    }
+
     private func recentLearningReply() async throws -> String {
         let recentRecords = try await store.recentRecords(limit: max(config.maxRecallResults * 4, 16))
         let relevant = recentRecords.filter { isRecentMemorySummarySupportCandidate($0) }
@@ -740,6 +809,28 @@ actor MemoryOrchestrator {
                 )
             } catch {
                 NSLog("MemoryOrchestrator: name capture failed: %@", error.localizedDescription)
+            }
+        }
+
+        // 4b. Parse home-location statements ("I live in X", "we're based in X").
+        //     Stored as a single superseding profile record so a move overwrites
+        //     the prior city rather than accumulating stale locations.
+        if !shouldSuppressStructuredExtraction,
+           let place = Self.extractLocation(from: sanitizedUserText)
+        {
+            do {
+                try await upsertProfile(
+                    tag: "location",
+                    text: "Primary user lives in \(place).",
+                    confidence: MemoryConstants.profileNameConfidence,
+                    sourceTurnId: turnId,
+                    allTags: ["location", "identity"],
+                    report: &report,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
+                )
+            } catch {
+                NSLog("MemoryOrchestrator: location capture failed: %@", error.localizedDescription)
             }
         }
 

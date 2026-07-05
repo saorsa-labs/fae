@@ -1002,6 +1002,11 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("Fae: contacts access not granted or Me Card not found")
             }
 
+            // UX W4: the first-launch permission phase is done — hand off to the
+            // conversational onboarding skill. Fires once (guarded by
+            // `fae.onboarding.conversationStarted`) and defers itself until the
+            // pipeline is ready if models are still loading.
+            self.faeCore.startConversationalOnboardingIfNeeded()
         }
     }
 
