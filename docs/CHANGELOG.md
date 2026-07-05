@@ -2,6 +2,37 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — UX Wave 2 (structural credential withholding + memory-capture redaction)
+
+### Security
+- **Structural credential detector (`SensitiveDataRedactor.looksLikeCredential`)**: extends
+  `SensitiveDataRedactor` with a boolean detector that classifies a value as a probable
+  credential via three signal classes: known provider prefixes (sk-, ghp_, AIza, xox[baprs]-),
+  high-entropy heuristic (≥ 20 compact alphanumeric chars, no whitespace), and request-context
+  hint (prompt/title contains a credential keyword + value ≥ 8 chars no spaces).
+- **Structural withholding in `InputRequestTool.execute`**: before any raw value is returned to
+  the LLM, `looksLikeCredential` runs against the value and the combined prompt+title hint.
+  If it fires and no `store_key` is set, the value is discarded and the model receives an
+  instructive error directing it to re-ask with `secure:true` and `store_key:<name>`. This
+  fires even when the model sets `secure:false` or `returnToModel:true` — protection is
+  structural, not model-driven.
+- **Memory-capture redaction choke point (`MemoryOrchestrator.capture`)**: the existing
+  `SensitiveContentPolicy.redactForStorage` pass is now composed with
+  `SensitiveDataRedactor.redact` at lines 617–620, forming a two-layer redaction at the single
+  authority point used by all nine capture steps. Neither layer's gap can allow a raw credential
+  to reach durable SQLite storage.
+- **Prompt rule (`PersonalityManager`)**: new SECRETS RULE bullet in the tools-available prompt
+  section instructs the model to always use `input_request(secure:true, store_key:<name>)` for
+  API keys/passwords/tokens, never ask the user to speak a secret aloud, and refer to stored
+  credentials only by key name.
+
+### Testing
+- `Tests/HandoffTests/CredentialWithholdingTests.swift`: 20 tests across three suites —
+  `CredentialDetectorTests` (known-prefix positives, entropy heuristic, hint-context, negatives),
+  `InputRequestWithholdPathTests` (withhold message contract, secure+returnToModel coverage,
+  store_key bypass), `MemoryCaptureRedactionTests` (sk-, ghp_, high-entropy, normal text,
+  composed two-layer chain).
+
 ## Unreleased — Phase G commit 2 (main-lane pinned-summary compression)
 
 ### New Features

@@ -823,6 +823,20 @@ struct InputRequestTool: Tool {
             }
         }
 
+        // Structural credential guard: if the value looks like a raw secret and
+        // there is no store_key to route it safely, withhold it from the model
+        // context entirely. This fires regardless of the secure flag — the model
+        // cannot opt out by setting secure:false or returnToModel:true.
+        // The value is discarded here (never logged). The user can re-provide it
+        // via input_request(secure:true, store_key:<name>) for safe keychain storage.
+        let hint = [prompt, title ?? ""].joined(separator: " ")
+        if SensitiveDataRedactor.looksLikeCredential(value, hint: hint) {
+            return .success(
+                "[input looked like a credential and was withheld; " +
+                "re-ask with secure:true and store_key:<name> to store it safely]"
+            )
+        }
+
         if secure && !returnToModel {
             return .success("[secure input captured locally and withheld from model context]")
         }

@@ -614,8 +614,15 @@ actor MemoryOrchestrator {
         var report = MemoryCaptureReport()
         let userSensitivity = SensitiveContentPolicy.scan(userText)
         let assistantSensitivity = SensitiveContentPolicy.scan(assistantText)
-        let sanitizedUserText = SensitiveContentPolicy.redactForStorage(userText)
-        let sanitizedAssistantText = SensitiveContentPolicy.redactForStorage(assistantText)
+        // Defense-in-depth: run both SensitiveContentPolicy (pattern + context rules)
+        // and SensitiveDataRedactor (known token prefixes + entropy heuristic) so that
+        // neither layer's gap allows a raw credential to reach durable storage.
+        // This is the single choke point; all nine capture steps below use these
+        // sanitized strings exclusively.
+        let sanitizedUserText =
+            SensitiveDataRedactor.redact(SensitiveContentPolicy.redactForStorage(userText)) ?? userText
+        let sanitizedAssistantText =
+            SensitiveDataRedactor.redact(SensitiveContentPolicy.redactForStorage(assistantText)) ?? assistantText
 
         // Each step below is isolated in its own do/catch so a failure in one
         // (e.g. the episode insert throwing on SQLITE_BUSY / disk full) does

@@ -174,6 +174,12 @@ enum PersonalityManager {
         - Use run_skill for executable skills.
           - Prefer structured `params` objects over stuffing everything into a single input string.
           - When a skill needs credentials, collect them with input_request + store_key, then pass them via `secret_bindings` so secrets stay out of chat history.
+        - SECRETS RULE — when asking for any API key, password, token, or secret: \
+          ALWAYS use input_request with secure:true and a descriptive store_key (e.g. "openai_api_key"). \
+          Never ask the user to say or type a secret aloud into a voice reply. \
+          Refer to stored credentials only by their store_key name, never the raw value. \
+          The system will automatically block raw credentials that arrive without store_key, so \
+          setting secure:true + store_key is the only path that reliably stores the value.
         - Use input_request whenever the user wants to type or paste text instead of speaking it — \
           names, addresses, URLs, code, long passages, or anything easier typed than spoken. \
           Not just for secrets. If the user says "let me type that", "I'll paste it", \
