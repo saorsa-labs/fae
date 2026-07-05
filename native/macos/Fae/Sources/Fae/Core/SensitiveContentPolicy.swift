@@ -37,6 +37,11 @@ enum SensitiveContentPolicy {
         Rule(label: "github_token", level: .likelyCredential, pattern: "(?i)\\bgh[pousr]_[A-Za-z0-9]{16,}\\b"),
         Rule(label: "slack_token", level: .likelyCredential, pattern: "(?i)\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b"),
         Rule(label: "google_key", level: .likelyCredential, pattern: "(?i)\\bAIza[0-9A-Za-z\\-_]{20,}\\b"),
+        // AWS access key ID: `AKIA` + 16 upper/digit chars = 20 chars total, which
+        // slips under the 40-char `long_opaque_token` catch-all below. Match it
+        // explicitly (case-sensitive — AWS key IDs are uppercase) so
+        // `redactForStorage` masks it before it reaches durable session storage.
+        Rule(label: "aws_access_key", level: .likelyCredential, pattern: "\\bAKIA[0-9A-Z]{16}\\b"),
         Rule(label: "ssh_key", level: .highlySensitive, pattern: "(?i)\\bssh-(?:rsa|ed25519|ecdsa)\\s+[A-Za-z0-9+/=]{20,}"),
         Rule(label: "one_time_code", level: .sensitiveInline, pattern: "(?i)\\b(?:one[- ]time code|verification code|otp|2fa code|totp|mfa code)\\b"),
         Rule(label: "credential_phrase", level: .sensitiveInline, pattern: "(?i)\\b(?:login token|session token|cookie value|backup code|recovery code)\\b"),

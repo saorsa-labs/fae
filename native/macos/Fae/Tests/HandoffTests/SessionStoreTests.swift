@@ -152,4 +152,58 @@ final class SessionStoreTests: XCTestCase {
             }
         }
     }
+
+    // S-H1 (audit follow-up): the persistence redaction path previously missed
+    // AWS access key IDs (20 chars — under the long-token catch-all) and
+    // URL-embedded credentials (basic-auth userinfo + sensitive query params).
+    // Both must be masked at the appendMessage choke point so `session_search`
+    // can never surface them raw.
+    func testAppendMessageRedactsAwsKeyAndUrlEmbeddedCredentials() async throws {
+        let store = try await makeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_743_000_000)
+        let session = try await store.openSession(kind: .main, speakerId: "owner", startedAt: startedAt)
+
+        // Build the fake secrets by concatenation so they never exist as literals.
+        let fakeAws = "AKIA" + "IOSFODNN7EXAMPLE"  // 20 chars: AKIA + 16
+        let fakeUser = "admin" + "user"
+        let fakePass = "s3" + "cretPass"
+        let fakeToken = "TOPSECRET" + "TOKENVALUE"
+        let raw =
+            "my aws key is \(fakeAws), log in at "
+            + "https://\(fakeUser):\(fakePass)@host.example.com/data?access_token=\(fakeToken) now"
+
+        try await store.appendMessage(
+            sessionId: session.id,
+            turnId: "turn-1",
+            role: .user,
+            content: raw,
+            speakerId: "owner",
+            createdAt: startedAt
+        )
+
+        // Stored row must contain none of the raw secrets.
+        let messages = try await store.messages(sessionId: session.id)
+        let stored = try XCTUnwrap(messages.first?.content)
+        XCTAssertFalse(stored.contains(fakeAws), "AWS access key ID must be redacted")
+        XCTAssertFalse(stored.contains(fakePass), "URL basic-auth password must be redacted")
+        XCTAssertFalse(stored.contains(fakeUser), "URL basic-auth user must be redacted")
+        XCTAssertFalse(stored.contains(fakeToken), "URL access_token value must be redacted")
+
+        // The derived title (shown in listings) must also be clean.
+        let fetched = try await store.fetchSession(id: session.id)
+        let title = try XCTUnwrap(fetched).title ?? ""
+        XCTAssertFalse(title.contains(fakeAws), "Session title must not leak the AWS key")
+        XCTAssertFalse(title.contains(fakePass), "Session title must not leak the password")
+        XCTAssertFalse(title.contains(fakeToken), "Session title must not leak the token")
+
+        // FTS must not surface the raw secrets either.
+        for query in [fakeAws, fakePass, fakeToken] {
+            let results = try await store.searchSessions(query: query, limit: 5, days: 365)
+            for result in results {
+                for snippet in result.snippets {
+                    XCTAssertFalse(snippet.snippet.contains(query), "FTS snippet must not leak \(query)")
+                }
+            }
+        }
+    }
 }

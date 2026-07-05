@@ -10,6 +10,24 @@ enum SensitiveDataRedactor {
         #"(?i)xox[baprs]-[A-Za-z0-9\-]{10,}"#,
         #"(?i)ghp_[A-Za-z0-9]{20,}"#,
         #"(?i)AIza[0-9A-Za-z\-_]{20,}"#,
+        // AWS access key ID (20 chars) — below the 32-char long-token heuristic
+        // and the 8+ provider patterns above, so match it explicitly. Uppercase.
+        #"\bAKIA[0-9A-Z]{16}\b"#,
+    ]
+
+    /// Redacts, in `redact`-produced text, the userinfo (basic-auth
+    /// `user:pass@host`) and sensitive query-parameter values embedded in
+    /// http(s) URLs — these leak secrets that neither the provider-prefix
+    /// patterns nor the long-opaque-token heuristic reliably catch (a short
+    /// URL like `https://user:s3cret@host` compacts to < 32 chars).
+    private static let urlCredentialPatterns: [(pattern: String, template: String)] = [
+        // scheme://user:pass@  or  scheme://user@  → keep scheme + host.
+        (#"(?i)(https?://)[^\s/@:]+(?::[^\s/@]*)?@"#, "$1[REDACTED]@"),
+        // ?token=…  &access_token=…  etc. → keep the key, mask the value.
+        (
+            #"(?i)([?&](?:access_token|api_key|apikey|token|secret|password|key|auth)=)[^&\s#"'>]+"#,
+            "$1[REDACTED]"
+        ),
     ]
 
     static func redact(_ text: String?) -> String? {
@@ -23,6 +41,18 @@ enum SensitiveDataRedactor {
                 options: [],
                 range: range,
                 withTemplate: "[REDACTED]"
+            )
+        }
+
+        // URL-embedded credentials (basic-auth userinfo + sensitive query params).
+        for entry in urlCredentialPatterns {
+            guard let regex = try? NSRegularExpression(pattern: entry.pattern) else { continue }
+            let range = NSRange(output.startIndex..., in: output)
+            output = regex.stringByReplacingMatches(
+                in: output,
+                options: [],
+                range: range,
+                withTemplate: entry.template
             )
         }
 

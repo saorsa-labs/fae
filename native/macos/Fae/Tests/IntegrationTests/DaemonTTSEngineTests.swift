@@ -180,6 +180,33 @@ final class DaemonTTSBundledVoiceInstallTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: target), try Data(contentsOf: bundled))
     }
 
+    // #21 (audit follow-up): self-heal must verify by CONTENT, not size. A
+    // SAME-SIZE but different-content file (a corrupt/stale embedding that
+    // happens to match the bundle's byte length) was previously trusted and
+    // never healed — leaving Fae on the generic fallback voice forever.
+    func testSelfHealsSameSizeDifferentContent() throws {
+        let (srcDir, bundled) = try makeFakeBundledVoice(bytes: 4096)
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let voicesDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DaemonTTSVoiceInstall-samesize-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: voicesDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: voicesDir) }
+
+        // A corrupt file of the EXACT same length as the bundle (0xCD vs 0xAB).
+        let target = voicesDir.appendingPathComponent("fae.safetensors")
+        try Data(repeating: 0xCD, count: 4096).write(to: target)
+        XCTAssertEqual(
+            (try target.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+            (try bundled.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+            "precondition: the stale file matches the bundle's size")
+        XCTAssertNotEqual(try Data(contentsOf: target), try Data(contentsOf: bundled))
+
+        // A size-only check would leave the corrupt file; content verification
+        // must replace it so the bytes match the bundle afterwards.
+        XCTAssertTrue(DaemonTTSEngine.installBundledVoice(from: bundled, into: voicesDir))
+        XCTAssertEqual(try Data(contentsOf: target), try Data(contentsOf: bundled))
+    }
+
     func testDaemonVoicesDirectoryIsProductionDataDir() {
         // The daemon is not dev-isolated: the install target must stay the
         // production `fae/voices` (matching fae-daemon's local_voices_directory),
