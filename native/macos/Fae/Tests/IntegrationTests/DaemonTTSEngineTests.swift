@@ -98,6 +98,99 @@ final class DaemonTTSAudioContractTests: XCTestCase {
     }
 }
 
+// MARK: - Bundled voice install
+//
+// The daemon resolves "fae" from `<data dir>/voices/fae.safetensors` before the
+// HF repo; if that file is missing it degrades to the generic `af_heart`
+// fallback (the live-pass "not like Lauren" regression). `installBundledVoice`
+// must therefore populate a fresh voices directory with no manual copy AND
+// self-heal a prior failed attempt (truncated / size-mismatched file), so a
+// second call is idempotent and a broken file is replaced rather than trusted.
+// These tests exercise the pure filesystem installer in hermetic temp dirs.
+
+final class DaemonTTSBundledVoiceInstallTests: XCTestCase {
+
+    /// Deterministic stand-in for the bundled embedding (real bytes are opaque;
+    /// the installer only cares about presence + byte size).
+    private func makeFakeBundledVoice(bytes: Int) throws -> (dir: URL, file: URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DaemonTTSVoiceInstall-src-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("fae.safetensors")
+        try Data(repeating: 0xAB, count: bytes).write(to: file)
+        return (dir, file)
+    }
+
+    func testInstallsIntoFreshDirectoryWithNoManualCopy() throws {
+        let (srcDir, bundled) = try makeFakeBundledVoice(bytes: 4096)
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+
+        // A fresh data dir: the `voices/` subdirectory does not exist yet.
+        let dataDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DaemonTTSVoiceInstall-fresh-\(UUID().uuidString)")
+        let voicesDir = dataDir.appendingPathComponent("voices")
+        defer { try? FileManager.default.removeItem(at: dataDir) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: voicesDir.path))
+
+        XCTAssertTrue(DaemonTTSEngine.installBundledVoice(from: bundled, into: voicesDir))
+
+        let target = voicesDir.appendingPathComponent("fae.safetensors")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertEqual(try Data(contentsOf: target), try Data(contentsOf: bundled))
+    }
+
+    func testSecondCallIsIdempotent() throws {
+        let (srcDir, bundled) = try makeFakeBundledVoice(bytes: 2048)
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let voicesDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DaemonTTSVoiceInstall-idem-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: voicesDir) }
+
+        XCTAssertTrue(DaemonTTSEngine.installBundledVoice(from: bundled, into: voicesDir))
+        let target = voicesDir.appendingPathComponent("fae.safetensors")
+        let firstModified = try FileManager.default
+            .attributesOfItem(atPath: target.path)[.modificationDate] as? Date
+
+        // Second call must succeed without re-copying the already-correct file.
+        XCTAssertTrue(DaemonTTSEngine.installBundledVoice(from: bundled, into: voicesDir))
+        let secondModified = try FileManager.default
+            .attributesOfItem(atPath: target.path)[.modificationDate] as? Date
+        XCTAssertEqual(firstModified, secondModified,
+            "an already-consistent voice file must not be re-copied")
+        XCTAssertEqual(try Data(contentsOf: target), try Data(contentsOf: bundled))
+    }
+
+    func testSelfHealsTruncatedPriorFailure() throws {
+        let (srcDir, bundled) = try makeFakeBundledVoice(bytes: 8192)
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let voicesDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DaemonTTSVoiceInstall-heal-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: voicesDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: voicesDir) }
+
+        // Simulate a prior failed attempt: a truncated file of the wrong size.
+        let target = voicesDir.appendingPathComponent("fae.safetensors")
+        try Data(repeating: 0x00, count: 16).write(to: target)
+        XCTAssertNotEqual(
+            (try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+            (try? bundled.resourceValues(forKeys: [.fileSizeKey]).fileSize))
+
+        // The installer must replace the broken file, not trust it.
+        XCTAssertTrue(DaemonTTSEngine.installBundledVoice(from: bundled, into: voicesDir))
+        XCTAssertEqual(try Data(contentsOf: target), try Data(contentsOf: bundled))
+    }
+
+    func testDaemonVoicesDirectoryIsProductionDataDir() {
+        // The daemon is not dev-isolated: the install target must stay the
+        // production `fae/voices` (matching fae-daemon's local_voices_directory),
+        // never `fae-dev/voices` which the daemon never reads.
+        XCTAssertEqual(DaemonTTSEngine.daemonVoicesDirectory.lastPathComponent, "voices")
+        XCTAssertEqual(
+            DaemonTTSEngine.daemonVoicesDirectory.deletingLastPathComponent().lastPathComponent,
+            "fae")
+    }
+}
+
 // MARK: - Config
 //
 // The daemon TTS lane must be opt-in: shipping default stays on the proven
