@@ -59,7 +59,7 @@ actor DaemonTTSEngine: TTSEngine {
     private enum VoiceInstallState {
         /// Not yet confirmed installed — retry on the next `load`/synthesis entry.
         case pending
-        /// Installed and byte-consistent with the bundled embedding.
+        /// Installed and byte-identical with the bundled embedding.
         case installed
         /// No embedding is bundled — stop retrying (the daemon serves repo voices).
         case unavailable
@@ -430,24 +430,24 @@ actor DaemonTTSEngine: TTSEngine {
     }
 
     /// Pure, filesystem-only installer (unit-testable): ensure `voicesDir`
-    /// exists and holds `fae.safetensors` byte-consistent with `bundled`.
+    /// exists and holds `fae.safetensors` byte-identical to `bundled`.
     ///
-    /// Self-healing: an already-present file of the right size is left in place
-    /// (idempotent), while a missing, truncated, or size-mismatched file (the
-    /// footprint of a prior failed copy) is replaced. Returns whether the
-    /// target is present and byte-consistent with the bundle afterwards; a
+    /// Self-healing by CONTENT, not size: an already-present file is left in
+    /// place only when its bytes exactly match the bundle (idempotent), while a
+    /// missing, truncated, OR same-size-but-different file (the footprint of a
+    /// stale/corrupt prior copy) is replaced. Size alone was insufficient — a
+    /// corrupt file that happens to match the bundle's length would never heal.
+    /// Returns whether the target is present and byte-identical afterwards; a
     /// thrown FS error is caught and reported as `false` so the caller can
     /// retry. `copyItem` completes or throws — no partial copy — so a returned
-    /// copy is trusted (avoids `URL` resource-value caching returning a stale
-    /// size after replacement).
+    /// copy is trusted.
     static func installBundledVoice(from bundled: URL, into voicesDir: URL) -> Bool {
         let fm = FileManager.default
         let target = voicesDir.appendingPathComponent("fae.safetensors")
-        let bundledSize = fileSize(of: bundled)
         do {
             try fm.createDirectory(at: voicesDir, withIntermediateDirectories: true)
             if fm.fileExists(atPath: target.path) {
-                if bundledSize >= 0, fileSize(of: target) == bundledSize {
+                if filesAreByteIdentical(target, bundled) {
                     return true
                 }
                 try fm.removeItem(at: target)
@@ -463,13 +463,18 @@ actor DaemonTTSEngine: TTSEngine {
         }
     }
 
-    /// On-disk byte size of `url`, or -1 when it can't be read. Uses
-    /// `FileManager` attributes (fresh each call) rather than
-    /// `URL.resourceValues`, whose per-URL cache can return a stale size after
-    /// the file is replaced.
-    private static func fileSize(of url: URL) -> Int {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        return (attributes?[.size] as? Int) ?? -1
+    /// True when both URLs name readable files with identical bytes. The voice
+    /// embedding is a small file (a few KB of Kokoro speaker weights), so a full
+    /// content compare is cheap and — unlike a size check — cannot be fooled by a
+    /// same-length corrupt file. An unreadable side reports `false` (treat as
+    /// non-identical → the caller re-copies).
+    private static func filesAreByteIdentical(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let lhsData = try? Data(contentsOf: lhs, options: .mappedIfSafe),
+              let rhsData = try? Data(contentsOf: rhs, options: .mappedIfSafe)
+        else {
+            return false
+        }
+        return lhsData == rhsData
     }
 
     /// Wrap mono Float32 samples in an `AVAudioPCMBuffer` for the playback path.

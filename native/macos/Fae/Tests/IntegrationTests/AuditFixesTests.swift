@@ -43,6 +43,62 @@ final class AuditFixesTests: XCTestCase {
         XCTAssertEqual(counter.n, 3, "should return on the first idle observation")
     }
 
+    // MARK: - R-H1: idleGatedApply bounded retry
+
+    /// Records the callback sequence so each scenario can assert the exact
+    /// retry/fail/apply path without a live daemon or running pipeline.
+    private final class Trace: @unchecked Sendable {
+        var applied = 0
+        var fails = 0
+        var retries: [Int] = []
+    }
+
+    func testIdleGatedApplyAppliesImmediatelyWhenIdle() async {
+        let trace = Trace()
+        await FaeCore.idleGatedApply(
+            maxAttempts: 2,
+            waitForIdle: { true },
+            onIdle: { trace.applied += 1 },
+            onRetry: { trace.retries.append($0) },
+            onFail: { trace.fails += 1 }
+        )
+        XCTAssertEqual(trace.applied, 1)
+        XCTAssertTrue(trace.retries.isEmpty, "no retry when idle on the first attempt")
+        XCTAssertEqual(trace.fails, 0)
+    }
+
+    func testIdleGatedApplyRetriesOnceThenAppliesWhenIdleOnSecondAttempt() async {
+        let trace = Trace()
+        let counter = Counter()
+        await FaeCore.idleGatedApply(
+            maxAttempts: 2,
+            waitForIdle: {
+                counter.n += 1
+                return counter.n >= 2  // busy on the first wait, idle on the second
+            },
+            onIdle: { trace.applied += 1 },
+            onRetry: { trace.retries.append($0) },
+            onFail: { trace.fails += 1 }
+        )
+        XCTAssertEqual(trace.retries, [2], "one retry, announced as attempt 2")
+        XCTAssertEqual(trace.applied, 1, "applies once the retry finds the pipeline idle")
+        XCTAssertEqual(trace.fails, 0)
+    }
+
+    func testIdleGatedApplyFailsAfterExhaustingRetries() async {
+        let trace = Trace()
+        await FaeCore.idleGatedApply(
+            maxAttempts: 2,
+            waitForIdle: { false },  // always busy
+            onIdle: { trace.applied += 1 },
+            onRetry: { trace.retries.append($0) },
+            onFail: { trace.fails += 1 }
+        )
+        XCTAssertEqual(trace.retries, [2], "retries once before giving up")
+        XCTAssertEqual(trace.fails, 1, "fails exactly once after the retry budget is spent")
+        XCTAssertEqual(trace.applied, 0, "never applies while busy")
+    }
+
     // MARK: - CR-H3: DaemonEventSubscriber.stop() promptness
 
     func testStopReturnsPromptlyWhileReadLoopBlocked() throws {

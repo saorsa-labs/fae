@@ -2052,31 +2052,74 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // Defer until idle (up to ~60s) so a live generation/playback isn't
-            // aborted by the daemon teardown.
-            let becameIdle = await FaeCore.waitUntilIdle(maxPolls: 600, pollNanos: 100_000_000) {
-                [weak self] in
-                guard let self else { return true }
-                let speaking = await self.pipelineCoordinator?.isSpeaking ?? false
-                let generating = await self.pipelineCoordinator?.isGenerating ?? false
-                return !speaking && !generating
-            }
-            // R-H1: on timeout the pipeline is STILL busy. Applying now would kill the
-            // in-flight turn (the whole reason we waited), so abort the respawn instead.
-            // The config change is already persisted, so the new env vars take effect on
-            // the next daemon spawn — this is recoverable, not lost. Clear the
-            // "setting up…" indicator with a `.failed` stage and log loudly so the user
-            // learns it did not apply now and can retry from an idle state.
-            guard becameIdle else {
-                NSLog(
-                    "FaeCore: %@ respawn timed out — pipeline busy for 60s; change persisted, applies on next daemon load",
-                    reason)
-                self.eventBus.send(.runtimeProgress(stage: "\(stage).failed", progress: 1.0))
+            // R-H1: gate the respawn on the pipeline being idle so a live
+            // generation/playback isn't aborted by the daemon teardown, and RETRY
+            // the idle-wait once with a fresh budget if the first attempt times out
+            // (a long turn can outlast a single 60s window). On every timeout the
+            // config change is already persisted, so the new env vars still take
+            // effect on the next daemon spawn — this is recoverable, not lost.
+            await FaeCore.idleGatedApply(
+                maxAttempts: 2,
+                waitForIdle: {
+                    await FaeCore.waitUntilIdle(maxPolls: 600, pollNanos: 100_000_000) {
+                        [weak self] in
+                        guard let self else { return true }
+                        let speaking = await self.pipelineCoordinator?.isSpeaking ?? false
+                        let generating = await self.pipelineCoordinator?.isGenerating ?? false
+                        return !speaking && !generating
+                    }
+                },
+                onIdle: { [weak self] in
+                    guard let self else { return }
+                    self.eventBus.send(.runtimeProgress(stage: stage, progress: 0.1))
+                    await apply(daemonEngine)
+                    self.eventBus.send(.runtimeProgress(stage: stage, progress: 1.0))
+                },
+                onRetry: { [weak self] nextAttempt in
+                    NSLog(
+                        "FaeCore: %@ respawn — pipeline busy for 60s; retrying idle-wait (attempt %d)",
+                        reason, nextAttempt)
+                    // Keep the "setting up…" indicator alive across the retry so the
+                    // orb shows the operation is still pending, not stalled.
+                    self?.eventBus.send(.runtimeProgress(stage: "\(stage).retrying", progress: 0.5))
+                },
+                onFail: { [weak self] in
+                    NSLog(
+                        "FaeCore: %@ respawn timed out after retry — pipeline busy; change persisted, applies on next daemon load",
+                        reason)
+                    // Clear the pending indicator with a `.failed` stage so the orb
+                    // doesn't strand "setting up…" — the change applies on next load.
+                    self?.eventBus.send(.runtimeProgress(stage: "\(stage).failed", progress: 1.0))
+                }
+            )
+        }
+    }
+
+    /// Idle-gated apply with bounded retry (R-H1). Waits for the pipeline to go
+    /// idle (`waitForIdle`) and runs `onIdle` the first time it succeeds. If the
+    /// wait times out, retries up to `maxAttempts` times — each a fresh
+    /// `waitForIdle` budget — calling `onRetry(nextAttempt)` before each retry.
+    /// When every attempt times out, calls `onFail` exactly once. Extracted so
+    /// the retry/timeout decisions are unit-testable without a live daemon or a
+    /// running pipeline (inject synthetic `waitForIdle` results).
+    nonisolated static func idleGatedApply(
+        maxAttempts: Int,
+        waitForIdle: () async -> Bool,
+        onIdle: () async -> Void,
+        onRetry: (_ nextAttempt: Int) -> Void,
+        onFail: () -> Void
+    ) async {
+        let attempts = max(maxAttempts, 1)
+        for attempt in 1...attempts {
+            if await waitForIdle() {
+                await onIdle()
                 return
             }
-            self.eventBus.send(.runtimeProgress(stage: stage, progress: 0.1))
-            await apply(daemonEngine)
-            self.eventBus.send(.runtimeProgress(stage: stage, progress: 1.0))
+            if attempt < attempts {
+                onRetry(attempt + 1)
+            } else {
+                onFail()
+            }
         }
     }
 
