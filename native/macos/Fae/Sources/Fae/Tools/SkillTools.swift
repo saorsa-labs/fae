@@ -80,6 +80,24 @@ struct RunSkillTool: Tool {
                 skillInput["input"] = text
             }
         }
+
+        // UX W6: materialize `paste:<id>` references. When the model passes an
+        // argument whose value is a PasteRegistry reference (e.g. a pasted x0x
+        // contact card the model never saw), replace it with the on-disk spill-file
+        // PATH so the skill reads the bytes from disk — the blob never travels
+        // through the model's tool-call JSON. Unresolvable refs fail loudly.
+        for (key, value) in skillInput {
+            guard let str = value as? String,
+                  let pasteID = PasteRegistry.id(fromReference: str)
+            else { continue }
+            guard let path = await PasteRegistry.shared.spillPath(pasteID) else {
+                return .error(
+                    "That pasted item (\(str)) has expired or is no longer available. "
+                        + "Ask the user to paste it again.")
+            }
+            skillInput[key] = path
+        }
+
         let secretBindings = parseStringMap(input["secret_bindings"]) ?? [:]
 
         do {

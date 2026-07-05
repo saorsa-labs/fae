@@ -1022,6 +1022,44 @@ actor DaemonLLMEngine: LLMEngine {
         x0xAllowList = allowList
     }
 
+    /// UX W6: apply a runtime x0x peer allow-list change by cleanly respawning the
+    /// daemon so the new `FAE_X0X_ALLOW` / `FAE_X0X_OWNER_FLEET` env vars (injected
+    /// at launch) take effect. Mirrors `applyCloudConfigChange` exactly — the same
+    /// intentional teardown + relaunch path that disarms the crash supervisor, so no
+    /// restart-loop budget is consumed and endpoints are republished for free.
+    ///
+    /// The caller (FaeCore) defers this until no turn is in flight. When the daemon
+    /// lane isn't active (MLX fallback), this only updates the fields; the new peers
+    /// apply on the next `load()`.
+    func applyX0xConfigChange(enabled: Bool, ownerFleet: [String], allowList: [String]) async {
+        x0xEnabled = enabled
+        x0xOwnerFleet = ownerFleet
+        x0xAllowList = allowList
+        guard isLoaded else {
+            NSLog(
+                "DaemonLLMEngine: x0x peer change (allow=%d fleet=%d) — daemon not loaded, applies on next load",
+                allowList.count, ownerFleet.count)
+            return
+        }
+        NSLog(
+            "DaemonLLMEngine: applying x0x peer change (allow=%d fleet=%d) — respawning daemon",
+            allowList.count, ownerFleet.count)
+        internalShutdown()
+        loadState = .notStarted
+        do {
+            loadState = .loading
+            try await launchAndConnect()
+            loadState = .loaded
+            NSLog("DaemonLLMEngine: daemon respawned with %d x0x peer(s)", allowList.count)
+        } catch {
+            loadState = .failed(error.localizedDescription)
+            clearFailedLaunchState()
+            NSLog(
+                "DaemonLLMEngine: ⚠️ x0x peer respawn FAILED — %@",
+                error.localizedDescription)
+        }
+    }
+
     // MARK: LLMEngine
 
     /// Launch the daemon, wait for its socket, connect and authenticate.

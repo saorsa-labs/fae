@@ -1,6 +1,6 @@
 ---
 name: collaborate
-description: Connect the user to other Fae, humans, and their agents over x0x — spaces, messages, kanban, swarm, files, and presence — via the local x0xd daemon, shown in a browser UI.
+description: Connect the user to other Fae, humans, and their agents over x0x — spaces, messages, kanban, swarm, files, and presence — via the local x0xd daemon, shown in a browser UI. Use for "share my card", "connect me with a friend", "add this person", "connect with my friend's Fae", or when the user pastes an x0x contact card.
 metadata:
   author: fae
   version: "1.0"
@@ -31,14 +31,36 @@ AirDrop — however they already talk):
 
 1. **Give yours** → `contacts mycard {display_name?}`. This shows the user's own
    shareable `x0x://agent/…` card **on screen in the browser** (with a Copy button) and
-   tells you their `agent_id`. The user sends that link to the other person.
-2. **Get theirs** → when the other person sends their `x0x://agent/…` link, run
-   `contacts import {card, trust_level}`. That adds them (and their `user_id`) as a
-   trusted contact — confirm who you added by reading back the result.
+   tells you their `agent_id`. Say it plainly, for non-technical users:
+   *"I've put your card on the screen — copy it and send it to your friend any way you
+   like; when they send you theirs, just paste it here."*
+2. **Get theirs** → when the other person sends their `x0x://agent/…` link, the user
+   pastes it to Fae. A pasted card is intercepted and stashed as `paste:<id>` — you will
+   NOT see the card itself, only that reference. Import it with
+   `contacts import {card_ref: "paste:<id>", trust_level: "trusted"}` (pass the exact
+   `paste:<id>` reference as `card_ref`; the bytes are read from disk, never through you).
+   The result gives you the new contact's `agent_id` and display name — read back who you
+   added.
 
 Both sides do both steps, and they're connected. You can then DM them, add them to a
 space, or send files. To **show the cards on screen**: `mycard` opens the user's card;
 `gui {tab:"contacts"}` opens the full contacts view; `contacts list` reads them aloud.
+
+### Letting a contact reach the user through Fae (consent step)
+
+Importing a contact makes them a **trusted x0x contact** — it does NOT let their Fae
+send messages *through* the user's Fae. That is a separate, explicit consent. After a
+successful import, ask once, in plain language:
+*"Shall I let <name> talk to you through me?"*
+
+- **Yes** → `self_config {action: "append_list_value", key: "x0x.allowList", value: "<agent_id>"}`
+  (use the `agent_id` the import returned). Confirm warmly: *"Done — <name> can reach you
+  through me now."* Fae will take a few seconds to wake the peer connection.
+- **No** → leave it. Say plainly: *"No problem — they're saved as a contact, but they
+  can't message you through me. You can change that anytime."*
+
+Only ever append to `x0x.allowList` (a normal friend) or, for the user's own other
+devices, `x0x.ownerFleet`. Never add someone the user didn't just choose to.
 
 ## How to use it
 
@@ -62,7 +84,7 @@ All scripts accept an optional `instance` param to target a named x0x identity
 
 ## Voice patterns
 
-- "Connect me with someone." / "Give me my x0x card to share." → `contacts mycard {display_name}` (shows it on screen to send out-of-band). When they send you their `x0x://agent/…` link → `contacts import {card, trust_level:"trusted"}`.
+- "Share my card." / "Connect me with someone." / "Give me my x0x card to share." → `contacts mycard {display_name}` (shows it on screen to send out-of-band; tell them to copy it and send it however they like). When the user pastes the friend's card → `contacts import {card_ref:"paste:<id>", trust_level:"trusted"}`, then offer the consent step ("Shall I let <name> talk to you through me?").
 - "Create a space called *Project Falcon* and invite David and his agent."
   → `groups create {name:"Project Falcon"}` → `groups invite {group_id}` (share the link with David), and `contacts add`/`trust` for David's agent so you can DM/add directly.
 - "Who's online?" / "Is David around?" → `presence online` / `presence find {agent_id}`.

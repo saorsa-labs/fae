@@ -39,6 +39,7 @@ This suggestion is delivered as a background nudge. You cannot run setup tools h
 - **Discord channel**: "Just say 'Fae, set up Discord' and I'll guide you through it."
 - **A smarter friend for hard questions (cloud brain)**: "Just say 'Fae, set up a cloud brain' and I'll walk you through it — privately, and only for the tricky questions." Frame it as an optional, privacy-first helper for the occasional hard problem, never as a replacement for everything staying on this Mac.
 - **Hand off to another device**: only pitch this if the owner already has other devices paired (an owner fleet). "Just say 'Fae, hand this off to my [device]' and I'll carry the conversation across." If no other devices are set up, don't surface this one at all.
+- **Connect with a friend's Fae**: only pitch this if x0x is enabled. "Just say 'Fae, share my card' and I'll put it on screen for you to send a friend — when they send theirs back, paste it here and you're connected." Frame it as connecting privately, friend to friend, over their own network. If x0x isn't set up, don't surface this one.
 
 Keep it to one sentence — give them the exact phrase, nothing more.
 
