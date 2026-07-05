@@ -111,4 +111,45 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(results.first?.snippets.count, 2)
         XCTAssertTrue(results.first?.snippets.contains(where: { $0.snippet.contains("launch") }) == true)
     }
+
+    // S-H1: the session store is durable + FTS-indexed and `session_search` feeds
+    // its rows back into LLM context, so any raw credential in a persisted turn
+    // must be redacted at the appendMessage choke point — no caller can bypass it.
+    func testAppendMessageRedactsCredentialFromStoredContentAndFTS() async throws {
+        let store = try await makeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_742_000_000)
+        let session = try await store.openSession(kind: .main, speakerId: "owner", startedAt: startedAt)
+
+        // Build the fake secret by concatenation so it never exists as a literal.
+        let fakeKey = "sk-" + "live-" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        let raw = "my api key is \(fakeKey) please use it"
+
+        try await store.appendMessage(
+            sessionId: session.id,
+            turnId: "turn-1",
+            role: .user,
+            content: raw,
+            speakerId: "owner",
+            createdAt: startedAt
+        )
+
+        // 1. Stored row must not contain the raw secret.
+        let messages = try await store.messages(sessionId: session.id)
+        XCTAssertEqual(messages.count, 1)
+        let stored = try XCTUnwrap(messages.first?.content)
+        XCTAssertFalse(stored.contains(fakeKey), "Raw credential must not be persisted in session_messages")
+
+        // 2. The derived title (also persisted, and shown in listings) must be clean.
+        let fetched = try await store.fetchSession(id: session.id)
+        let unwrappedFetched = try XCTUnwrap(fetched)
+        XCTAssertFalse((unwrappedFetched.title ?? "").contains(fakeKey), "Session title must not leak the secret")
+
+        // 3. FTS: searching for the secret token must not surface the raw value.
+        let results = try await store.searchSessions(query: fakeKey, limit: 5, days: 365)
+        for result in results {
+            for snippet in result.snippets {
+                XCTAssertFalse(snippet.snippet.contains(fakeKey), "FTS snippet must not leak the secret")
+            }
+        }
+    }
 }

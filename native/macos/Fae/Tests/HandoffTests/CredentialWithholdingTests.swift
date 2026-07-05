@@ -189,6 +189,82 @@ final class InputRequestWithholdPathTests: XCTestCase {
         )
     }
 
+    // MARK: - A-2: whitespace-bearing secrets withheld via SensitiveContentPolicy
+
+    /// Mirrors the tool gate `looksLikeCredential(value, hint) ||
+    /// SensitiveContentPolicy.scan(value).containsSensitiveContent`.
+    private func inputWouldBeWithheld(_ value: String, hint: String = "") -> Bool {
+        SensitiveDataRedactor.looksLikeCredential(value, hint: hint)
+            || SensitiveContentPolicy.scan(value).containsSensitiveContent
+    }
+
+    func testMultilinePEMBlockIsWithheld() {
+        // A pasted private-key block has whitespace/newlines, so the token-shaped
+        // looksLikeCredential heuristic misses it — SensitiveContentPolicy must
+        // close the gap so the raw key is never returned to the model. The 64-char
+        // base64 body lines of a real PEM trip the long-opaque-token rule.
+        let body = "MIIEowIBAAKCAQEAabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL"
+        let pem = "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            + body + "\n"
+            + body + "\n"
+            + "-----END OPENSSH PRIVATE KEY-----"
+
+        XCTAssertFalse(
+            SensitiveDataRedactor.looksLikeCredential(pem),
+            "Baseline: the whitespace-free heuristic alone misses a multi-line PEM block"
+        )
+        XCTAssertTrue(
+            inputWouldBeWithheld(pem),
+            "Combined gate must withhold a multi-line PEM private-key block"
+        )
+    }
+
+    func testSeedPhrasePhraseIsWithheld() {
+        // "seed phrase" / "recovery phrase" wording is highlySensitive by policy
+        // even though it contains spaces (so looksLikeCredential does not fire).
+        let value = "my recovery phrase is table chair window ocean forest planet"
+        XCTAssertFalse(
+            SensitiveDataRedactor.looksLikeCredential(value),
+            "Baseline: spaced seed-phrase text is missed by the token heuristic"
+        )
+        XCTAssertTrue(
+            inputWouldBeWithheld(value),
+            "Combined gate must withhold a spoken seed/recovery phrase"
+        )
+    }
+
+    func testPasswordAssignmentPhraseIsWithheld() {
+        let value = "the password is hunter2please"
+        XCTAssertTrue(
+            inputWouldBeWithheld(value),
+            "Combined gate must withhold a 'password is …' assignment"
+        )
+    }
+
+    // MARK: - A-3: URL exemption must not leak embedded credentials
+
+    func testBasicAuthCredentialInURLIsWithheld() {
+        // https://user:pass@host embeds a basic-auth secret — must NOT be exempted.
+        XCTAssertTrue(
+            SensitiveDataRedactor.looksLikeCredential("https://admin:s3cr3tPass@internal.example.com/api"),
+            "basic-auth userinfo in a URL must be treated as a credential"
+        )
+    }
+
+    func testAccessTokenQueryParamInURLIsWithheld() {
+        XCTAssertTrue(
+            SensitiveDataRedactor.looksLikeCredential("https://example.com/callback?access_token=Zx19abcd"),
+            "?access_token= in a URL must be treated as a credential"
+        )
+    }
+
+    func testCleanHttpsURLIsStillExempted() {
+        XCTAssertFalse(
+            SensitiveDataRedactor.looksLikeCredential("https://example.com/docs/getting-started"),
+            "A clean https URL with no embedded secret must remain exempt"
+        )
+    }
+
     func testStoreKeyPathNotAffected() {
         // When store_key is set, execute() returns early before reaching the
         // credential guard. Verify the detector would fire for such a value so
