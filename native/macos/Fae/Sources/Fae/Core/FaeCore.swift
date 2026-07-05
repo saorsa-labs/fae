@@ -205,6 +205,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Drained once `pipelineCoordinator` becomes non-nil and pipeline reaches `.running`.
     private var pendingTextInjections: [PendingTextInjection] = []
 
+    /// Set when the native first-launch modal completes before the pipeline is
+    /// ready. The conversational onboarding turn is fired once the pipeline
+    /// reaches `.running` (see the `start()` drain path). Guarded so it only
+    /// ever fires once per install.
+    private var pendingConversationalOnboarding: Bool = false
+
     // MARK: - Lifecycle
 
     func start() throws {
@@ -648,6 +654,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         }
                     }
                     pendingTextInjections.removeAll()
+                }
+
+                // UX W4: if the native onboarding modal completed before the
+                // pipeline was ready, start the conversational onboarding now.
+                if pendingConversationalOnboarding {
+                    startConversationalOnboardingIfNeeded()
                 }
 
                 // Owner enrollment check — hydrate hasOwnerSetUp from the speaker
@@ -1394,6 +1406,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     NSLog("FaeCore: onboarding completion ignored — owner voice not enrolled yet")
                 }
             }
+            // UX W4: the native permissions modal is done — hand off to the
+            // conversational first-launch onboarding skill (fires once, defers
+            // until the pipeline is ready if models are still loading).
+            startConversationalOnboardingIfNeeded()
 
         case "onboarding.reset":
             Task {
@@ -3122,6 +3138,40 @@ final class FaeCore: ObservableObject, HostCommandSender {
             continuation.resume(returning: [
                 "payload": ["onboarded": hasOwnerSetUp] as [String: Any],
             ])
+        }
+    }
+
+    /// UX W4: start the conversational first-launch onboarding exactly once.
+    ///
+    /// Called from the FaeApp first-launch path once the permission phase
+    /// finishes (and, defensively, from the `onboarding.complete` command). If
+    /// the pipeline is not yet `.running` (models still loading), it records
+    /// intent and re-runs from the `start()` drain path once the runtime reports
+    /// ready — mirroring the `awareness.start_onboarding` activation, but
+    /// story-driven and one-time. Idempotent: the `fae.onboarding.conversationStarted`
+    /// flag guarantees a single fire per install regardless of call site.
+    func startConversationalOnboardingIfNeeded() {
+        let flagKey = "fae.onboarding.conversationStarted"
+        guard !FaeEnvironment.defaults.bool(forKey: flagKey) else { return }
+
+        guard pipelineState == .running,
+              let coordinator = pipelineCoordinator,
+              let sm = skillManagerRef
+        else {
+            pendingConversationalOnboarding = true
+            NSLog("FaeCore: conversational onboarding deferred — pipeline not ready")
+            return
+        }
+
+        FaeEnvironment.defaults.set(true, forKey: flagKey)
+        pendingConversationalOnboarding = false
+        NSLog("FaeCore: starting conversational first-launch onboarding")
+        Task {
+            _ = await sm.activate(skillName: "first-launch-onboarding")
+            await coordinator.wake()
+            await coordinator.injectText(
+                "This is my very first time meeting you. Please introduce yourself warmly and begin getting to know me, following the first-launch-onboarding skill exactly — one gentle question at a time, reacting to each answer before the next. Start now."
+            )
         }
     }
 

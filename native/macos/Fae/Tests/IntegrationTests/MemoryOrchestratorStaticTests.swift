@@ -88,6 +88,54 @@ final class MemoryOrchestratorStaticTests: XCTestCase {
         XCTAssertNil(color)
     }
 
+    // MARK: - extractLocation
+
+    func testExtractLocationLiveIn() {
+        // Why: "I live in X" is the canonical way a user states their home city;
+        // capturing it powers weather, morning timing, and local context.
+        XCTAssertEqual(MemoryOrchestrator.extractLocation(from: "I live in Ayr"), "Ayr")
+    }
+
+    func testExtractLocationBasedIn() {
+        XCTAssertEqual(MemoryOrchestrator.extractLocation(from: "we're based in Glasgow"), "Glasgow")
+    }
+
+    func testExtractLocationLocatedIn() {
+        XCTAssertEqual(
+            MemoryOrchestrator.extractLocation(from: "I'm located in Edinburgh"),
+            "Edinburgh"
+        )
+    }
+
+    func testExtractLocationMultiWordCity() {
+        // Multi-word place names must survive intact.
+        XCTAssertEqual(MemoryOrchestrator.extractLocation(from: "I live in New York"), "New York")
+    }
+
+    func testExtractLocationTrimsTrailingFiller() {
+        // "Ayr now" should reduce to the place itself.
+        XCTAssertEqual(MemoryOrchestrator.extractLocation(from: "I live in Ayr now"), "Ayr")
+    }
+
+    func testExtractLocationRejectsLiveForMusic() {
+        // Why: figurative "live for" must never be mistaken for a home location.
+        XCTAssertNil(MemoryOrchestrator.extractLocation(from: "I live for music"))
+    }
+
+    func testExtractLocationRejectsLivingTheDream() {
+        // Why: "living the dream" has no place anchor and must not capture "dream".
+        XCTAssertNil(MemoryOrchestrator.extractLocation(from: "living the dream"))
+    }
+
+    func testExtractLocationRejectsNonPlacePhrase() {
+        // Guard against clause noise after the anchor ("in a hurry" is not a city).
+        XCTAssertNil(MemoryOrchestrator.extractLocation(from: "I'm based in a hurry"))
+    }
+
+    func testExtractLocationNoMatch() {
+        XCTAssertNil(MemoryOrchestrator.extractLocation(from: "hello world"))
+    }
+
     // MARK: - shouldSkipEpisodeCapture
 
     func testShouldSkipEpisodeCaptureArithmetic() {

@@ -2,6 +2,19 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — UX W4 (conversational first-launch onboarding + location capture)
+
+### Changed
+- **`first-launch-onboarding` SKILL.md rewritten (v1.0 → v2.0)**: replaced the 8-step wizard with a genuine getting-to-know-you conversation. Fae introduces herself, makes the local-first promise in plain words ("everything I ever learn about you lives right here on this Mac"), confirms/asks their name, asks where they live and immediately uses it ("I'll know your weather, and roughly when your mornings start"), asks what fills their days, then demonstrates one capability live (calendar peek / reminder / web search) based on the answer. Explains how to talk to her (hold right Option, press-and-hold the orb, or type in the pill), sets the gentle-drip expectation, and offers awareness as a promise-and-choice (not a permissions lecture) before ending open ("what shall we do first?"). Skill rules: one question at a time, react before the next question, ≤2–3 sentences per turn, never a numbered list, never the words setup/configure/settings, gracefully accept refusals. Removed the dead post-S18 voice-enrollment step (beeps / `voice-identity`) and all photo "Complete Setup" banner references.
+- **First launch now actually starts the conversation**: `FaeCore.startConversationalOnboardingIfNeeded()` (new) activates `first-launch-onboarding`, wakes the pipeline, and injects the kick-off turn — exactly as `awareness.start_onboarding` does. Called from the FaeApp first-launch permission path (`requestPermissionsForFirstLaunch`, after the permission phase) and, defensively, from the `onboarding.complete` command. Guarded by UserDefaults `fae.onboarding.conversationStarted` so it fires exactly once per install. If the LLM pipeline is not yet `.running`, it records intent (`pendingConversationalOnboarding`) and re-fires from the `start()` drain path once the runtime reports ready.
+- **`capability-discovery` SKILL.md pitch list**: added two entries — "A smarter friend for hard questions (cloud brain)" (privacy-first, optional, only for the occasional tricky question) and "Hand off to another device" (only surfaced when an owner fleet exists).
+
+### New Features
+- **Home-location memory capture (`MemoryOrchestrator`)**: new `extractLocation(from:)` / `isLikelyPlaceName(_:)` static helpers capture "I live in X", "we're based in X", "I'm located in X" style statements into a superseding `.profile` record (tags `location`, `identity`; text "Primary user lives in X."). Conservative — anchors only on live/based/located to reject figurative phrases ("I live for music", "living the dream"), trims trailing filler, and guards against non-place clauses ("in a hurry").
+
+### Testing
+- **`MemoryOrchestratorStaticTests`**: nine new `extractLocation` cases — positives ("I live in Ayr" → Ayr, "we're based in Glasgow" → Glasgow, "I'm located in Edinburgh", multi-word "New York", trailing-filler "Ayr now" → Ayr) and negatives ("I live for music", "living the dream", "in a hurry", "hello world").
+
 ## Unreleased — UX W5 (menu purge — pill-first defaults + advanced engineering menus)
 
 ### Changed
