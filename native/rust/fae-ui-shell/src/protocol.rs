@@ -101,6 +101,11 @@ pub enum ShellCommand {
         #[serde(default)]
         placeholder: Option<String>,
     },
+    /// Swift tells the pill to LEAVE request-input mode (UX auto-cancel): a new
+    /// conversation turn started while a `request_input` was still outstanding,
+    /// so the abandoned card is cancelled and the pill returns to its normal
+    /// composer. Idempotent — a no-op when the pill is not hosting a request.
+    CancelInput,
     ClearConversation,
     Show,
     Hide,
@@ -289,6 +294,18 @@ mod tests {
             }
         );
         assert!(defaults_ok, "request_input must default optional fields");
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_cancel_input_command() -> Result<(), serde_json::Error> {
+        // UX auto-cancel: a bare `cancel_input` frame tells the pill to leave
+        // request-input mode when a new turn superseded the abandoned card.
+        let command: ShellCommand = serde_json::from_str(r#"{"type":"cancel_input"}"#)?;
+        assert!(
+            matches!(command, ShellCommand::CancelInput),
+            "cancel_input must decode to CancelInput"
+        );
         Ok(())
     }
 

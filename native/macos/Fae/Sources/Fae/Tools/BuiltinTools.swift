@@ -1213,4 +1213,43 @@ actor InputRequestBridge {
         textContinuation?.resume(returning: nil)
         formContinuation?.resume(returning: nil)
     }
+
+    /// Cancel every outstanding input request (UX auto-cancel: a new conversation
+    /// turn superseded an abandoned prompt). Each pending continuation resolves as
+    /// cancelled (nil), and both surfaces are dismissed — the orb-host pill leaves
+    /// request-input mode and the SwiftUI overlay card clears via `.faeInputResponse`.
+    ///
+    /// Race-safe: this runs on the `InputRequestBridge` actor, so it never
+    /// interleaves with `resolve`/`resolveWithTimeout`. It claims all pending
+    /// continuations up front (draining the dictionaries) and resumes them exactly
+    /// once — a real response landing at the same instant finds an empty table and
+    /// no-ops, so no continuation is ever double-resumed.
+    ///
+    /// - Returns: true if anything was pending (and cancelled).
+    @discardableResult
+    func cancelPending() -> Bool {
+        let text = textContinuations
+        let forms = formContinuations
+        guard !text.isEmpty || !forms.isEmpty else { return false }
+        textContinuations.removeAll()
+        formContinuations.removeAll()
+        for (_, continuation) in text { continuation.resume(returning: nil) }
+        for (_, continuation) in forms { continuation.resume(returning: nil) }
+        let ids = Array(text.keys) + Array(forms.keys)
+        Task { @MainActor in
+            // Dismiss whichever surface was showing the prompt. The pill exits
+            // request-input mode (and collapses, so its webview stops capturing
+            // clicks over the orb); the overlay card clears on `.faeInputResponse`
+            // (empty text = cancel). Both are idempotent no-ops when not shown.
+            PillInputRouter.shared?.cancelPillInput()
+            for id in ids {
+                NotificationCenter.default.post(
+                    name: .faeInputResponse,
+                    object: nil,
+                    userInfo: ["request_id": id, "text": ""]
+                )
+            }
+        }
+        return true
+    }
 }
