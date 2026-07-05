@@ -237,6 +237,16 @@ fn peer_event_to_wire(event: &PeerEvent) -> (&'static str, serde_json::Value) {
                 "sender": sender,
                 "source_machine": payload.source_machine,
                 "pending_turn": payload.pending_turn,
+                // The full conversation tail, so the Swift client hydrates the
+                // restored context — not just `pending_turn`. This `payload` was
+                // decoded from an `AcceptedEnvelope`, i.e. one that already
+                // passed `gate_and_audit` (trust-tier acceptance + the
+                // `MAX_ENVELOPE_BYTES` cap, which rejects the raw frame *before*
+                // parsing — see fae-envelope-gate lib.rs:234). So this tail can
+                // only ever be gated peer content and is inherently ≤ 64 KiB on
+                // the wire; no new un-gated retrieval path is introduced.
+                // `tail_len` stays for back-compat / cheap display.
+                "conversation_tail": payload.conversation_tail,
                 "tail_len": payload.conversation_tail.len(),
             }),
         ),
@@ -653,16 +663,112 @@ mod tests {
         assert_eq!(name, "peer.message");
         assert_eq!(payload["text"], "hi");
 
-        let (name, _) = peer_event_to_wire(&PeerEvent::HandoffOffer {
+        let (name, payload) = peer_event_to_wire(&PeerEvent::HandoffOffer {
             sender: FLEET.to_owned(),
             payload: SessionHandoffPayload {
                 source_machine: "study-mac".to_owned(),
-                conversation_tail: Vec::new(),
+                conversation_tail: vec![
+                    handoff::HandoffTurn {
+                        role: "user".to_owned(),
+                        text: "what were we saying?".to_owned(),
+                    },
+                    handoff::HandoffTurn {
+                        role: "assistant".to_owned(),
+                        text: "about the garden.".to_owned(),
+                    },
+                ],
                 pending_turn: Some("and then?".to_owned()),
                 created_at_ms: 0,
             },
         });
         assert_eq!(name, "peer.handoff_offer");
+        // #17: the wire event must carry the full tail, not just tail_len — the
+        // Swift client hydrates the restored conversation from it.
+        assert_eq!(payload["tail_len"], 2);
+        let tail = payload["conversation_tail"]
+            .as_array()
+            .expect("conversation_tail is an array on the wire");
+        assert_eq!(tail.len(), 2);
+        assert_eq!(tail[0]["role"], "user");
+        assert_eq!(tail[0]["text"], "what were we saying?");
+        assert_eq!(tail[1]["text"], "about the garden.");
+    }
+
+    /// #17 end-to-end + security: the tail on the wire comes ONLY from an
+    /// envelope that passed the real `gate_and_audit` accept path, and it is
+    /// inherently ≤ 64 KiB because the gate rejects any oversized raw frame
+    /// before it can ever become an `AcceptedEnvelope`.
+    #[test]
+    fn accepted_handoff_wire_event_carries_the_bounded_tail() {
+        // A tail far larger than the cap; the builder truncates oldest-first to
+        // fit MAX_ENVELOPE_BYTES, then the gate accepts what we built.
+        let turns: Vec<handoff::HandoffTurn> = (0..200)
+            .map(|i| handoff::HandoffTurn {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.to_owned(),
+                text: format!("turn-{i}-{}", "x".repeat(1024)),
+            })
+            .collect();
+        let source = SessionHandoffPayload {
+            source_machine: "study-mac".to_owned(),
+            conversation_tail: turns,
+            pending_turn: Some("continue?".to_owned()),
+            created_at_ms: 1_700_000_000_000,
+        };
+        let spec = HandoffEnvelopeSpec {
+            envelope_id: "handoff-wire-1",
+            sender_id: FLEET,
+            created_at_ms: 1_700_000_000_000,
+            public_key_id: "pk-1",
+            signature_b64: "c2ln",
+        };
+        let raw = handoff::build_envelope(&spec, &source).expect("envelope fits the cap");
+        assert!(raw.len() <= MAX_ENVELOPE_BYTES);
+
+        // ── ACCEPT PATH: only a gated envelope yields the payload we surface.
+        let verifier = FaeSenderVerifier::new(HashSet::new(), HashSet::from([FLEET.to_owned()]));
+        let dir = tempfile::tempdir().unwrap();
+        let accepted = gate_and_audit(&raw, &verifier, &dir.path().join("audit.jsonl")).unwrap();
+        assert_eq!(accepted.kind(), &EnvelopeKind::SessionHandoff);
+        let payload = handoff::decode(&accepted).expect("decode accepted handoff");
+
+        let (name, wire) = peer_event_to_wire(&PeerEvent::HandoffOffer {
+            sender: accepted.sender_id().to_owned(),
+            payload: payload.clone(),
+        });
+        assert_eq!(name, "peer.handoff_offer");
+        let tail = wire["conversation_tail"].as_array().expect("tail present");
+        assert!(!tail.is_empty(), "accepted handoff surfaces its tail");
+        assert_eq!(wire["tail_len"].as_u64(), Some(tail.len() as u64));
+        // The newest turns survived truncation; the tail on the wire is bounded
+        // because the whole envelope that carried it was ≤ 64 KiB.
+        let serialized = serde_json::to_string(&wire).unwrap();
+        assert!(
+            serialized.len() <= MAX_ENVELOPE_BYTES,
+            "wire tail must stay within the gate cap ({} bytes)",
+            serialized.len()
+        );
+        assert_eq!(tail.len(), payload.conversation_tail.len());
+    }
+
+    /// #17 security invariant: a raw frame over the cap is rejected by the gate
+    /// BEFORE parsing, so it never becomes an `AcceptedEnvelope` — there is no
+    /// path for its (un-gated) tail to reach the wire event.
+    #[test]
+    fn rejected_oversized_handoff_never_reaches_the_wire() {
+        // A raw envelope one byte over the cap — the gate must refuse it.
+        let oversized = "x".repeat(MAX_ENVELOPE_BYTES + 1);
+        let verifier = FaeSenderVerifier::new(HashSet::new(), HashSet::from([FLEET.to_owned()]));
+        let dir = tempfile::tempdir().unwrap();
+        let result = gate_and_audit(&oversized, &verifier, &dir.path().join("audit.jsonl"));
+        assert!(
+            result.is_err(),
+            "an oversized frame must never yield an AcceptedEnvelope"
+        );
+        // Because there is no AcceptedEnvelope, dispatch never runs and no
+        // HandoffOffer (hence no tail) can be published — proven structurally:
+        // peer_event_to_wire is only reachable from a dispatched PeerEvent, and
+        // PeerEvent::HandoffOffer is only constructed in handler::dispatch from
+        // handoff::decode(&AcceptedEnvelope).
     }
 
     #[test]
