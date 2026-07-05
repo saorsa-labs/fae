@@ -21,7 +21,7 @@
   "integrity": {
     "algorithm": "sha256",
     "checksums": {
-      "SKILL.md": "c58dcb406811a119c2bea90e9d5b57403fc3d866dde79bdb1fb7d2e43fd1881a",
+      "SKILL.md": "0fbf21551ccc88147e9de13d4ba1c72c8cfcf64f6d51fdcc10d0df214aba965d",
       "scripts/_x0x.py": "3dc2115b95528096cf475b575497b9798f9073ae446863664b908f7ae7fde546",
       "scripts/contacts.py": "32f794ccd5e58ee0a63d49b96755ee0f5727fe89079e1e3573b1bff8abd2c8a2",
       "scripts/ensure.py": "d1e4e00a9abf05fd2843420013fa3a6ff808e5405c9fe8e15721385be1abac2f",

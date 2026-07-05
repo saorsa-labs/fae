@@ -1,6 +1,6 @@
 ---
 name: collaborate
-description: Connect the user to other Fae, humans, and their agents over x0x — spaces, messages, kanban, swarm, files, and presence — via the local x0xd daemon, shown in a browser UI. Use for "share my card", "connect me with a friend", "add this person", "connect with my friend's Fae", or when the user pastes an x0x contact card.
+description: Connect with other Fae, friends, and their agents over x0x — messages, spaces, kanban, files. Use for "share my card", "add this person", or when the user pastes an x0x contact card.
 metadata:
   author: fae
   version: "1.0"

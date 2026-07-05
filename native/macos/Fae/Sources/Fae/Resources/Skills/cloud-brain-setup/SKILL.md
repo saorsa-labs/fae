@@ -1,6 +1,6 @@
 ---
 name: cloud-brain-setup
-description: Conversationally set up (or turn off) a cloud brain for harder questions via OpenRouter. Privacy-first, plain language, no jargon. Use when the user wants a bigger/smarter brain, mentions the cloud, or asks Fae to think harder on tough questions.
+description: Set up (or turn off) a cloud brain for harder questions via OpenRouter — privacy-first, plain language. Use when the user wants a bigger or smarter brain or mentions the cloud.
 metadata:
   author: fae
   version: "1.0"

@@ -47,8 +47,16 @@ final class SensitiveContentPolicyTests: XCTestCase {
         ])
 
         await fulfillment(of: [required], timeout: 2.0)
-        XCTAssertFalse(result.isError)
-        XCTAssertEqual(result.output, "[secure input captured locally and withheld from model context]")
+        // UX W2: the structural credential guard now fires FIRST for
+        // credential-looking values — better than the old placeholder, which
+        // silently discarded the value; the guard instructs the model to
+        // re-ask with store_key so the secret can actually be stored. The
+        // invariant that matters: the raw value never reaches the model.
+        XCTAssertTrue(
+            result.output.contains("withheld"),
+            "secure input must never return the raw value; got: \(result.output)"
+        )
+        XCTAssertFalse(result.output.contains("sk-"), "no credential material in the result")
     }
 
     func testMemoryCaptureRedactsSensitiveEpisodeAndSkipsStructuredExtraction() async throws {
