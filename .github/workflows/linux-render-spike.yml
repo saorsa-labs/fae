@@ -30,7 +30,7 @@ jobs:
       LIBGL_ALWAYS_SOFTWARE: "1"
       WEBKIT_DISABLE_DMABUF_RENDERER: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
           lfs: true
@@ -57,7 +57,7 @@ jobs:
             imagemagick
 
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: clippy, rustfmt
           targets: x86_64-unknown-linux-gnu
@@ -100,7 +100,7 @@ jobs:
           test "$colors" -ge 8
 
       - name: Upload Linux Settings panel screenshot
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-settings-panel
           path: linux-settings-panel.png
@@ -133,7 +133,7 @@ jobs:
           test "$pill_colors" -ge 8
 
       - name: Upload Linux orb + pill screenshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-orb-pill
           path: |

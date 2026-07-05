@@ -16,7 +16,9 @@ Fae should be:
 
 ## Proactive-by-default philosophy
 
-**Fae is proactive from the moment she's installed.** There are no feature toggles for core capabilities — voice identity is the security model, not settings switches.
+**Fae is proactive from the moment she's installed.** There are no feature toggles for core capabilities — they define what Fae is, not settings switches.
+
+> **S18 update (voice identity retired):** push-to-talk (Right ⌥ hold / orb long-press) is the engagement + tool-access gate. `SpeakerProfileStore` survives only for `fae_self` echo rejection, not access control. The "Voice identity security model" subsection immediately below describes the pre-S18 design and is retained for historical context only.
 
 ### Voice identity security model
 
@@ -300,7 +302,7 @@ Collect feedback → Meta-Optimize (directive, config, skills, memory seeds)
 | Task Tracking | `till_done` |
 | Plugin | `plugin_manage` |
 
-**Tool access model**: Voice identity is the primary gate. Primary user (owner) gets `full` tool access. Guests get no tool access unless explicitly granted by the primary user. Pre-enrollment: no tool calls except voice enrollment.
+**Tool access model** (post-S18): Push-to-talk is the engagement gate — the local owner driving PTT (Right ⌥ hold / orb long-press) gets `full` tool access. Remote channel senders are non-owner guests with no tool access unless explicitly granted. Voice identity is retired; `SpeakerProfileStore` is `fae_self` echo-rejection only, not an access gate.
 
 **Tool modes** (internal): `off`/`read_only` (read tools only), `read_write` (+ write/edit/self_config), `full` (all including bash), `full_no_approval` (all, skip approval for verified owner).
 
@@ -308,11 +310,11 @@ Collect feedback → Meta-Optimize (directive, config, skills, memory seeds)
 
 ### Tool security (3-layer model)
 
-Voice identity is the security model. Owner gets full access; DamageControlPolicy is the safety net for catastrophic operations.
+Push-to-talk is the engagement/gate model (S18). The local owner driving PTT gets full access; DamageControlPolicy is the safety net for catastrophic operations. Voice identity is retired — `SpeakerProfileStore` survives only for `fae_self` echo rejection, not access control.
 
 | Layer | Implementation | Purpose |
 |-------|---------------|---------|
-| Voice identity | `SpeakerProfileStore` | Primary user verification — only recognized voices get tool access |
+| PTT engagement | Push-to-talk (Right ⌥ / orb long-press) | Local-owner gate — driving PTT grants owner tool access (voice identity retired, S18) |
 | Damage control | `DamageControlPolicy` | Block/disaster/confirm for catastrophic bash ops + credential path protection |
 | Reversibility | `ReversibilityEngine` + `ReceiptStore` | Pre-mutation file snapshots, undo support, action receipts |
 
@@ -341,7 +343,7 @@ cd native/macos/Fae/Sources/Fae/Resources/Skills/<skill-name>
 for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d' ' -f1)\""; done
 ```
 
-## Built-in skills (30)
+## Built-in skills (33)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -375,6 +377,9 @@ for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d
 | `focus-defender` | Executable | Focus mode and distraction blocking |
 | `smart-home` | Executable | Smart home device control |
 | `system-health` | Executable | System health monitoring and reporting |
+| `cloud-brain-setup` | Instruction | Guided setup for the cloud brain lane (OpenRouter/remote) |
+| `collaborate` | Executable | Fae↔Fae / human collaboration over x0x via x0xd REST |
+| `connect-account` | Executable | Connect mail/calendar/contacts from an email + app password (voice-guided, cross-OS) |
 
 Skills use **progressive disclosure**: names + descriptions in system prompt, full SKILL.md body loaded on `activate_skill`.
 
@@ -514,7 +519,7 @@ generateDigests = true   # ALWAYS ON — not toggleable
 [speaker]
 threshold = 0.70
 ownerThreshold = 0.75
-requireOwnerForTools = true   # enforce voice identity for tool access
+requireOwnerForTools = true   # legacy key — voice identity retired in S18; PTT is the gate, this no longer enforces access
 progressiveEnrollment = true
 maxEnrollments = 50
 
