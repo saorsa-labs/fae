@@ -172,10 +172,45 @@ review audits this.
 bootstrap-token Unix socket the Swift app holds. Document socket-auth as the load-bearing
 trust boundary.
 
-Build order under v2: Part A (messaging) first; then L1 (origin) as its own gated change
-(also closes #38); then the daemon override primitives (L3/L4/L5/L6/L7/L10) fail-closed +
-tested; then the Swift hardware-only card + grant store (L2/L8/L9). Impl-level codex +
-skeptic review before fold.
+**L12 — Informed consent: "you are leaving the safety sandbox" (owner intent).** The
+override is a DELIBERATE owner choice to let Fae act outside her sandbox on the real
+computer — that is allowed and is the whole point. The card must make that unmistakable:
+plain-language framing ("You're about to let me step outside my safety sandbox and
+read/act on <target> directly on your computer"), the FULL unelided command shown, the
+tier named, and Deny as the default/timeout. Never soft-pedal it as a routine "allow?".
+The user is knowingly opening the box; Fae's job is to make sure they KNOW it.
+
+### Wire contract (both sides build EXACTLY this)
+`toolhost.execute` payload gains an OPTIONAL top-level sibling `security_override`
+(NEVER inside `input`; payload stays `#[serde(deny_unknown_fields)]`):
+```
+security_override: {
+  call_id:     string,   // MUST equal this request's call_id (L7 single-use)
+  target_path: string,   // the file the read-deny is relaxed for; daemon re-canonicalizes (L4)
+  tier:        "general" | "secrets",  // advisory; daemon RE-CLASSIFIES authoritatively (L3)
+  grant_kind:  "once" | "expiring",
+  expiry_ms:   u64       // absolute UNIX ms; daemon honors only now_ms() <= expiry_ms (L6)
+}
+```
+Daemon rules: field present ⇒ (a) require request origin == owner_interactive (L1) else
+reject+audit; (b) re-canonicalize target_path, reject if under any Fae-integrity/never
+path (L3) or if it's a directory (L4); (c) daemon re-derives the tier from the canonical
+path (ignore the advisory `tier`); (d) if canonical tier == secrets, the call's seatbelt
+ALSO denies `network*` + non-workspace writes (L5); (e) verify `call_id` == request
+call_id and `now_ms() <= expiry_ms` (L6/L7); (f) build the read-deny profile MINUS exactly
+that one canonical file; (g) env scrub unchanged (L10); (h) emit a SecurityEvent audit
+record for every accepted/rejected override. ANY check failing ⇒ full deny (Invariant F).
+Flow: model bash → Swift submits (call_id C1) → daemon SecurityDenial{target,tier,reason}
+→ Swift shows card → human clicks Allow → Swift RE-submits the SAME tool (fresh call_id
+C2) WITH `security_override{call_id:C2,…}` → daemon validates + relaxes for that one call.
+The model never re-emits and never sees/sets `security_override`.
+
+Build order under v2: (Wave 1, daemon core) L1 origin + tier table + the override
+primitives L3/L4/L5/L6/L7/L10/L11, fail-closed + unit-tested against every vector, with
+`security_override` absent ⇒ byte-identical to today. (Wave 2, Swift) truthful origin,
+Part A messaging, the hardware-only `securityOverride.approve` card (L2/L12), grant store
+(L8/L9), DamageControl grant-store block. (Wave 3) impl-level codex + skeptic review of
+the whole, then gate + fold.
 
 ## Rollout
 - Part A (messaging) lands first — low risk, immediately better UX.
