@@ -1188,7 +1188,7 @@ pub async fn run_authorized_toolhost_execute(
     );
     let response = match &decision {
         AuthzDecision::Allow => match parse_toolhost_payload(&cmd.payload) {
-            Ok((tool, input, origin)) => {
+            Ok((tool, input, origin, security_override)) => {
                 let req = crate::toolhost::ToolHostRequest {
                     client: record.clone(),
                     tool,
@@ -1201,6 +1201,9 @@ pub async fn run_authorized_toolhost_execute(
                     // auto_skill/script_block) names a non-interactive origin
                     // that REQUIRES the OS jail (fail-closed if unavailable).
                     origin,
+                    // (Security-override Wave 1) The optional human-gated relaxation,
+                    // re-validated daemon-side (Invariant F when absent).
+                    security_override,
                 };
                 match toolhost.execute_governed(req, confirmation).await {
                     Ok(result) => Response::ok(
@@ -1334,9 +1337,15 @@ fn parse_tool_origin(
     }
 }
 
-/// Parse the `toolhost.execute` payload `{tool, input, origin?}` (reject unknown
-/// fields). `origin` is optional and defaults to owner-interactive (host tier);
-/// a non-interactive origin selects the OS jail. Phase C.
+/// Parse the `toolhost.execute` payload `{tool, input, origin?, security_override?}`
+/// (reject unknown fields). `origin` is optional and defaults to owner-interactive
+/// (host tier); a non-interactive origin selects the OS jail (Phase C).
+///
+/// `security_override` (security-override Wave 1) is an OPTIONAL top-level SIBLING —
+/// NEVER inside `input`, so the model (which authors `input`) can never set it. Its
+/// presence relaxes NOTHING by itself: the daemon re-validates every L-rule in
+/// [`ToolHost::evaluate_security_override`](crate::toolhost::ToolHost). Absent ⇒
+/// `None` ⇒ today's behavior, byte-identical (Invariant F).
 fn parse_toolhost_payload(
     payload: &serde_json::Value,
 ) -> Result<
@@ -1344,9 +1353,22 @@ fn parse_toolhost_payload(
         String,
         serde_json::Value,
         crate::toolhost::isolation::ToolOrigin,
+        Option<crate::toolhost::SecurityOverride>,
     ),
     String,
 > {
+    /// Wire shape of the override (strict). Advisory `tier`/`grant_kind` are
+    /// validated to a closed enum here for hygiene; the daemon re-derives the
+    /// authoritative tier and enforces the binding regardless.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SecurityOverrideWire {
+        call_id: String,
+        target_path: String,
+        tier: String,
+        grant_kind: String,
+        expiry_ms: u64,
+    }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ToolhostPayload {
@@ -1354,11 +1376,34 @@ fn parse_toolhost_payload(
         input: serde_json::Value,
         #[serde(default)]
         origin: Option<String>,
+        #[serde(default)]
+        security_override: Option<SecurityOverrideWire>,
     }
     let parsed: ToolhostPayload = serde_json::from_value(payload.clone())
         .map_err(|e| format!("invalid toolhost.execute payload: {e}"))?;
     let origin = parse_tool_origin(parsed.origin.as_deref())?;
-    Ok((parsed.tool, parsed.input, origin))
+    let security_override = match parsed.security_override {
+        None => None,
+        Some(w) => {
+            if !matches!(w.tier.as_str(), "general" | "secrets") {
+                return Err(format!("invalid security_override.tier: {}", w.tier));
+            }
+            if !matches!(w.grant_kind.as_str(), "once" | "expiring") {
+                return Err(format!(
+                    "invalid security_override.grant_kind: {}",
+                    w.grant_kind
+                ));
+            }
+            Some(crate::toolhost::SecurityOverride {
+                call_id: w.call_id,
+                target_path: w.target_path,
+                tier: w.tier,
+                grant_kind: w.grant_kind,
+                expiry_ms: w.expiry_ms,
+            })
+        }
+    };
+    Ok((parsed.tool, parsed.input, origin, security_override))
 }
 
 /// Map a [`ToolHostError`](crate::toolhost::ToolHostError) to a wire response.
@@ -1682,6 +1727,9 @@ pub async fn run_authorized_skillhost_run(
                             // scheduler/auto_skill) names a non-interactive origin
                             // and INHERITS the OS jail (fail-closed if absent).
                             origin,
+                            // Skill runs never carry a human-gated sandbox override
+                            // (the override rides `toolhost.execute` only).
+                            security_override: None,
                         };
                         match toolhost.execute_governed(req, confirmation).await {
                             Ok(result) => Response::ok(
@@ -3148,16 +3196,143 @@ mod tests {
     #[test]
     fn toolhost_payload_threads_origin_backward_compatibly() {
         use crate::toolhost::isolation::ToolOrigin;
-        let (tool, _input, origin) =
+        let (tool, _input, origin, ov) =
             parse_toolhost_payload(&serde_json::json!({ "tool": "read", "input": {} }))
                 .expect("ok");
         assert_eq!(tool, "read");
         assert_eq!(origin, ToolOrigin::OwnerInteractive);
-        let (_, _, origin) = parse_toolhost_payload(
+        // Invariant F at the wire: absent `security_override` ⇒ None ⇒ today's path.
+        assert!(ov.is_none(), "absent override must parse to None");
+        let (_, _, origin, ov) = parse_toolhost_payload(
             &serde_json::json!({ "tool": "bash", "input": {}, "origin": "proactive" }),
         )
         .expect("ok");
         assert_eq!(origin, ToolOrigin::Proactive);
+        assert!(ov.is_none());
+    }
+
+    #[test]
+    fn toolhost_payload_parses_security_override_sibling() {
+        // The override is a TOP-LEVEL sibling of `input` — never inside it (the model
+        // authors `input`, so it can never smuggle an override).
+        let (_, _, _, ov) = parse_toolhost_payload(&serde_json::json!({
+            "tool": "bash",
+            "input": { "command": "cat ~/.secrets" },
+            "origin": "owner_interactive",
+            "security_override": {
+                "call_id": "req-42",
+                "target_path": "/Users/x/.secrets",
+                "tier": "secrets",
+                "grant_kind": "once",
+                "expiry_ms": 9_999_999_999_999u64,
+            }
+        }))
+        .expect("ok");
+        let ov = ov.expect("override present");
+        assert_eq!(ov.call_id, "req-42");
+        assert_eq!(ov.target_path, "/Users/x/.secrets");
+        assert_eq!(ov.tier, "secrets");
+        assert_eq!(ov.grant_kind, "once");
+        assert_eq!(ov.expiry_ms, 9_999_999_999_999u64);
+    }
+
+    #[test]
+    fn toolhost_payload_rejects_override_inside_input_and_bad_enums() {
+        // `deny_unknown_fields` on the `input`-authoring path: an override placed
+        // INSIDE `input` is just opaque tool input (never parsed as an override),
+        // and an unknown TOP-LEVEL key is rejected outright.
+        assert!(parse_toolhost_payload(&serde_json::json!({
+            "tool": "bash",
+            "input": {},
+            "bogus_top_level": 1
+        }))
+        .is_err());
+        // Closed enums: an out-of-set tier / grant_kind is rejected at parse.
+        assert!(parse_toolhost_payload(&serde_json::json!({
+            "tool": "bash",
+            "input": {},
+            "security_override": {
+                "call_id": "c", "target_path": "/x", "tier": "root",
+                "grant_kind": "once", "expiry_ms": 1u64
+            }
+        }))
+        .is_err());
+        assert!(parse_toolhost_payload(&serde_json::json!({
+            "tool": "bash",
+            "input": {},
+            "security_override": {
+                "call_id": "c", "target_path": "/x", "tier": "secrets",
+                "grant_kind": "forever", "expiry_ms": 1u64
+            }
+        }))
+        .is_err());
+        // Unknown field INSIDE the override is rejected (strict wire).
+        assert!(parse_toolhost_payload(&serde_json::json!({
+            "tool": "bash",
+            "input": {},
+            "security_override": {
+                "call_id": "c", "target_path": "/x", "tier": "secrets",
+                "grant_kind": "once", "expiry_ms": 1u64, "extra": true
+            }
+        }))
+        .is_err());
+    }
+
+    /// L11 — socket-reachability. `toolhost.execute` (and therefore any
+    /// `security_override`) is dispatched ONLY by `transport::serve_unix` over the
+    /// bootstrap-token Unix socket; the generic `handle_frame` dispatcher used by the
+    /// diagnostic TCP/WS surface does NOT know the command and returns
+    /// `not_implemented`. This test would FAIL if a future change wired
+    /// `toolhost.execute` into `handle_frame`, re-exposing the override on the
+    /// diagnostic surface.
+    #[tokio::test]
+    async fn toolhost_execute_unreachable_from_generic_dispatch_surface() {
+        // A client that DOES hold `ToolExecuteSafe` (the scope `toolhost.execute`
+        // requires): authorization passes, so the ONLY thing stopping execution is
+        // that `handle_frame`'s command match has no `toolhost.execute` arm →
+        // `not_implemented`. If a future change wired it into `handle_frame`, this
+        // client would reach it and the assertion would break.
+        let mut reg = ClientRegistry::new();
+        let scopes: HashSet<Scope> = [Scope::ToolExecuteSafe, Scope::ToolExecuteDangerous]
+            .into_iter()
+            .collect();
+        reg.insert(
+            ClientRecord {
+                client_id: "c1".to_owned(),
+                class: ClientClass::SwiftFrontend,
+                scopes,
+                issued_at_ms: 0,
+                expires_at_ms: 1_000,
+                revoked_at_ms: None,
+                display_name: "tool-scoped".to_owned(),
+            },
+            hash_token("good-token"),
+        );
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame(
+                "toolhost.execute",
+                serde_json::json!({ "tool": "bash", "input": { "command": "echo hi" } }),
+            ),
+            10,
+            "e1".to_owned(),
+        )
+        .await;
+        assert!(
+            !out.response.ok,
+            "toolhost.execute must not be handled here"
+        );
+        assert_eq!(
+            out.response.error.as_ref().map(|e| e.code.as_str()),
+            Some("not_implemented"),
+            "toolhost.execute is reachable ONLY over the bootstrap-token Unix socket"
+        );
     }
 
     fn mock() -> MockAdapter {
