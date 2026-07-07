@@ -815,6 +815,16 @@ fn build_tts_engine() -> Arc<dyn TtsAdapter> {
             .ok()
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| "prince-canuma/Kokoro-82M".to_owned());
+        // When `FAE_TTS_MODEL_ID` points at a LOCAL bundled Kokoro directory,
+        // voice-tts loads it directly (no HuggingFace fetch, which 401s). Gate
+        // that local bundle against models.lock (size + SHA-256), fail-closed.
+        // The HF repo-id default is not verified here (voice-tts streams it).
+        if Path::new(&model_repo).is_dir() {
+            match verify_kokoro_artifacts(Path::new(&model_repo)) {
+                Ok(()) => println!("tts     : kokoro local bundle {model_repo}"),
+                Err(detail) => exit_fatal("kokoro_tts", &detail),
+            }
+        }
         let voices_dir = local_voices_directory();
         if let Some(dir) = &voices_dir {
             println!("voices  : {} (custom voices, optional)", dir.display());
@@ -999,6 +1009,74 @@ fn local_voices_directory() -> Option<PathBuf> {
         .and_then(|run| run.parent().map(|base| base.join("voices")))
 }
 
+/// Verify the bundled Kokoro model files (`config.json` + `kokoro-v1_0.safetensors`)
+/// against `models.lock` (size + SHA-256). Mirrors the Linux Piper gate. macOS-only;
+/// only invoked when the daemon loads a LOCAL bundled Kokoro directory (the HF
+/// repo-id default is not gated). Fail-closed: any miss aborts. `FAE_MODELS_LOCK=off`
+/// under `FAE_DEV` is the only escape, matching the Piper/engine gates.
+#[cfg(target_os = "macos")]
+fn verify_kokoro_artifacts(model_dir: &Path) -> Result<(), String> {
+    if models_lock_disabled_for_dev() {
+        eprintln!(
+            "fae-daemon: WARNING: FAE_DEV allows FAE_MODELS_LOCK=off; skipping Kokoro artifact verification"
+        );
+        return Ok(());
+    }
+    let lock = load_installed_models_lock()?;
+    verify_locked_kokoro_file(
+        &lock,
+        KOKORO_CONFIG_ARTIFACT_ID,
+        &model_dir.join(KOKORO_CONFIG_FILENAME),
+    )?;
+    verify_locked_kokoro_file(
+        &lock,
+        KOKORO_WEIGHTS_ARTIFACT_ID,
+        &model_dir.join(KOKORO_WEIGHTS_FILENAME),
+    )?;
+    Ok(())
+}
+
+/// Look up `id` in the lock, confirm its role + the `voice-tts` loader, then verify
+/// the on-disk file's size + SHA-256 match the pinned artifact. Mirrors the Linux
+/// [`verify_locked_file`] but for the macOS Kokoro (`voice-tts`) TTS lane.
+#[cfg(target_os = "macos")]
+fn verify_locked_kokoro_file(lock: &ModelsLock, id: &str, path: &Path) -> Result<(), String> {
+    let artifact = lock
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.id == id)
+        .ok_or_else(|| format!("missing required artifact {id}"))?;
+    if artifact.role != "tts_model" || artifact.loader != "voice-tts" {
+        return Err(format!(
+            "artifact {id} must be role=tts_model loader=voice-tts (got role={}, loader={})",
+            artifact.role, artifact.loader
+        ));
+    }
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("stat {} ({id}): {error}", path.display()))?;
+    if artifact.size_bytes != 0 && metadata.len() != artifact.size_bytes {
+        return Err(format!(
+            "{id} size mismatch for {}: expected {}, got {}",
+            path.display(),
+            artifact.size_bytes,
+            metadata.len()
+        ));
+    }
+    let expected = artifact.sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("artifact {id} must pin a 64-hex sha256"));
+    }
+    let actual =
+        sha256_file(path).map_err(|error| format!("hash {} ({id}): {error}", path.display()))?;
+    if actual != expected {
+        return Err(format!(
+            "{id} sha256 mismatch for {}: expected {expected}, got {actual}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 const DEFAULT_LLAMA_REPO: &str = "unsloth/gemma-4-E4B-it-qat-GGUF";
 const DEFAULT_LLAMA_REVISION: &str = "bbcd9d849c2541ecc2af7ef64b3c3c2c7aa14e96";
 const DEFAULT_LLAMA_ALIAS: &str = "gemma-4";
@@ -1048,6 +1126,19 @@ const PIPER_VOICE_CONFIG_ARTIFACT_ID: &str = "rhasspy-piper-voices-en-us-lessac-
 /// The pinned voice's display id (status + audit only).
 #[cfg(not(target_os = "macos"))]
 const PIPER_VOICE_NAME: &str = "en_US-lessac-medium";
+
+/// `models.lock` artifact ids for the bundled Kokoro-82M TTS model (macOS-only
+/// TTS lane via voice-tts/mlx-rs). Only verified when the daemon is pointed at a
+/// LOCAL bundled Kokoro directory (`FAE_TTS_MODEL_ID` = an existing dir); the HF
+/// repo-id default streams from HuggingFace and is not integrity-gated here.
+#[cfg(target_os = "macos")]
+const KOKORO_CONFIG_ARTIFACT_ID: &str = "prince-canuma-kokoro-82m-config-json";
+#[cfg(target_os = "macos")]
+const KOKORO_WEIGHTS_ARTIFACT_ID: &str = "prince-canuma-kokoro-82m-safetensors";
+#[cfg(target_os = "macos")]
+const KOKORO_CONFIG_FILENAME: &str = "config.json";
+#[cfg(target_os = "macos")]
+const KOKORO_WEIGHTS_FILENAME: &str = "kokoro-v1_0.safetensors";
 
 /// Build the inference backend. llama.cpp is now the only runtime path: the
 /// daemon owns a `llama-server` sidecar and uses llama.cpp's `-hf` downloader to

@@ -366,3 +366,41 @@ license = "MIT (LJSpeech-derived public-domain voice)"
 hardware_profile = "Piper voice config JSON (phoneme map, sample rate)"
 approved_by = "owner"
 created_at = "2026-06-20T00:00:00Z"
+
+# --- Kokoro-82M TTS model (macOS-only TTS lane via voice-tts/mlx-rs). Bundled at
+# `<app>/Contents/Resources/Kokoro/` by `just install-kokoro-model` and pointed at
+# via `FAE_TTS_MODEL_ID` (an existing local dir), so voice-tts loads it locally
+# instead of fetching from HuggingFace (which 401s). Only verified when the daemon
+# uses the LOCAL bundle; the HF repo-id default is not gated here. Linux uses Piper
+# and never reads these. Only `config.json` + the safetensors are needed — the
+# upstream `voices/`+`samples/` are omitted (Fae's own voice ships separately).
+
+[[artifact]]
+id = "prince-canuma-kokoro-82m-config-json"
+role = "tts_model"
+loader = "voice-tts"
+source_repo = "prince-canuma/Kokoro-82M"
+source_revision = ""
+filename = "config.json"
+size_bytes = 2351
+sha256 = "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"
+signature = ""
+license = "apache-2.0 (hexgrad/Kokoro-82M)"
+hardware_profile = "macOS Apple Silicon Kokoro TTS via voice-tts/mlx-rs"
+approved_by = "owner"
+created_at = "2026-07-05T00:00:00Z"
+
+[[artifact]]
+id = "prince-canuma-kokoro-82m-safetensors"
+role = "tts_model"
+loader = "voice-tts"
+source_repo = "prince-canuma/Kokoro-82M"
+source_revision = ""
+filename = "kokoro-v1_0.safetensors"
+size_bytes = 327115152
+sha256 = "4e9ecdf03b8b6cf906070390237feda473dc13327cb8d56a43deaa374c02acd8"
+signature = ""
+license = "apache-2.0 (hexgrad/Kokoro-82M)"
+hardware_profile = "macOS Apple Silicon Kokoro TTS via voice-tts/mlx-rs"
+approved_by = "owner"
+created_at = "2026-07-05T00:00:00Z"

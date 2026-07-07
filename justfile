@@ -67,7 +67,7 @@ run-ui-shell: build-ui-shell
     cd native/rust/fae-ui-shell && cargo run --release
 
 # Build and launch the Swift app with the Rust UI shell bridge enabled.
-run-native-with-ui-shell: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
+run-native-with-ui-shell: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _kill-fae
     FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
 
 # Validate the Rust orb UI shell prototype.
@@ -94,13 +94,13 @@ _kill-fae:
 
 # Build, bundle, sign, and launch the native app (production mode).
 # Orb-first: embeds the Rust orb shell + daemon (the only product UI + brain).
-run-native: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
+run-native: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _kill-fae
     FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
 
 # Build, bundle, sign, and launch in DEV mode (isolated data directory).
 # Uses ~/Library/Application Support/fae-dev/ — does NOT touch production Fae.
 # Reads config.toml from fae-dev/. Uses separate UserDefaults, memories, skills.
-run-dev: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
+run-dev: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _kill-fae
     FAE_DEV=1 FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1 --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae (DEV) launched — logs: tail -f /tmp/fae-dev.log"
     @echo "  Data: ~/Library/Application Support/fae-dev/"
@@ -108,16 +108,16 @@ run-dev: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-da
 
 # Build the Swift app, create .app bundle, sign, and verify it (without launching).
 # Orb-first: embeds the Rust orb shell + daemon.
-bundle-native: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _verify-bundle
+bundle-native: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _verify-bundle
     @echo "✓ Signed bundle ready: {{_app_bundle}}"
 
 # Full clean rebuild and launch (production). Orb-first: embeds orb shell + daemon.
-rebuild: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _verify-bundle
+rebuild: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _verify-bundle
     FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae launched — logs: tail -f /tmp/fae-test.log"
 
 # Full clean rebuild and launch in DEV mode. Orb-first: embeds orb shell + daemon.
-rebuild-dev: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _verify-bundle
+rebuild-dev: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _verify-bundle
     FAE_DEV=1 FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1 --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae (DEV) rebuilt and launched — logs: tail -f /tmp/fae-dev.log"
 
@@ -125,7 +125,7 @@ rebuild-dev: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embe
 
 # Build, sign, and launch Fae with the test server enabled. Polls until /health responds.
 # Uses the same orb-first bundle shape as run-dev: Rust UI shell + embedded daemon.
-test-serve: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
+test-serve: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _kill-fae
     #!/usr/bin/env bash
     set -euo pipefail
     BUNDLE="{{_app_bundle}}"
@@ -473,6 +473,29 @@ _embed-llamacpp-runtime:
     cp -R "$SRC_DIR" "$BUNDLE/Contents/Resources/LlamaCpp"
     chmod 755 "$BUNDLE/Contents/Resources/LlamaCpp/llama-server"
     echo "  → Embedded llama.cpp runtime"
+
+# Download + verify the bundled Kokoro-82M TTS model into repo-local resources.
+install-kokoro-model:
+    uv run --script scripts/install-kokoro-model.py
+
+# (internal) Embed the bundled Kokoro-82M TTS model in the app bundle. Runs before
+# signing so the model files ship inside the signed app. DaemonLLMEngine points
+# FAE_TTS_MODEL_ID at this dir so voice-tts loads Kokoro locally (no HF 401).
+_embed-kokoro-model:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUNDLE="{{_app_bundle}}"
+    uv run --script scripts/install-kokoro-model.py
+    SRC_DIR="$(git rev-parse --show-toplevel)/native/macos/Fae/Resources/Kokoro"
+    if [ ! -f "$SRC_DIR/kokoro-v1_0.safetensors" ]; then
+        echo "Missing Kokoro model: $SRC_DIR/kokoro-v1_0.safetensors" >&2
+        echo "Run: just install-kokoro-model" >&2
+        exit 1
+    fi
+    rm -rf "$BUNDLE/Contents/Resources/Kokoro"
+    mkdir -p "$BUNDLE/Contents/Resources"
+    cp -R "$SRC_DIR" "$BUNDLE/Contents/Resources/Kokoro"
+    echo "  → Embedded Kokoro-82M TTS model"
 
 # (internal) Sign the .app bundle with Developer ID.
 _sign-bundle:

@@ -1817,6 +1817,28 @@ actor DaemonLLMEngine: LLMEngine {
         return llamaServer.deletingLastPathComponent().path
     }
 
+    /// Absolute path to the bundled Kokoro-82M TTS model directory
+    /// (`Contents/Resources/Kokoro/`), installed by the `install-kokoro-model`
+    /// bundle step. Returns `nil` unless BOTH required files are present so the
+    /// daemon falls back to its HuggingFace repo-id default when the bundle is
+    /// absent (back-compat). Pointing `FAE_TTS_MODEL_ID` at this local dir makes
+    /// voice-tts load Kokoro locally instead of fetching from HF (which 401s).
+    static func bundledKokoroModelDirectory() -> String? {
+        guard let config = Bundle.main.url(
+            forResource: "config",
+            withExtension: "json",
+            subdirectory: "Kokoro"
+        ), FileManager.default.fileExists(atPath: config.path) else {
+            return nil
+        }
+        let dir = config.deletingLastPathComponent()
+        let weights = dir.appendingPathComponent("kokoro-v1_0.safetensors")
+        guard FileManager.default.fileExists(atPath: weights.path) else {
+            return nil
+        }
+        return dir.path
+    }
+
     private func launchAndConnect() async throws {
         Self.installBundledModelsLock()
         let binary = try resolveBinaryURL()
@@ -1855,6 +1877,15 @@ actor DaemonLLMEngine: LLMEngine {
             // app-bundled runtime explicitly to keep the signed app path on
             // llama.cpp instead of failing over to the MLX lane.
             environment["FAE_LLAMACPP_RUNTIME_DIR"] = bundledRuntimeDir
+        }
+        if environment["FAE_TTS_MODEL_ID"] == nil,
+           let bundledKokoro = Self.bundledKokoroModelDirectory()
+        {
+            // Point the daemon's macOS Kokoro TTS lane (voice-tts) at the bundled
+            // model directory so it loads locally instead of fetching from
+            // HuggingFace (which 401s). Absent bundle → leave unset so the
+            // daemon's HF repo-id default still applies (back-compat).
+            environment["FAE_TTS_MODEL_ID"] = bundledKokoro
         }
 
         // Cloud lane (ADR-014): inject remote vars only when lane != "local" and
