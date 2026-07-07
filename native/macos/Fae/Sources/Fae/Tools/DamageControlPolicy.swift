@@ -211,6 +211,14 @@ actor DamageControlPolicy {
             PathRule(path: "~/Library/Application Support/fae/directive.md",       nonLocalOnly: false),
             PathRule(path: "~/Library/Application Support/fae-dev/speakers.json", nonLocalOnly: false),
             PathRule(path: "~/Library/Application Support/fae-dev/directive.md",  nonLocalOnly: false),
+            // Fae-integrity, ALWAYS zero-access (security-override Wave 2, L8):
+            // the standing grant store + the model-artifact lock are Fae's own
+            // trust anchors. The daemon's Fae-integrity/never set covers these too,
+            // and refuses any human-gated override for them (belt-and-suspenders).
+            PathRule(path: "~/Library/Application Support/fae/grant-store.json",     nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae/models.lock",          nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae-dev/grant-store.json", nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae-dev/models.lock",      nonLocalOnly: false),
             // config.toml + soul.md are NOT in the documented zero-access set: they
             // stay non-local-only (the pre-existing behavior — the local model may
             // read its own config/soul; only an external model is denied).
@@ -325,6 +333,34 @@ actor DamageControlPolicy {
         }
 
         return .allow
+    }
+
+    /// The protected zero-access path this tool call would touch, if any
+    /// (security-override Wave 2, Part A). Returns the home-EXPANDED absolute path
+    /// of the first matching zero-access rule — the `target` a `SecurityDenial`
+    /// carries and a post-click override relaxes. `nil` if the call touches no
+    /// zero-access path, so an ordinary bash-pattern / read-only block is NOT
+    /// surfaced as an (overridable) security denial. Mirrors the zero-access scan
+    /// in `evaluate` exactly (same rules, same match logic).
+    func securityDenialTarget(
+        toolName: String,
+        arguments: [String: Any],
+        locality: ModelLocality
+    ) -> String? {
+        guard ["read", "write", "edit", "bash"].contains(toolName) else { return nil }
+        let argForms = Self.normalizedArgumentForms(
+            Self.extractPath(toolName: toolName, arguments: arguments))
+        let bashCommand = toolName == "bash" ? (arguments["command"] as? String ?? "") : nil
+        for rule in zeroAccessPaths {
+            guard !rule.nonLocalOnly || locality == .nonLocal else { continue }
+            let expanded = Self.expandPath(rule.path)
+            let hitByArg = argForms.contains { $0 == expanded || $0.hasPrefix(expanded + "/") }
+            let hitByBash = bashCommand.map {
+                Self.commandReferencesPath(command: $0, expandedPath: expanded)
+            } ?? false
+            if hitByArg || hitByBash { return expanded }
+        }
+        return nil
     }
 
     // MARK: - Helpers

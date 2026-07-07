@@ -1299,7 +1299,9 @@ enum DaemonToolRouting {
     static func routeBash(
         call: ToolCall,
         session: DaemonToolHostSession,
-        plan: BashRoutePlan
+        plan: BashRoutePlan,
+        origin: DaemonToolOrigin = .ownerInteractive,
+        securityOverride: DaemonSecurityOverride? = nil
     ) async -> BashExecutionOutcome {
         guard plan != .legacyLocal else {
             return .failClosed("bash routing misconfigured: legacy route reached the routed executor")
@@ -1309,7 +1311,8 @@ enum DaemonToolRouting {
         }
         switch plan {
         case .daemonReachable:
-            return await session.executeSerializedRoutedBash(command: command)
+            return await session.executeSerializedRoutedBash(
+                command: command, origin: origin, securityOverride: securityOverride)
         case .daemonUnavailableFailClosed:
             // Mutations are irreversible; never fall back to a local bash.
             return .failClosed(

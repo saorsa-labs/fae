@@ -191,7 +191,12 @@ actor DaemonToolHostSession {
     ///
     /// - Returns: the daemon's `result` object for the tool invocation.
     @discardableResult
-    func execute(tool: String, input: [String: Any]) async throws -> [String: Any] {
+    func execute(
+        tool: String,
+        input: [String: Any],
+        origin: DaemonToolOrigin = .ownerInteractive,
+        securityOverride: DaemonSecurityOverride? = nil
+    ) async throws -> [String: Any] {
         let conn = try await ensureConnected()
         guard approvedRootPath != nil else {
             // No approved root → do NOT silently run against the temp sandbox.
@@ -200,10 +205,19 @@ actor DaemonToolHostSession {
                 "no workspace root set — refusing to execute against a temp sandbox")
         }
         let requestID = nextRequestID()
+        // Security-override Wave 2: build the payload with the TRUTHFUL origin (L1)
+        // and — only on the post-click re-submit — the `security_override` sibling
+        // whose `call_id` is bound to THIS request's id (L7). The model authors
+        // only `input`; it can neither see nor set `origin`/`security_override`.
         let frame = try DaemonWire.encodeFrame(
             requestID: requestID,
             command: "toolhost.execute",
-            payload: ["tool": tool, "input": input])
+            payload: Self.buildExecutePayload(
+                tool: tool,
+                input: input,
+                origin: origin,
+                securityOverride: securityOverride,
+                requestID: requestID))
         let raw = try await conn.roundTrip(
             frame: frame,
             expectRequestID: requestID,
@@ -212,6 +226,40 @@ actor DaemonToolHostSession {
             })
         let validated = try DaemonAgentClient.validate(raw)
         return (validated["result"] as? [String: Any]) ?? [:]
+    }
+
+    /// Build the `toolhost.execute` payload. Pure + `static` so the origin stamp
+    /// (L1) and the post-click `security_override` construction (the wire contract)
+    /// are hermetically testable WITHOUT a live socket.
+    ///
+    /// The `security_override.call_id` is set to `requestID` here — the SAME id the
+    /// frame rides on — so it always equals the daemon-side request `call_id` the
+    /// override gate binds against (L7 single-use). The advisory `tier` +
+    /// `grant_kind` are the daemon's closed wire enums; the daemon re-classifies +
+    /// re-validates regardless (Invariant H). Field names match
+    /// `crates/fae-daemon/src/session.rs` `parse_toolhost_payload` exactly.
+    static func buildExecutePayload(
+        tool: String,
+        input: [String: Any],
+        origin: DaemonToolOrigin,
+        securityOverride: DaemonSecurityOverride?,
+        requestID: String
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
+            "tool": tool,
+            "input": input,
+            "origin": origin.rawValue,
+        ]
+        if let ov = securityOverride {
+            payload["security_override"] = [
+                "call_id": requestID,
+                "target_path": ov.targetPath,
+                "tier": ov.tierWire,
+                "grant_kind": ov.grantKindWire,
+                "expiry_ms": ov.expiryMs,
+            ]
+        }
+        return payload
     }
 
     /// The approved workspace root bound to this connection, if any. Layer 3
@@ -308,7 +356,8 @@ actor DaemonToolHostSession {
     ///   root)` (the path was already confined; re-confine it locally via the
     ///   fd-anchored reader, never cwd).
     func executeSerializedRoutedRead(
-        validatedPath: String
+        validatedPath: String,
+        origin: DaemonToolOrigin = .ownerInteractive
     ) async -> DaemonToolRouting.ReadExecutionOutcome {
         // Acquire (parks if contended; throws CancellationError if the caller's
         // Task is cancelled while parked). The deferred release is registered
@@ -336,7 +385,8 @@ actor DaemonToolHostSession {
                 return .denied(reason)
             case .route(let relative, _):
                 do {
-                    let result = try await execute(tool: "read", input: ["path": relative])
+                    let result = try await execute(
+                        tool: "read", input: ["path": relative], origin: origin)
                     return .routed(result)
                 } catch DaemonAgentClientError.daemonUnavailable {
                     // Root was approved (we are past ensureDefaultRooted); the
@@ -379,7 +429,8 @@ actor DaemonToolHostSession {
     /// server request at a time on the shared connection).
     func executeSerializedRoutedWrite(
         validatedPath: String,
-        content: String
+        content: String,
+        origin: DaemonToolOrigin = .ownerInteractive
     ) async -> DaemonToolRouting.WriteExecutionOutcome {
         do {
             try await acquireToolHostOperationLock()
@@ -419,7 +470,9 @@ actor DaemonToolHostSession {
                 // the result dict in the outcome so `mapWriteResult`/`buildWriteResult`
                 // surfaces that message (NOT a generic string). Errors throw →
                 // mapped to .failClosed below. (fluers-runtime `tool.rs`.)
-                let result = try await execute(tool: "write", input: ["path": validatedPath, "content": content])
+                let result = try await execute(
+                    tool: "write", input: ["path": validatedPath, "content": content],
+                    origin: origin)
                 return .routed(result: result, preStateContent: preStateContent, absoluteTargetPath: absoluteTargetPath)
             } catch DaemonAgentClientError.daemonUnavailable {
                 // Daemon dropped at execute (root was approved). FAIL CLOSED —
@@ -462,7 +515,8 @@ actor DaemonToolHostSession {
     func executeSerializedRoutedEdit(
         validatedPath: String,
         oldString: String,
-        newString: String
+        newString: String,
+        origin: DaemonToolOrigin = .ownerInteractive
     ) async -> DaemonToolRouting.EditExecutionOutcome {
         do {
             try await acquireToolHostOperationLock()
@@ -503,7 +557,8 @@ actor DaemonToolHostSession {
                 let result = try await execute(
                     tool: "edit",
                     input: DaemonToolRouting.buildDaemonEditInput(
-                        validatedPath: validatedPath, oldString: oldString, newString: newString))
+                        validatedPath: validatedPath, oldString: oldString, newString: newString),
+                    origin: origin)
                 return .routed(result: result, preStateContent: preStateContent, absoluteTargetPath: absoluteTargetPath)
             } catch DaemonAgentClientError.daemonUnavailable {
                 // Daemon dropped at execute (root was approved). FAIL CLOSED —
@@ -548,7 +603,9 @@ actor DaemonToolHostSession {
     /// confinement boundary (DamageControl, run in the executor BEFORE this,
     /// is the real guard).
     func executeSerializedRoutedBash(
-        command: String
+        command: String,
+        origin: DaemonToolOrigin = .ownerInteractive,
+        securityOverride: DaemonSecurityOverride? = nil
     ) async -> DaemonToolRouting.BashExecutionOutcome {
         do {
             try await acquireToolHostOperationLock()
@@ -581,7 +638,9 @@ actor DaemonToolHostSession {
                 // Returns a CONTENT-BEARING result ("[exit N] stdout/stderr");
                 // a nonzero exit is CONTENT, not a transport error. Errors throw
                 // → .failClosed below. (fluers-runtime `tool.rs` `BashTool`.)
-                let result = try await execute(tool: "bash", input: ["command": command])
+                let result = try await execute(
+                    tool: "bash", input: ["command": command],
+                    origin: origin, securityOverride: securityOverride)
                 return .routed(result: result, preStateContent: preStateContent, absoluteTargetPath: absoluteTargetPath)
             } catch DaemonAgentClientError.daemonUnavailable {
                 // Daemon dropped at execute (root was approved). FAIL CLOSED —

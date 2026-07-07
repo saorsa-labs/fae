@@ -32,6 +32,15 @@ struct ToolExecutorContext: Sendable {
     /// Proactive task context, if this tool call originated from a scheduler task.
     let proactiveContext: PipelineCoordinator.ProactiveRequestContext?
 
+    /// Whether this invocation is a `<tool_program>` JavaScript block (executed via
+    /// JSCRuntime), not a genuine interactive `<tool_call>`. Drives the truthful
+    /// daemon origin (`script_block`) so a script bash is jailed and can never
+    /// drive a human-gated sandbox override (security-override Wave 2, L1).
+    ///
+    /// Defaulted `false` so the many existing memberwise-init call sites (tests +
+    /// harness) stay untouched; the production `<tool_program>` site sets `true`.
+    var isScriptBlock: Bool = false
+
     /// Whether vision capabilities are currently enabled on the pipeline.
     let visionEnabled: Bool
 
@@ -66,6 +75,7 @@ struct ToolExecutorContext: Sendable {
             speakerId: nil,
             actionSource: .voice,
             proactiveContext: nil,
+            isScriptBlock: false,
             visionEnabled: false,
             firstOwnerEnrollmentActive: false,
             workflowTurnID: nil,

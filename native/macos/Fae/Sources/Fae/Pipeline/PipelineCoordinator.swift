@@ -106,6 +106,15 @@ actor PipelineCoordinator {
     func setReceiptStore(_ store: ReceiptStore) async {
         narrationReceiptStore = store
         await toolExecutor.setReceiptStore(store)
+        // Security-override Wave 2: enable the standing grant store (L8/L9) + the
+        // hardware-only authorize-card presenter (L2/L12). The presenter is wired
+        // ONLY to `SecurityOverridePanel` — never a legacy approval route a model
+        // could self-trigger. Runs once at coordinator setup alongside the receipt
+        // wire; before this, the executor's presenter fails closed (Deny).
+        await toolExecutor.setGrantStore(GrantStore())
+        await toolExecutor.setSecurityOverridePresenter { denial, command in
+            await SecurityOverridePanel.present(denial: denial, command: command)
+        }
     }
 
     /// Receipt store retained for narration-time undo.
@@ -6497,6 +6506,7 @@ actor PipelineCoordinator {
             speakerId: speakerGate.currentSpeakerLabel,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
+            isScriptBlock: false,
             visionEnabled: effectiveVisionEnabled(),
             firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
             workflowTurnID: workflowTurnID,
@@ -6649,6 +6659,7 @@ actor PipelineCoordinator {
             speakerId: speakerGate.currentSpeakerLabel,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
+            isScriptBlock: true,
             visionEnabled: effectiveVisionEnabled(),
             firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
             workflowTurnID: currentTurnID,

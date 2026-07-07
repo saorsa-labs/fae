@@ -3967,7 +3967,7 @@ extension DaemonToolHostTests {
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _ in
             .routed(
                 result: ["content": [["type": "text", "text": "[exit 0]\n--- stdout ---\nhello\n--- stderr ---\n"]]],
                 preStateContent: nil,
@@ -4014,7 +4014,7 @@ extension DaemonToolHostTests {
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
         // The spy MUST NOT be called — DamageControl intercepts first.
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _ in
             .failClosed("routed bash executor must not be called for a catastrophe command")
         }
 
@@ -4055,7 +4055,7 @@ extension DaemonToolHostTests {
             HookResponse(systemMessage: "blocked-by-test", block: true, metadata: nil))
         let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
         let executor = await makeSpiedRoutedBashExecutor(
-            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _ in
+            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _, _ in
                 .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
             }
 
@@ -4115,7 +4115,7 @@ extension DaemonToolHostTests {
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _ in
             .failClosed("routed executor must not be called for legacy fall-through")
         }
 
@@ -4152,7 +4152,7 @@ extension DaemonToolHostTests {
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
         await executor.setRoutedBashTimeoutForTesting(0.4)
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _ in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             return .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
         }
@@ -4226,7 +4226,7 @@ extension DaemonToolHostTests {
     /// the bash executor + BashTool).
     private func makeSpiedRoutedBashExecutor(
         tmp: URL, hookRunner: SpyHookRunner?, logger: SpySecurityLogger,
-        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan) async -> DaemonToolRouting.BashExecutionOutcome
+        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan, DaemonToolOrigin) async -> DaemonToolRouting.BashExecutionOutcome
     ) async -> ToolExecutor {
         let session = DaemonToolHostSession(
             workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
@@ -4329,7 +4329,7 @@ extension DaemonToolHostTests {
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
         // The spy MUST NOT be called — the fail-closed plan short-circuits first.
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _ in
             .failClosed("routed bash executor must not be called on a fail-closed plan")
         }
 
