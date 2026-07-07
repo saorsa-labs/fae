@@ -140,6 +140,7 @@ fn req(tool: &str, input: Value, origin: ToolOrigin, call_id: &str) -> ToolHostR
         call_id: call_id.into(),
         cancel: CancellationToken::new(),
         origin,
+        security_override: None,
     }
 }
 

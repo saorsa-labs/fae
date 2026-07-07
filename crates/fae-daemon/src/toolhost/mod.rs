@@ -86,6 +86,47 @@ pub struct ToolHostRequest {
     /// non-interactive origins require the OS jail; an owner's interactive turn
     /// may run on the host. No `Default` — every construction states it.
     pub origin: ToolOrigin,
+    /// (Security-override Wave 1) An OPTIONAL human-gated sandbox relaxation for
+    /// THIS one call, minted by Swift AFTER a hardware click on the authorize card
+    /// (never from the model's arguments). `None` ⇒ today's behavior, byte-identical
+    /// (Invariant F). `Some` ⇒ the daemon re-validates every L-rule (origin, expiry,
+    /// call_id, canonical tier) before relaxing exactly one Host-bash read-deny leaf.
+    pub security_override: Option<SecurityOverride>,
+}
+
+/// A human-gated, single-call sandbox override (the wire contract's top-level
+/// `security_override` sibling of `toolhost.execute`). Minted ONLY by Swift after a
+/// hardware click; the model can neither see nor set it. Every field is
+/// re-validated daemon-side — the daemon trusts NONE of it blindly (Invariant H).
+#[derive(Debug, Clone)]
+pub struct SecurityOverride {
+    /// MUST equal this request's `call_id` (L7 single-use binding). A mismatch is
+    /// rejected — an override rides its own request and is never reused.
+    pub call_id: String,
+    /// The file the read-deny is relaxed for. The daemon RE-canonicalizes it (L4)
+    /// and never trusts this literal string.
+    pub target_path: String,
+    /// ADVISORY tier ("general"|"secrets") for Swift UX only. The daemon RE-derives
+    /// the authoritative tier from the canonical path and IGNORES this (L3).
+    pub tier: String,
+    /// "once" | "expiring" — advisory; the daemon honors the single-call binding
+    /// (L7) and the absolute `expiry_ms` (L6) regardless.
+    pub grant_kind: String,
+    /// Absolute UNIX-epoch ms. Honored only while `now_ms() <= expiry_ms` (L6).
+    pub expiry_ms: u64,
+}
+
+/// The daemon's per-call decision about a `security_override` (internal). The
+/// relaxation is consumed ONLY by a Host-tier `bash` call; `Rejected` and `None`
+/// both fall back to today's full read-deny (Invariant F).
+#[derive(Debug)]
+enum OverrideDecision {
+    /// No override on the request — today's path, no audit row emitted.
+    None,
+    /// Every L-rule passed: relax this one canonical leaf for this call.
+    Relax(isolation::HostBashRelax),
+    /// The override was rejected (already audited); proceed with the full sandbox.
+    Rejected,
 }
 
 /// The governed outcome of one tool call.
@@ -158,6 +199,9 @@ pub struct ToolHost {
     root_mode: crate::toolhost::policy::RootMode,
     /// (B3) Resolved home dir for the protected-path absolute-spelling scan.
     home: Option<String>,
+    /// The canonical workspace root (the OS-jail write boundary). Reused by an
+    /// approved Secrets-tier override to confine writes when it denies network (L5).
+    root: PathBuf,
     /// (Phase G3) The declared external MCP tool catalog, if any. `mcp:`-prefixed
     /// calls route here (NOT through the fluers registries / OS jail). `None` ⇒
     /// no servers declared ⇒ every `mcp:` call denies `mcp_not_configured`.
@@ -262,7 +306,7 @@ impl ToolHost {
         // The jailed toolset shares the same inner env (reads/writes/glob/grep
         // are already fd-anchored); only `exec` is intercepted by the OS jail.
         let jailed_env: Arc<dyn SessionEnv> =
-            Arc::new(JailedSessionEnv::new(Arc::clone(&env), real_root));
+            Arc::new(JailedSessionEnv::new(Arc::clone(&env), real_root.clone()));
         let jailed_registry = index(fluers_runtime::tool::mvp_tools_with_limits(
             jailed_env, limits,
         ));
@@ -277,6 +321,7 @@ impl ToolHost {
             clock,
             root_mode,
             home: resolve_home(),
+            root: real_root,
             mcp: None,
         })
     }
@@ -361,6 +406,9 @@ impl ToolHost {
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
         self.guard_isolation(&policy, &req, isolation)?;
+        // Security-override Wave 1: validate + audit any human-gated override BEFORE
+        // dispatch. `None`/`Rejected` leave the sandbox at today's full deny.
+        let override_decision = self.evaluate_security_override(&req, isolation);
         let ctx = InvokeContext {
             tool_call_id: req.call_id.clone(),
             cancel: req.cancel.clone(),
@@ -390,7 +438,7 @@ impl ToolHost {
                 return Err(ToolHostError::Denied(reason));
             }
         }
-        self.run_tool(&req, isolation).await
+        self.run_tool(&req, isolation, &override_decision).await
     }
 
     /// Governed execute WITH owner confirmation (A3 — the production path for
@@ -425,6 +473,9 @@ impl ToolHost {
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
         self.guard_isolation(&policy, &req, isolation)?;
+        // Security-override Wave 1: validate + audit any human-gated override BEFORE
+        // the confirm round-trip / dispatch. `None`/`Rejected` ⇒ full sandbox.
+        let override_decision = self.evaluate_security_override(&req, isolation);
         let ev = policy.evaluate(&req.tool, &req.input).await;
         match ev.decision {
             EvalDecision::Allow => {
@@ -435,7 +486,7 @@ impl ToolHost {
                 // B4: fail-closed mutation receipt BEFORE execution.
                 self.write_receipt_or_deny(&req, ev.risk_label, "allowed", gov.now_ms)
                     .await?;
-                self.run_tool(&req, isolation).await
+                self.run_tool(&req, isolation, &override_decision).await
             }
             EvalDecision::Deny(reason) => {
                 let _ =
@@ -481,7 +532,7 @@ impl ToolHost {
                             gov.now_ms,
                         )
                         .await?;
-                        self.run_tool(&req, isolation).await
+                        self.run_tool(&req, isolation, &override_decision).await
                     }
                     ConfirmReply::Denied(r) => {
                         let _ = policy.record_audit(
@@ -522,6 +573,7 @@ impl ToolHost {
         &self,
         req: &ToolHostRequest,
         isolation: IsolationMode,
+        override_decision: &OverrideDecision,
     ) -> Result<ToolHostResult, ToolHostError> {
         let ctx = InvokeContext {
             tool_call_id: req.call_id.clone(),
@@ -540,12 +592,141 @@ impl ToolHost {
         // under a seatbelt that denies reads of the protected paths. Fails closed
         // if isolation can't be enforced. Only `bash` needs this (read/write/edit/
         // glob/grep are fd-anchored + path-confined by fluers already).
-        let input = self.effective_tool_input(req, isolation)?;
+        let input = self.effective_tool_input(req, isolation, override_decision)?;
         let output = tool
             .execute(ctx, input)
             .await
             .map_err(|e| ToolHostError::Tool(e.to_string()))?;
         Ok(ToolHostResult { output })
+    }
+
+    /// Validate + audit a request's optional `security_override` (Wave 1). Returns
+    /// the per-call [`OverrideDecision`] the read-deny profile builder consumes.
+    ///
+    /// Fail-closed at every step (Invariant F): a `None` field is today's path with
+    /// NO audit; any present field that fails ANY L-rule is [`Rejected`] (audited)
+    /// and the call runs under the FULL sandbox. Only a field that clears every gate
+    /// yields [`Relax`], and only after the accept-audit write succeeds (matching the
+    /// project's allow-path convention: an audit-write failure denies the relaxation).
+    ///
+    /// - **L1** origin gate: reject unless `req.origin == OwnerInteractive`.
+    /// - **L7** single-use: reject unless `security_override.call_id == req.call_id`.
+    /// - **L6** expiry: reject unless `now_ms() <= expiry_ms` (boundary inclusive).
+    /// - **L4** canonicalize: reject a target that fails to resolve or is a directory.
+    /// - **L3** tier: reject a Fae-Integrity/never target; Secrets ⇒ `deny_network`.
+    ///
+    /// [`Relax`]: OverrideDecision::Relax
+    /// [`Rejected`]: OverrideDecision::Rejected
+    fn evaluate_security_override(
+        &self,
+        req: &ToolHostRequest,
+        isolation: IsolationMode,
+    ) -> OverrideDecision {
+        let Some(ov) = req.security_override.as_ref() else {
+            return OverrideDecision::None;
+        };
+        let iso = isolation.as_label();
+        // L1 — origin gate. The override channel is the owner's interactive turn
+        // only; a proactive/scheduler/script/delegated origin carrying an override
+        // is a red flag → reject + audit.
+        if req.origin != ToolOrigin::OwnerInteractive {
+            self.audit_override(
+                req,
+                iso,
+                AuditDecision::Denied,
+                "reject_non_interactive_origin",
+            );
+            return OverrideDecision::Rejected;
+        }
+        // L7 — single-use binding to THIS call.
+        if ov.call_id != req.call_id {
+            self.audit_override(req, iso, AuditDecision::Denied, "reject_call_id_mismatch");
+            return OverrideDecision::Rejected;
+        }
+        // L6 — absolute expiry (boundary inclusive), daemon clock.
+        if self.clock.now_ms() > ov.expiry_ms {
+            self.audit_override(req, iso, AuditDecision::Denied, "reject_expired");
+            return OverrideDecision::Rejected;
+        }
+        // The protected-path tier table is home-anchored; without a home we cannot
+        // classify → fail closed.
+        let Some(home) = self.home.as_deref() else {
+            self.audit_override(req, iso, AuditDecision::Denied, "reject_home_unresolved");
+            return OverrideDecision::Rejected;
+        };
+        // L4 — canonicalize (resolves symlinks + `..`); reject if it does not
+        // resolve or resolves to a directory (file-granular only).
+        let canonical = match std::fs::canonicalize(&ov.target_path) {
+            Ok(p) => p,
+            Err(_) => {
+                self.audit_override(req, iso, AuditDecision::Denied, "reject_uncanonicalizable");
+                return OverrideDecision::Rejected;
+            }
+        };
+        if canonical.is_dir() {
+            self.audit_override(req, iso, AuditDecision::Denied, "reject_directory");
+            return OverrideDecision::Rejected;
+        }
+        // L3 — daemon RE-derives the authoritative tier from the canonical path
+        // (ignoring the advisory `ov.tier`). Fae-Integrity is never overridable.
+        let deny_network = match isolation::classify_canonical_tier(&canonical, home) {
+            isolation::SecurityTier::FaeIntegrity => {
+                self.audit_override(req, iso, AuditDecision::Denied, "reject_never_path");
+                return OverrideDecision::Rejected;
+            }
+            isolation::SecurityTier::Secrets => true, // L5: Secrets unlock also cuts network.
+            isolation::SecurityTier::General => false,
+        };
+        // Accept — audit BEFORE relaxing. Fail closed if the audit write fails (the
+        // allow-path convention): a relaxation that cannot be recorded is denied.
+        let reason = format!(
+            "accepted:{}:{}",
+            if deny_network { "secrets" } else { "general" },
+            canonical.display()
+        );
+        if !self.audit_override(req, iso, AuditDecision::Allowed, &reason) {
+            return OverrideDecision::Rejected;
+        }
+        OverrideDecision::Relax(isolation::HostBashRelax {
+            canonical_target: canonical,
+            deny_network,
+            workspace_root: self.root.clone(),
+        })
+    }
+
+    /// Emit one `security_override` audit row (mirrors the deny-audit pattern). The
+    /// `reason` carries the outcome (`accepted:…` / `reject_*`). Returns `false` if
+    /// the audit sink rejected the write (so an accept can fail closed); a failed
+    /// reject-audit is logged loudly but the call already proceeds under full deny.
+    fn audit_override(
+        &self,
+        req: &ToolHostRequest,
+        isolation: &'static str,
+        decision: AuditDecision,
+        reason: &str,
+    ) -> bool {
+        let record = ToolHostAuditRecord {
+            event_type: "security_override",
+            ts_ms: self.clock.now_ms(),
+            tool: req.tool.clone(),
+            call_id: req.call_id.clone(),
+            decision,
+            reason: reason.to_string(),
+            risk_class: "SecurityOverride",
+            isolation,
+        };
+        match self.audit.record(record) {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::error!(
+                    tool = %req.tool,
+                    call_id = %req.call_id,
+                    reason,
+                    "fae-daemon: security_override audit write FAILED: {err}"
+                );
+                false
+            }
+        }
     }
 
     /// The tool input actually dispatched. Identity for every tool EXCEPT a
@@ -557,6 +738,7 @@ impl ToolHost {
         &self,
         req: &ToolHostRequest,
         isolation: IsolationMode,
+        override_decision: &OverrideDecision,
     ) -> Result<Value, ToolHostError> {
         if isolation != IsolationMode::Host || req.tool != "bash" {
             return Ok(req.input.clone());
@@ -565,7 +747,13 @@ impl ToolHost {
             // No `command` field: let the fluers `bash` tool reject it itself.
             return Ok(req.input.clone());
         };
-        match isolation::wrap_host_bash_command(command, self.home.as_deref()) {
+        // Only a validated `Relax` lifts a read-deny leaf; `None`/`Rejected` pass
+        // `None` ⇒ the profile is byte-identical to today's full deny (Invariant F).
+        let relax = match override_decision {
+            OverrideDecision::Relax(r) => Some(r),
+            OverrideDecision::None | OverrideDecision::Rejected => None,
+        };
+        match isolation::wrap_host_bash_command(command, self.home.as_deref(), relax) {
             Ok(wrapped) => {
                 let mut input = req.input.clone();
                 if let Value::Object(map) = &mut input {
@@ -1244,6 +1432,7 @@ mod tests {
             call_id: "c1".into(),
             cancel: CancellationToken::new(),
             origin: ToolOrigin::OwnerInteractive,
+            security_override: None,
         };
         let res = host.execute(req).await.expect("allowed + ran");
         assert!(!res.output.content.is_empty());
@@ -1266,6 +1455,7 @@ mod tests {
             call_id: "c2".into(),
             cancel: CancellationToken::new(),
             origin: ToolOrigin::OwnerInteractive,
+            security_override: None,
         };
         let err = host.execute(req).await.unwrap_err();
         assert!(matches!(err, ToolHostError::Denied(_)));
@@ -1299,6 +1489,7 @@ mod tests {
             call_id: "call-1".into(),
             cancel: CancellationToken::new(),
             origin,
+            security_override: None,
         }
     }
 
@@ -2444,5 +2635,331 @@ mod tests {
             "{err:?}"
         );
         assert_eq!(audit.snapshot()[0].reason, "mcp_not_configured");
+    }
+
+    // -----------------------------------------------------------------------
+    // Security-override Wave 1 — evaluate_security_override, one test per vector
+    // -----------------------------------------------------------------------
+
+    /// `FixedClock` "now". Valid overrides expire after it; expired ones before it.
+    const NOW_MS: u64 = 1_700_000_000_000;
+    const VALID_EXPIRY: u64 = NOW_MS + 60_000;
+
+    /// A ToolHost whose `home` is a temp dir we control + plant secret/never files
+    /// into. Returns (host, home TempDir, canonical home path, workspace TempDir).
+    /// Sets `HOME` for construction — nextest runs each test in its own process, so
+    /// the process-global env plant is race-free under the gate.
+    async fn host_with_planted_home(
+        audit: Arc<CapturingAudit>,
+    ) -> (ToolHost, tempfile::TempDir, PathBuf, tempfile::TempDir) {
+        let home = tempfile::tempdir().expect("home tempdir");
+        let real_home = std::fs::canonicalize(home.path()).expect("canon home");
+        // Fake secret content, built by concatenation (never a secret-shaped literal).
+        let fake_secret = format!("SECRET_{}_{}", "planted", "abc123def456");
+        let plant = |rel: &str, body: &str| {
+            let p = real_home.join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir");
+            }
+            std::fs::write(&p, body).expect("plant");
+        };
+        plant(".secrets", &fake_secret);
+        plant(".ssh/id_rsa", &fake_secret);
+        plant("Library/Application Support/fae/models.lock", "schema=1");
+        plant("Library/Application Support/fae/grant-store.json", "{}");
+        plant("notes.txt", "just notes");
+        std::fs::create_dir_all(real_home.join("adir")).expect("mkdir adir");
+
+        let workspace = tempfile::tempdir().expect("ws tempdir");
+        let receipts = Arc::new(CapturingReceipts::new()) as Arc<dyn ToolHostReceipts>;
+        let audit_dyn: Arc<dyn ToolHostAudit> = audit;
+        let mut host = ToolHost::with_wiring(
+            workspace.path().to_path_buf(),
+            Limits::default(),
+            audit_dyn,
+            receipts,
+            Arc::new(FakeEgressGate::allow()),
+            Arc::new(FixedClock),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await
+        .expect("host");
+        // Point the host's home at the planted temp dir WITHOUT mutating the global
+        // `HOME` env (the justfile gate runs `cargo test`, which shares the process
+        // env across concurrently-running tests — an env plant would race). Tests are
+        // a child module, so the private `home` field is directly settable.
+        host.home = Some(real_home.to_string_lossy().into_owned());
+        (host, home, real_home, workspace)
+    }
+
+    fn mk_override(call_id: &str, target: &str, tier: &str, expiry_ms: u64) -> SecurityOverride {
+        SecurityOverride {
+            call_id: call_id.into(),
+            target_path: target.into(),
+            tier: tier.into(),
+            grant_kind: "once".into(),
+            expiry_ms,
+        }
+    }
+
+    fn req_override(
+        origin: ToolOrigin,
+        call_id: &str,
+        ov: Option<SecurityOverride>,
+    ) -> ToolHostRequest {
+        ToolHostRequest {
+            client: dangerous_client(),
+            tool: "bash".into(),
+            input: json!({ "command": "echo hi" }),
+            call_id: call_id.into(),
+            cancel: CancellationToken::new(),
+            origin,
+            security_override: ov,
+        }
+    }
+
+    #[tokio::test]
+    async fn override_absent_is_none_and_emits_no_audit() {
+        // Invariant F: no override ⇒ no relaxation AND no audit row (today's path).
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, _rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", None);
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        assert!(matches!(d, OverrideDecision::None));
+        assert!(
+            audit.snapshot().is_empty(),
+            "absent override must not audit: {:?}",
+            audit.snapshot()
+        );
+    }
+
+    #[tokio::test]
+    async fn override_non_interactive_origin_rejected_and_audited() {
+        // L1: an override on a non-interactive origin is rejected + audited.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join(".secrets");
+        let ov = mk_override("c1", &target.to_string_lossy(), "secrets", VALID_EXPIRY);
+        let req = req_override(ToolOrigin::Proactive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Jailed);
+        assert!(matches!(d, OverrideDecision::Rejected));
+        let rows = audit.snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_type, "security_override");
+        assert_eq!(rows[0].decision, AuditDecision::Denied);
+        assert_eq!(rows[0].reason, "reject_non_interactive_origin");
+    }
+
+    #[tokio::test]
+    async fn override_never_path_rejected() {
+        // L3: a Fae-integrity/never target (models.lock, grant-store) is hard-rejected.
+        for rel in [
+            "Library/Application Support/fae/models.lock",
+            "Library/Application Support/fae/grant-store.json",
+        ] {
+            let audit = Arc::new(CapturingAudit::new());
+            let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+            let target = rh.join(rel);
+            let ov = mk_override("c1", &target.to_string_lossy(), "general", VALID_EXPIRY);
+            let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+            let d = host.evaluate_security_override(&req, IsolationMode::Host);
+            assert!(matches!(d, OverrideDecision::Rejected), "{rel} must reject");
+            assert_eq!(audit.snapshot()[0].reason, "reject_never_path", "{rel}");
+        }
+    }
+
+    #[tokio::test]
+    async fn override_directory_target_rejected() {
+        // L4: a directory target is rejected (file-granular only).
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join("adir");
+        let ov = mk_override("c1", &target.to_string_lossy(), "general", VALID_EXPIRY);
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        assert!(matches!(d, OverrideDecision::Rejected));
+        assert_eq!(audit.snapshot()[0].reason, "reject_directory");
+    }
+
+    #[tokio::test]
+    async fn override_uncanonicalizable_target_rejected() {
+        // L4: a target that does not resolve (incl. a `..`-escape to a missing path)
+        // is rejected — the canonical-escape defense (`realpath` first).
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join("work/../../.secrets-does-not-exist");
+        let ov = mk_override("c1", &target.to_string_lossy(), "secrets", VALID_EXPIRY);
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        assert!(matches!(d, OverrideDecision::Rejected));
+        assert_eq!(audit.snapshot()[0].reason, "reject_uncanonicalizable");
+    }
+
+    #[tokio::test]
+    async fn override_symlink_to_dir_secret_child_relaxes_but_stays_denied() {
+        // Canonical-escape: a workspace symlink → a file UNDER ~/.ssh canonicalizes
+        // into the Secrets tier (network-denied), and the file-granular relaxation
+        // leaves the ~/.ssh subpath deny in place — the child stays blocked (L4).
+        #[cfg(unix)]
+        {
+            let audit = Arc::new(CapturingAudit::new());
+            let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+            let link = rh.join("innocent_link");
+            std::os::unix::fs::symlink(rh.join(".ssh/id_rsa"), &link).expect("symlink");
+            let ov = mk_override("c1", &link.to_string_lossy(), "general", VALID_EXPIRY);
+            let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+            let d = host.evaluate_security_override(&req, IsolationMode::Host);
+            // Re-derived as Secrets despite the innocent-looking link + advisory
+            // "general": accepted as a Secrets unlock (network denied)…
+            match &d {
+                OverrideDecision::Relax(r) => assert!(r.deny_network, "must be Secrets tier"),
+                other => panic!("expected Relax, got {other:?}"),
+            }
+            assert!(audit.snapshot()[0].reason.starts_with("accepted:secrets:"));
+            // …but the ~/.ssh directory deny stays (only the exact leaf is removed).
+            #[cfg(target_os = "macos")]
+            {
+                let input = host
+                    .effective_tool_input(&req, IsolationMode::Host, &d)
+                    .expect("input");
+                let cmd = input
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .expect("command");
+                let ssh_dir = rh.join(".ssh");
+                assert!(
+                    cmd.contains(&format!("(subpath \"{}\")", ssh_dir.display())),
+                    "dir-secret must stay denied: {cmd}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn override_expired_rejected() {
+        // L6: honored only while now_ms() <= expiry_ms. FixedClock now = NOW_MS.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join(".secrets");
+        let ov = mk_override("c1", &target.to_string_lossy(), "secrets", NOW_MS - 1);
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        assert!(matches!(d, OverrideDecision::Rejected));
+        assert_eq!(audit.snapshot()[0].reason, "reject_expired");
+    }
+
+    #[tokio::test]
+    async fn override_call_id_mismatch_rejected() {
+        // L7: the override must bind to THIS call's id — no cross-call reuse.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join(".secrets");
+        let ov = mk_override(
+            "some-other-call",
+            &target.to_string_lossy(),
+            "secrets",
+            VALID_EXPIRY,
+        );
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        assert!(matches!(d, OverrideDecision::Rejected));
+        assert_eq!(audit.snapshot()[0].reason, "reject_call_id_mismatch");
+    }
+
+    #[tokio::test]
+    async fn override_general_accept_relaxes_without_network_deny() {
+        // General-tier unlock: accepted, deny_network = false (normal network kept).
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join("notes.txt");
+        let ov = mk_override("c1", &target.to_string_lossy(), "general", VALID_EXPIRY);
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        match &d {
+            OverrideDecision::Relax(r) => {
+                assert!(!r.deny_network, "General unlock keeps network");
+                assert_eq!(
+                    r.canonical_target,
+                    std::fs::canonicalize(&target).expect("canon")
+                );
+            }
+            other => panic!("expected Relax, got {other:?}"),
+        }
+        let row = &audit.snapshot()[0];
+        assert_eq!(row.decision, AuditDecision::Allowed);
+        assert!(
+            row.reason.starts_with("accepted:general:"),
+            "{}",
+            row.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn override_secrets_accept_sets_network_deny() {
+        // Secrets-tier unlock: accepted, deny_network = true (L5).
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join(".secrets");
+        // Boundary-inclusive expiry (now == expiry) must still be honored.
+        let ov = mk_override("c1", &target.to_string_lossy(), "general", NOW_MS);
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        match &d {
+            OverrideDecision::Relax(r) => assert!(r.deny_network, "Secrets unlock denies network"),
+            other => panic!("expected Relax, got {other:?}"),
+        }
+        assert!(audit.snapshot()[0].reason.starts_with("accepted:secrets:"));
+    }
+
+    /// L10 — env-scrub independence + real dispatch. On macOS, a valid Secrets unlock
+    /// produces a wrapped Host-bash command that (a) STILL begins with the `env -i`
+    /// scrub (the override never touches env scrubbing) and (b) denies network, and
+    /// (c) with the override ABSENT the wrapped command is byte-identical minus the
+    /// relaxation (drives the REAL `effective_tool_input` dispatch path).
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn override_relax_keeps_env_scrub_and_denies_network_l10() {
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _h, rh, _w) = host_with_planted_home(Arc::clone(&audit)).await;
+        let target = rh.join(".secrets");
+        let ov = mk_override("c1", &target.to_string_lossy(), "secrets", VALID_EXPIRY);
+        let req = req_override(ToolOrigin::OwnerInteractive, "c1", Some(ov));
+        let d = host.evaluate_security_override(&req, IsolationMode::Host);
+        assert!(matches!(d, OverrideDecision::Relax(_)));
+        let relaxed = host
+            .effective_tool_input(&req, IsolationMode::Host, &d)
+            .expect("relaxed input");
+        let relaxed_cmd = relaxed
+            .get("command")
+            .and_then(Value::as_str)
+            .expect("command");
+        // L10: env scrub is applied REGARDLESS of the override.
+        assert!(
+            relaxed_cmd.starts_with("/usr/bin/env -i "),
+            "override must not skip env scrub: {relaxed_cmd}"
+        );
+        // L5: the Secrets unlock denies network.
+        assert!(relaxed_cmd.contains("(deny network*)"), "{relaxed_cmd}");
+        // The named secret is relaxed out of the read-deny set.
+        assert!(
+            !relaxed_cmd.contains(&format!("(subpath \"{}\")", target.display())),
+            "target must be relaxed: {relaxed_cmd}"
+        );
+
+        // Absent override on the SAME request ⇒ the command still env-scrubs, keeps
+        // the secret denied, and never denies network (Invariant F, byte-identical).
+        let baseline = host
+            .effective_tool_input(&req, IsolationMode::Host, &OverrideDecision::None)
+            .expect("baseline input");
+        let baseline_cmd = baseline
+            .get("command")
+            .and_then(Value::as_str)
+            .expect("command");
+        assert!(baseline_cmd.starts_with("/usr/bin/env -i "));
+        assert!(!baseline_cmd.contains("(deny network*)"), "{baseline_cmd}");
+        assert!(
+            baseline_cmd.contains(&format!("(subpath \"{}\")", target.display())),
+            "absent override must keep the secret denied: {baseline_cmd}"
+        );
     }
 }

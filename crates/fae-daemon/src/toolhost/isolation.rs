@@ -115,6 +115,105 @@ impl ToolOrigin {
 #[cfg(target_os = "macos")]
 pub(crate) const SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
 
+/// The daemon-authoritative security tier of a canonical path (L3 of the
+/// security-override design). Precedence, strictest first:
+/// **Fae-Integrity > Secrets > General**. The daemon RE-DERIVES this from the
+/// canonical target and IGNORES the advisory `tier` a Swift override carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityTier {
+    /// Fae's own trust anchors — NEVER overridable (hard-reject): the Git Vault,
+    /// `speakers.json`, `directive.md`, the installed `models.lock`, and the
+    /// grant-store file.
+    FaeIntegrity,
+    /// Owner-owned credential files/dirs (`~/.secrets`, `~/.ssh`, …). Overridable
+    /// only `once`/`expiring`; a Secrets unlock also loses network + non-workspace
+    /// writes for that one call (L5).
+    Secrets,
+    /// Any other path. A General unlock keeps normal network/writes.
+    General,
+}
+
+/// Home-relative Fae-Integrity ("never") members. Both the `fae` and `fae-dev`
+/// data dirs are covered so the dev profile is protected identically. `models.lock`
+/// and `grant-store.json` are ADDED here (they were missing from the daemon's
+/// protected set before the security-override work).
+fn fae_integrity_relative() -> &'static [&'static str] {
+    &[
+        ".fae-vault",
+        ".fae-vault-dev",
+        "Library/Application Support/fae/speakers.json",
+        "Library/Application Support/fae/directive.md",
+        "Library/Application Support/fae/models.lock",
+        "Library/Application Support/fae/grant-store.json",
+        "Library/Application Support/fae-dev/speakers.json",
+        "Library/Application Support/fae-dev/directive.md",
+        "Library/Application Support/fae-dev/models.lock",
+        "Library/Application Support/fae-dev/grant-store.json",
+    ]
+}
+
+/// Home-relative Secrets members — the credential set the seatbelt already denies.
+fn secrets_relative() -> &'static [&'static str] {
+    &[
+        ".secrets",
+        ".env",
+        ".envrc",
+        ".saorsa-keys",
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".kube",
+        ".docker/config.json",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+    ]
+}
+
+/// Classify an already-`realpath`-canonicalized path into its daemon-authoritative
+/// [`SecurityTier`]. Fae-Integrity wins over Secrets wins over General (strictest
+/// match). A canonical path that equals OR is under a member is that member's tier
+/// (so a file under `~/.ssh` classifies Secrets; a file under `~/.fae-vault`
+/// classifies Fae-Integrity). The advisory tier a Swift override supplies is never
+/// consulted — this is the single source of truth (L3).
+#[must_use]
+pub fn classify_canonical_tier(canonical: &Path, home: &str) -> SecurityTier {
+    let home = home.trim_end_matches('/');
+    let matches = |rels: &[&str]| -> bool {
+        rels.iter().any(|r| {
+            let full = format!("{home}/{r}");
+            let cf = canonical_path(&full);
+            let member = Path::new(&cf);
+            canonical == member || canonical.starts_with(member)
+        })
+    };
+    if matches(fae_integrity_relative()) {
+        return SecurityTier::FaeIntegrity;
+    }
+    if matches(secrets_relative()) {
+        return SecurityTier::Secrets;
+    }
+    SecurityTier::General
+}
+
+/// A validated, single-call read-deny relaxation (the daemon-minted result of an
+/// approved `security_override`). Only ever constructed AFTER every L-rule gate
+/// passed in [`ToolHost`](crate::toolhost::ToolHost); the profile builder consumes
+/// it to relax EXACTLY one canonical file leaf (never a directory prefix), and —
+/// for a Secrets-tier unlock — to also deny network + non-workspace writes (L5).
+#[derive(Debug, Clone)]
+pub struct HostBashRelax {
+    /// The canonical (symlink/`..`-resolved) FILE whose read-deny is lifted.
+    pub canonical_target: PathBuf,
+    /// Secrets-tier ⇒ the profile also denies `network*` and non-workspace/tmp
+    /// writes for this one call. General-tier ⇒ `false` (normal network/writes).
+    pub deny_network: bool,
+    /// The canonical workspace root (the only dir writes stay allowed under when
+    /// `deny_network` is set).
+    pub workspace_root: PathBuf,
+}
+
 /// Is an OS sandbox backend available on this host?
 ///
 /// Drives the fail-closed decision: when a call *requires* [`Jailed`] but this
@@ -371,7 +470,11 @@ fn sh_single_quote(s: &str) -> String {
 /// A `&'static str` deny-reason label when isolation cannot be enforced (macOS
 /// only); the caller maps it to a fail-closed `Denied`.
 #[cfg(target_os = "macos")]
-pub fn wrap_host_bash_command(command: &str, home: Option<&str>) -> Result<String, &'static str> {
+pub fn wrap_host_bash_command(
+    command: &str,
+    home: Option<&str>,
+    relax: Option<&HostBashRelax>,
+) -> Result<String, &'static str> {
     // Fail closed: without a home dir the protected set is empty — refuse rather
     // than run a bash that could read `~/.secrets` unguarded.
     let Some(home) = home.filter(|h| !h.is_empty()) else {
@@ -381,7 +484,10 @@ pub fn wrap_host_bash_command(command: &str, home: Option<&str>) -> Result<Strin
     if !Path::new(SANDBOX_EXEC_PATH).is_file() {
         return Err("host_bash_sandbox_unavailable");
     }
-    let profile = read_deny_seatbelt_profile(home);
+    // `relax` is `None` for every un-overridden call ⇒ the profile is byte-identical
+    // to today's full read-deny (Invariant F). A validated relaxation lifts EXACTLY
+    // one canonical file leaf (+ Secrets-tier network/write denials).
+    let profile = read_deny_seatbelt_profile_relaxed(home, relax);
     Ok(format!(
         "{} {} -p {} /bin/sh -c {}",
         scrubbed_env_i_prefix(),
@@ -394,7 +500,14 @@ pub fn wrap_host_bash_command(command: &str, home: Option<&str>) -> Result<Strin
 /// Linux variant — env scrub only (see the doc on the macOS variant for why the
 /// read-deny is a documented Linux residual).
 #[cfg(target_os = "linux")]
-pub fn wrap_host_bash_command(command: &str, _home: Option<&str>) -> Result<String, &'static str> {
+pub fn wrap_host_bash_command(
+    command: &str,
+    _home: Option<&str>,
+    // The read-deny relaxation is a macOS-seatbelt concept; Linux has no kernel
+    // read-deny to relax (documented residual), so an approved override simply has
+    // no read-deny profile to modify here. The daemon still validates + audits it.
+    _relax: Option<&HostBashRelax>,
+) -> Result<String, &'static str> {
     // C1 (env exfil) is closed by `env -i <allowlist>`. C2 (protected reads) is
     // NOT enforced here: Landlock is grant-based and cannot express a deny-read
     // for an otherwise-unrestricted shell. The substring `DamageControlPolicy`
@@ -412,7 +525,11 @@ pub fn wrap_host_bash_command(command: &str, _home: Option<&str>) -> Result<Stri
 
 /// Unsupported platform — fail closed (parity with the jailed `exec` fallback).
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn wrap_host_bash_command(_command: &str, _home: Option<&str>) -> Result<String, &'static str> {
+pub fn wrap_host_bash_command(
+    _command: &str,
+    _home: Option<&str>,
+    _relax: Option<&HostBashRelax>,
+) -> Result<String, &'static str> {
     Err("host_bash_unsupported_platform")
 }
 
@@ -422,32 +539,16 @@ pub fn wrap_host_bash_command(_command: &str, _home: Option<&str>) -> Result<Str
 /// identity/backup), kept in sync by hand from the documented protected-path set.
 #[cfg(target_os = "macos")]
 fn protected_read_paths(home: &str) -> Vec<String> {
-    const RELATIVE: &[&str] = &[
-        // Secrets — always zero-access.
-        ".secrets",
-        ".env",
-        ".envrc",
-        ".saorsa-keys",
-        // Cryptographic keys + cloud / network / package credentials.
-        ".ssh",
-        ".gnupg",
-        ".aws",
-        ".azure",
-        ".kube",
-        ".docker/config.json",
-        ".netrc",
-        ".npmrc",
-        ".pypirc",
-        // Fae identity + backup.
-        ".fae-vault",
-        ".fae-vault-dev",
-        "Library/Application Support/fae/speakers.json",
-        "Library/Application Support/fae/directive.md",
-        "Library/Application Support/fae-dev/speakers.json",
-        "Library/Application Support/fae-dev/directive.md",
-    ];
+    // The full read-deny set = Secrets ∪ Fae-Integrity (the two authoritative tier
+    // members). Composed from the SAME lists the tier classifier consults so the
+    // deny profile and the tier table can never drift. `models.lock` + the
+    // grant-store file are now part of the Fae-Integrity list (added there).
     let home = home.trim_end_matches('/');
-    RELATIVE.iter().map(|r| format!("{home}/{r}")).collect()
+    secrets_relative()
+        .iter()
+        .chain(fae_integrity_relative().iter())
+        .map(|r| format!("{home}/{r}"))
+        .collect()
 }
 
 /// Build a seatbelt profile that allows bash to run normally — read project
@@ -459,12 +560,40 @@ fn protected_read_paths(home: &str) -> Vec<String> {
 /// ancestor (`/var` → `/private/var`) cannot slip a protected read past the deny.
 #[cfg(target_os = "macos")]
 fn read_deny_seatbelt_profile(home: &str) -> String {
+    read_deny_seatbelt_profile_relaxed(home, None)
+}
+
+/// The read-deny profile, optionally relaxing EXACTLY one canonical file leaf for
+/// an approved `security_override`.
+///
+/// * `relax == None` ⇒ byte-identical to the un-overridden full-deny profile
+///   (Invariant F — this is the load-bearing "no override = today's behavior").
+/// * `relax == Some(r)` ⇒ every protected entry whose canonical form equals
+///   `r.canonical_target` is OMITTED from the read-deny set (file-granular — a
+///   directory-secret like `~/.ssh` whose canonical form does NOT equal a named
+///   sub-file stays fully denied, so a symlink→`~/.ssh/id_rsa` stays blocked). When
+///   `r.deny_network` (Secrets tier, L5) the profile ALSO denies `network*` and
+///   confines writes to the workspace root + temp dirs, so an approved secret read
+///   cannot be piped to the network (or spilled to a non-workspace file) in the
+///   same command.
+#[cfg(target_os = "macos")]
+fn read_deny_seatbelt_profile_relaxed(home: &str, relax: Option<&HostBashRelax>) -> String {
     use std::collections::HashSet;
     let raw = protected_read_paths(home);
+    let relax_target: Option<&Path> = relax.map(|r| r.canonical_target.as_path());
     let mut seen: HashSet<String> = HashSet::new();
     let mut paths: Vec<String> = Vec::new();
     for p in &raw {
-        for candidate in [p.clone(), canonical_path(p)] {
+        let canon = canonical_path(p);
+        // File-granular relaxation: drop BOTH spellings of a protected entry iff
+        // its literal OR canonical form is exactly the relaxed target. Never a
+        // directory prefix — a sub-file of a still-listed directory stays denied.
+        if let Some(target) = relax_target {
+            if Path::new(p) == target || Path::new(&canon) == target {
+                continue;
+            }
+        }
+        for candidate in [p.clone(), canon] {
             if seen.insert(candidate.clone()) {
                 paths.push(candidate);
             }
@@ -475,11 +604,30 @@ fn read_deny_seatbelt_profile(home: &str) -> String {
         .map(|p| format!("    (subpath {})", seatbelt_quote(p)))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "(version 1)\n\
-         (allow default)\n\
-         (deny file-read*\n{denials}\n)\n"
-    )
+
+    let mut profile = String::from("(version 1)\n(allow default)\n");
+    // L5: a Secrets-tier unlock also cuts network + non-workspace writes for THIS
+    // call. `(allow default)` opened both; last-match-wins deny/allow closes them
+    // back down to workspace + temp writes and no network.
+    if let Some(r) = relax.filter(|r| r.deny_network) {
+        profile.push_str("(deny network*)\n");
+        let mut write_subpaths: Vec<String> = vec![r.workspace_root.to_string_lossy().into_owned()];
+        if let Ok(tmp) = std::fs::canonicalize(std::env::temp_dir()) {
+            write_subpaths.push(tmp.to_string_lossy().into_owned());
+        }
+        for p in ["/private/tmp", "/private/var/folders", "/dev"] {
+            write_subpaths.push(p.to_string());
+        }
+        let writes = write_subpaths
+            .iter()
+            .map(|p| format!("    (subpath {})", seatbelt_quote(p)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        profile.push_str("(deny file-write* (subpath \"/\"))\n");
+        profile.push_str(&format!("(allow file-write*\n{writes}\n)\n"));
+    }
+    profile.push_str(&format!("(deny file-read*\n{denials}\n)\n"));
+    profile
 }
 
 /// Resolve `path` to the canonical (fully symlink-resolved) form the kernel
@@ -488,7 +636,9 @@ fn read_deny_seatbelt_profile(home: &str) -> String {
 /// handles a protected path that does not yet exist (e.g. no `~/.aws`) and
 /// firmlinked prefixes (`/var` → `/private/var`). Returns the input unchanged if
 /// nothing resolves (fail safe — the raw form is emitted alongside).
-#[cfg(target_os = "macos")]
+///
+/// Cross-platform: the macOS read-deny profile uses it, and the (all-platform)
+/// [`classify_canonical_tier`] uses it to canonicalize each tier member.
 fn canonical_path(path: &str) -> String {
     let mut existing = PathBuf::from(path);
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
@@ -852,17 +1002,176 @@ mod tests {
         );
     }
 
+    // -- security-override: daemon tier classifier (L3) --
+
+    #[test]
+    fn tier_classifier_precedence_and_membership() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = std::fs::canonicalize(dir.path()).expect("canon home");
+        let home_str = home.to_string_lossy().into_owned();
+        let plant = |rel: &str| -> PathBuf {
+            let p = home.join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir");
+            }
+            std::fs::write(&p, b"x").expect("write");
+            std::fs::canonicalize(&p).expect("canon target")
+        };
+        // Secrets: a file UNDER ~/.ssh (the member is a directory) classifies Secrets.
+        let ssh_key = plant(".ssh/id_rsa");
+        assert_eq!(
+            classify_canonical_tier(&ssh_key, &home_str),
+            SecurityTier::Secrets
+        );
+        // Secrets: the ~/.secrets file itself.
+        let secrets = plant(".secrets");
+        assert_eq!(
+            classify_canonical_tier(&secrets, &home_str),
+            SecurityTier::Secrets
+        );
+        // Fae-Integrity: models.lock + grant-store (newly ADDED to the never set).
+        let models_lock = plant("Library/Application Support/fae/models.lock");
+        assert_eq!(
+            classify_canonical_tier(&models_lock, &home_str),
+            SecurityTier::FaeIntegrity
+        );
+        let grant_store = plant("Library/Application Support/fae/grant-store.json");
+        assert_eq!(
+            classify_canonical_tier(&grant_store, &home_str),
+            SecurityTier::FaeIntegrity
+        );
+        // Fae-Integrity: a file UNDER ~/.fae-vault — strictest tier wins.
+        let vault_file = plant(".fae-vault/objects/x");
+        assert_eq!(
+            classify_canonical_tier(&vault_file, &home_str),
+            SecurityTier::FaeIntegrity
+        );
+        // General: any other file.
+        let general = plant("project/notes.txt");
+        assert_eq!(
+            classify_canonical_tier(&general, &home_str),
+            SecurityTier::General
+        );
+    }
+
+    // -- security-override: relaxed read-deny profile (L4/L5) --
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn absent_override_profile_byte_identical_to_baseline() {
+        // Invariant F: no override ⇒ the profile is byte-for-byte the full-deny
+        // baseline (the override mechanism adds ZERO relaxation when absent).
+        let home = "/Users/tester";
+        let baseline = read_deny_seatbelt_profile(home);
+        let none = read_deny_seatbelt_profile_relaxed(home, None);
+        assert_eq!(
+            baseline, none,
+            "absent override must equal baseline verbatim"
+        );
+        // The wrapped command embeds exactly that baseline profile.
+        let wrapped = wrap_host_bash_command("echo hi", Some(home), None).expect("wrap");
+        assert!(
+            wrapped.contains(&sh_single_quote(&baseline)),
+            "wrapped command must embed the baseline profile verbatim: {wrapped}"
+        );
+        // No relaxation-only constructs leak into the un-overridden profile.
+        assert!(!none.contains("(deny network*)"), "{none}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn secrets_unlock_denies_network_and_relaxes_only_target() {
+        let home = "/Users/tester";
+        let relax = HostBashRelax {
+            canonical_target: PathBuf::from("/Users/tester/.secrets"),
+            deny_network: true,
+            workspace_root: PathBuf::from("/tmp/ws-root"),
+        };
+        let profile = read_deny_seatbelt_profile_relaxed(home, Some(&relax));
+        // L5: network denied + writes confined to workspace + temp.
+        assert!(profile.contains("(deny network*)"), "{profile}");
+        assert!(
+            profile.contains("(deny file-write* (subpath \"/\"))"),
+            "{profile}"
+        );
+        assert!(profile.contains("(subpath \"/tmp/ws-root\")"), "{profile}");
+        // The named secret is relaxed (removed from the read-deny set)…
+        assert!(
+            !profile.contains("(subpath \"/Users/tester/.secrets\")"),
+            "target secret must be relaxed: {profile}"
+        );
+        // …but every OTHER protected path stays denied.
+        assert!(
+            profile.contains("(subpath \"/Users/tester/.ssh\")"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains(
+                "(subpath \"/Users/tester/Library/Application Support/fae/models.lock\")"
+            ),
+            "{profile}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn general_unlock_keeps_network_and_denies_protected() {
+        let home = "/Users/tester";
+        let relax = HostBashRelax {
+            canonical_target: PathBuf::from("/Users/tester/project/notes.txt"),
+            deny_network: false,
+            workspace_root: PathBuf::from("/tmp/ws-root"),
+        };
+        let profile = read_deny_seatbelt_profile_relaxed(home, Some(&relax));
+        // General: network stays allowed (no deny), no write clampdown.
+        assert!(!profile.contains("(deny network*)"), "{profile}");
+        assert!(
+            !profile.contains("(deny file-write* (subpath \"/\"))"),
+            "{profile}"
+        );
+        // Protected set still fully denied (the target was never in it).
+        assert!(
+            profile.contains("(subpath \"/Users/tester/.secrets\")"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains("(subpath \"/Users/tester/.ssh\")"),
+            "{profile}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn relax_is_file_granular_dir_secret_child_stays_denied() {
+        // A relaxation naming a file UNDER a directory-secret (~/.ssh/id_rsa) must
+        // NOT remove the ~/.ssh subpath deny — the child stays blocked (the removal
+        // is exact-leaf only, never a directory prefix). This is the canonical-escape
+        // defense: a workspace symlink→~/.ssh/id_rsa canonicalizes under ~/.ssh and
+        // stays denied.
+        let home = "/Users/tester";
+        let relax = HostBashRelax {
+            canonical_target: PathBuf::from("/Users/tester/.ssh/id_rsa"),
+            deny_network: true,
+            workspace_root: PathBuf::from("/tmp/ws-root"),
+        };
+        let profile = read_deny_seatbelt_profile_relaxed(home, Some(&relax));
+        assert!(
+            profile.contains("(subpath \"/Users/tester/.ssh\")"),
+            "directory-secret must stay denied — relaxation is file-granular: {profile}"
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn wrap_host_bash_fails_closed_without_home() {
         // No home ⇒ the protected set cannot be derived ⇒ refuse (never run an
         // unguarded bash that could read `~/.secrets`).
         assert_eq!(
-            wrap_host_bash_command("echo hi", None),
+            wrap_host_bash_command("echo hi", None, None),
             Err("host_bash_home_unresolved")
         );
         assert_eq!(
-            wrap_host_bash_command("echo hi", Some("")),
+            wrap_host_bash_command("echo hi", Some(""), None),
             Err("host_bash_home_unresolved")
         );
     }
@@ -872,8 +1181,8 @@ mod tests {
     fn wrap_host_bash_wraps_env_scrub_and_sandbox_and_quotes() {
         // With a home + sandbox-exec present (stock macOS), the wrapper scrubs the
         // env, invokes the seatbelt driver, and single-quotes the original command.
-        let wrapped =
-            wrap_host_bash_command("cat \"$HOME/.secrets\"", Some("/Users/tester")).expect("wrap");
+        let wrapped = wrap_host_bash_command("cat \"$HOME/.secrets\"", Some("/Users/tester"), None)
+            .expect("wrap");
         assert!(
             wrapped.starts_with("/usr/bin/env -i "),
             "must clear env: {wrapped}"
