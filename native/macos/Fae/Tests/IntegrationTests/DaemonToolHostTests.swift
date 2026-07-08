@@ -4558,4 +4558,99 @@ extension DaemonToolHostTests {
         XCTAssertFalse(outcome.result.output.contains("zero-access"),
                        "DamageControl must not re-block the ONE authorized target")
     }
+    /// Test-only stand-in for an arbitrary named tool: executing it leaves a
+    /// visible marker, so a gate-denied call is distinguishable from a run one.
+    private struct EgressStubTool: Tool {
+        let name: String
+        let description = "test-only egress stub"
+        let parametersSchema = "{}"
+        let requiresApproval = false
+        let riskLevel: ToolRiskLevel = .low
+        let example = ""
+        func execute(input: [String: Any]) async throws -> ToolResult {
+            .success("stub-executed:\(name)")
+        }
+    }
+
+    /// FLAW-1 extension: after an approved Secrets read, the DEFAULT-DENY egress
+    /// gate blocks every tool not on `localSafeToolsAfterSecretRead` (including
+    /// a made-up future tool), allows the local-safe set, and re-allows egress
+    /// after the turn boundary. `bash` stays allowed (network-confined — proven
+    /// by testApprovedSecretsOverrideTaintsSubsequentBashSameTurnAndResets).
+    func testSecretTaintEgressGateDefaultDeniesNonLocalTools() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-so4-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let deniedNames = [
+            "fetch_url", "web_search", "mail", "delegate_agent", "run_skill",
+            "type_text",
+            // A tool that exists in NO allowlist: default-deny must catch it.
+            "future_egress_tool",
+        ]
+        let allowedNames = ["session_search", "scheduler_list", "roleplay"]
+        var tools: [any Tool] = [BashTool()]
+        for n in deniedNames + allowedNames { tools.append(EgressStubTool(name: n)) }
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: tools),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setSecurityOverridePresenter { _, _ in .allow(.once) }
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
+            .failClosed("no daemon in this test")
+        }
+
+        // Taint the turn: approve a Secrets read whose resubmit is re-blocked
+        // (no daemon contact), exactly as in the taint test above.
+        _ = await executor.execute(
+            ToolCall(name: "bash",
+                     arguments: ["command": "cat \(fakeSecretsTilde()) && rm -rf ~/Documents"]),
+            context: fullContext(turnID: "turn-E"), callbacks: .noop)
+
+        // Every egress-capable (or unknown) tool is DENIED in the tainted turn.
+        for name in deniedNames {
+            let out = await executor.execute(
+                ToolCall(name: name, arguments: [:]),
+                context: fullContext(turnID: "turn-E"), callbacks: .noop)
+            XCTAssertTrue(out.result.isError, "\(name) must be denied in a tainted turn")
+            XCTAssertTrue(out.result.output.contains("off this machine"),
+                          "\(name) must surface the security message: \(out.result.output)")
+            XCTAssertFalse(out.result.output.contains("stub-executed"),
+                           "\(name) must never execute in a tainted turn")
+            XCTAssertTrue(out.damageControlIntervened)
+        }
+
+        // The local-safe allowlist still executes.
+        for name in allowedNames {
+            let out = await executor.execute(
+                ToolCall(name: name, arguments: [:]),
+                context: fullContext(turnID: "turn-E"), callbacks: .noop)
+            XCTAssertEqual(out.result.output, "stub-executed:\(name)",
+                           "\(name) is local-safe and must run in a tainted turn")
+        }
+        // The routed file tools are on the allowlist too (they run through the
+        // daemon-confined routing branch, not this stub registry).
+        for name in ["read", "write", "edit"] {
+            XCTAssertTrue(ToolExecutor.localSafeToolsAfterSecretRead.contains(name))
+        }
+        XCTAssertFalse(ToolExecutor.localSafeToolsAfterSecretRead.contains("bash"),
+                       "bash is allowed via network confinement, not the allowlist")
+
+        // Turn boundary: egress is re-allowed on the next turn.
+        await executor.beginTurn()
+        let nextTurn = await executor.execute(
+            ToolCall(name: "fetch_url", arguments: [:]),
+            context: fullContext(turnID: "turn-F"), callbacks: .noop)
+        XCTAssertEqual(nextTurn.result.output, "stub-executed:fetch_url",
+                       "a new turn clears the taint and re-allows egress")
+    }
 }
