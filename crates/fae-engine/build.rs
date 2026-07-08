@@ -35,7 +35,7 @@ fn add_libstdcxx_search_path() {
     /// absolute, existing file (gcc echoes the bare name back when absent).
     fn gcc_file(name: &str) -> Option<PathBuf> {
         let output = Command::new("gcc")
-            .args(["-print-file-name", name])
+            .arg(format!("-print-file-name={name}"))
             .output()
             .ok()?;
         if !output.status.success() {
