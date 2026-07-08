@@ -195,7 +195,8 @@ actor DaemonToolHostSession {
         tool: String,
         input: [String: Any],
         origin: DaemonToolOrigin = .ownerInteractive,
-        securityOverride: DaemonSecurityOverride? = nil
+        securityOverride: DaemonSecurityOverride? = nil,
+        networkDenied: Bool = false
     ) async throws -> [String: Any] {
         let conn = try await ensureConnected()
         guard approvedRootPath != nil else {
@@ -217,7 +218,8 @@ actor DaemonToolHostSession {
                 input: input,
                 origin: origin,
                 securityOverride: securityOverride,
-                requestID: requestID))
+                requestID: requestID,
+                networkDenied: networkDenied))
         let raw = try await conn.roundTrip(
             frame: frame,
             expectRequestID: requestID,
@@ -243,13 +245,22 @@ actor DaemonToolHostSession {
         input: [String: Any],
         origin: DaemonToolOrigin,
         securityOverride: DaemonSecurityOverride?,
-        requestID: String
+        requestID: String,
+        networkDenied: Bool = false
     ) -> [String: Any] {
         var payload: [String: Any] = [
             "tool": tool,
             "input": input,
             "origin": origin.rawValue,
         ]
+        // FLAW-1 turn taint: a bash that follows an approved Secrets-tier read in
+        // the SAME turn carries top-level `network_denied: true`, so the daemon
+        // builds a network-denied + workspace-write-only seatbelt profile for it.
+        // Emitted ONLY when true — the absent-key payload stays byte-identical to
+        // today's wire shape (Invariant F, daemon `#[serde(default)]` ⇒ false).
+        if networkDenied {
+            payload["network_denied"] = true
+        }
         if let ov = securityOverride {
             payload["security_override"] = [
                 "call_id": requestID,
@@ -605,7 +616,8 @@ actor DaemonToolHostSession {
     func executeSerializedRoutedBash(
         command: String,
         origin: DaemonToolOrigin = .ownerInteractive,
-        securityOverride: DaemonSecurityOverride? = nil
+        securityOverride: DaemonSecurityOverride? = nil,
+        networkDenied: Bool = false
     ) async -> DaemonToolRouting.BashExecutionOutcome {
         do {
             try await acquireToolHostOperationLock()
@@ -640,7 +652,8 @@ actor DaemonToolHostSession {
                 // → .failClosed below. (fluers-runtime `tool.rs` `BashTool`.)
                 let result = try await execute(
                     tool: "bash", input: ["command": command],
-                    origin: origin, securityOverride: securityOverride)
+                    origin: origin, securityOverride: securityOverride,
+                    networkDenied: networkDenied)
                 return .routed(result: result, preStateContent: preStateContent, absoluteTargetPath: absoluteTargetPath)
             } catch DaemonAgentClientError.daemonUnavailable {
                 // Daemon dropped at execute (root was approved). FAIL CLOSED —

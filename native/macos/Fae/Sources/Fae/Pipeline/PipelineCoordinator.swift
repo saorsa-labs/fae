@@ -2368,6 +2368,10 @@ actor PipelineCoordinator {
     ) async {
         currentTurnID = UUID().uuidString
         ttsState.resetForNewTurn()
+        // Security-override FLAW-1: the turn boundary. Clears the secret-read
+        // taint so a NEW turn's bash is not network-denied by the previous turn's
+        // authorized Secrets read (within a turn the taint holds).
+        await toolExecutor.beginTurn()
         // Per-turn reset for the deterministic secure-input pre-detector, and a
         // snapshot of the Keychain-store count so the anti-hallucination backstop
         // can tell a real save from a hallucinated one.

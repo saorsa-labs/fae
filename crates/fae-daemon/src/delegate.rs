@@ -656,8 +656,10 @@ pub async fn run_delegation(
                 cancel: deps.cancel.clone(),
                 origin: ToolOrigin::Delegated,
                 // The native delegation loop is model-driven with no human click, so
-                // it never mints a human-gated override (Invariant H).
+                // it never mints a human-gated override (Invariant H). Turn taint is
+                // a Swift-turn concept; delegated calls are jailed anyway.
                 security_override: None,
+                network_denied: false,
             };
             match host
                 .execute_governed(tool_req, deps.confirmation.as_ref())
