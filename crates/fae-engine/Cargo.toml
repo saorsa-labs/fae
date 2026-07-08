@@ -23,6 +23,16 @@ reqwest = { workspace = true }
 # portable; tokio is needed for the oneshot reply channel.
 voice-g2p = "=0.2.1"
 tokio = { workspace = true }
+# Parakeet ASR (ADR: scout-adr.md). NVIDIA parakeet-tdt-0.6b-v2 Int8 ONNX via
+# the sherpa-onnx Rust bindings (Apache-2.0). Turnkey static linking: the build
+# script auto-downloads prebuilt onnxruntime + C++ core archives for macOS
+# arm64/x86_64 and Linux x86_64/aarch64, so `sherpa-onnx = "1.13.4"` just works
+# with no SHERPA_ONNX_LIB_DIR. The pinned crate version is the runtime-integrity
+# boundary for the *native* libs; `models.lock` covers the MODEL artifacts. On
+# Apple Silicon, onnxruntime's CoreML EP falls back to CPU for Parakeet's
+# FastConformer-transducer ops (sherpa-onnx #152) — Parakeet runs CPU-bound,
+# which is acceptable for short-utterance fallback ASR.
+sherpa-onnx = "1.13.4"
 
 # mistral.rs is a hard dependency (owner decision — not feature-gated). Accel is
 # target-conditional: Metal on Apple Silicon, plain candle (CPU/CUDA) elsewhere.

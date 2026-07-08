@@ -33,7 +33,7 @@ use fae_control_plane::{
 };
 use fae_engine::{
     kill_all_registered_sidecars, ChatEvent, LazyLlamaServerAdapter, LlamaModelSource,
-    LlamaServerAdapter, LlamaServerConfig, MockAdapter, MockTtsAdapter, ModelsLock,
+    LlamaServerAdapter, LlamaServerConfig, Loader, MockAdapter, MockTtsAdapter, ModelsLock,
     ProviderAdapter, RemoteModelArtifact, TtsAdapter,
 };
 
@@ -325,7 +325,14 @@ async fn main() -> DaemonResult<()> {
     let asr_fallback = build_asr_fallback_engine();
     if let Some(asr) = &asr_fallback {
         let info = asr.describe();
-        println!("asr     : {} ({}) — lazy", info.backend, info.model_id);
+        // Parakeet loads eagerly (fail-closed fallback needs it); the llama.cpp
+        // Qwen3-ASR lane is lazy.
+        let state = if info.backend == "sherpa-onnx-parakeet" {
+            "loaded"
+        } else {
+            "lazy"
+        };
+        println!("asr     : {} ({}) — {state}", info.backend, info.model_id);
     } else {
         println!("asr     : disabled");
     }
@@ -967,7 +974,7 @@ fn verify_locked_file(
         .iter()
         .find(|artifact| artifact.id == id)
         .ok_or_else(|| format!("missing required artifact {id}"))?;
-    if artifact.role != expected_role || artifact.loader != "piper-sidecar" {
+    if artifact.role != expected_role || artifact.loader != Loader::PiperSidecar {
         return Err(format!(
             "artifact {id} must be role={expected_role} loader=piper-sidecar (got role={}, loader={})",
             artifact.role, artifact.loader
@@ -1046,7 +1053,7 @@ fn verify_locked_kokoro_file(lock: &ModelsLock, id: &str, path: &Path) -> Result
         .iter()
         .find(|artifact| artifact.id == id)
         .ok_or_else(|| format!("missing required artifact {id}"))?;
-    if artifact.role != "tts_model" || artifact.loader != "voice-tts" {
+    if artifact.role != "tts_model" || artifact.loader != Loader::VoiceTts {
         return Err(format!(
             "artifact {id} must be role=tts_model loader=voice-tts (got role={}, loader={})",
             artifact.role, artifact.loader
@@ -1096,6 +1103,17 @@ const QWEN3_ASR_REPO: &str = "ggml-org/Qwen3-ASR-1.7B-GGUF";
 const QWEN3_ASR_REVISION: &str = "36a678687ba7d07a74ca70ccb0e36902e005fb80";
 const QWEN3_ASR_MODEL_ARTIFACT_ID: &str = "ggml-org-qwen3-asr-1-7b-q8-0-gguf";
 const QWEN3_ASR_MMPROJ_ARTIFACT_ID: &str = "ggml-org-qwen3-asr-1-7b-mmproj-q8-0-gguf";
+// Parakeet ASR (sherpa-onnx). NVIDIA parakeet-tdt-0.6b-v2 Int8 ONNX export,
+// pinned to the csukuangfj/sherpa-onnx Hugging Face repo. The four artifacts
+// (encoder/decoder/joiner Int8 ONNX + tokens) live under `models/parakeet` and
+// are fail-closed verified (loader `"sherpa-onnx"`, size + SHA-256) by
+// `locked_parakeet_path`. License CC-BY-4.0 (see THIRD_PARTY_LICENSES.md).
+const PARAKEET_ASR_REPO: &str = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+const PARAKEET_ASR_REVISION: &str = "1ab9323565ddb038682214b292f588070a538ce2";
+const PARAKEET_ENCODER_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-encoder";
+const PARAKEET_DECODER_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-decoder";
+const PARAKEET_JOINER_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-joiner";
+const PARAKEET_TOKENS_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-tokens";
 const LLAMACPP_RUNTIME_RELEASE: &str = "b9692";
 /// `models.lock` artifact id for the bundled `llama-server` binary, per target.
 /// Each platform ships its own prebuilt from the same llama.cpp release, so the
@@ -1201,15 +1219,47 @@ fn build_mock_engine() -> Arc<dyn ProviderAdapter> {
     Arc::new(MockAdapter::scripted("mock-delegate", scripts))
 }
 
-/// Build the optional daemon-owned Qwen3-ASR sidecar. It is lazy: the ~2.5 GB
-/// Qwen3-ASR artifacts are downloaded and verified only if a fragile audio turn
-/// asks for `audio.transcribe_fallback`.
+/// Select + build the daemon-owned dedicated ASR engine. Dispatches on the
+/// `asr.engine` setting (`"parakeet"` via sherpa-onnx, or `"gemma"` via the
+/// Qwen3-ASR llama.cpp sidecar — the default). Gated by `FAE_AUDIO_FALLBACK=0`.
+///
+/// `parakeet` constructs eagerly (the ONNX recognizer is loaded at build time)
+/// so that an unloadable model is detected HERE and triggers a LOUD fallback to
+/// the Gemma (Qwen3-ASR) pass-1 path — never a silent skip, never a mid-turn
+/// crash. The eager load is the price of the fail-closed-fallback guarantee.
 fn build_asr_fallback_engine() -> Option<Arc<dyn ProviderAdapter>> {
     if std::env::var("FAE_AUDIO_FALLBACK")
         .is_ok_and(|value| value == "0" || value.eq_ignore_ascii_case("false"))
     {
         return None;
     }
+    match asr_engine_choice() {
+        AsrEngine::Parakeet => match build_parakeet_asr_engine() {
+            Some(adapter) => {
+                eprintln!(
+                    "fae-daemon: ASR engine = parakeet (sherpa-onnx, nvidia/parakeet-tdt-0.6b-v2 int8)"
+                );
+                Some(adapter)
+            }
+            None => {
+                eprintln!(
+                    "fae-daemon: ASR engine = parakeet requested, but the Parakeet model is \
+                     missing/mismatched/unloadable — FALLING BACK to the Gemma (Qwen3-ASR) pass-1 \
+                     path. Set asr.engine = \"gemma\" (or FAE_ASR_ENGINE=gemma) to silence this, or \
+                     install the four Parakeet artifacts under {} (see THIRD_PARTY_LICENSES.md).",
+                    parakeet_models_dir().display()
+                );
+                build_qwen3_asr_engine()
+            }
+        },
+        AsrEngine::Gemma => build_qwen3_asr_engine(),
+    }
+}
+
+/// Build the Gemma-class ASR engine — the Qwen3-ASR llama.cpp sidecar. Lazy: the
+/// ~2.5 GB artifacts are downloaded + verified only if a fragile audio turn asks
+/// for `audio.transcribe_fallback`.
+fn build_qwen3_asr_engine() -> Option<Arc<dyn ProviderAdapter>> {
     let binary = match resolve_llama_server_binary() {
         Ok(path) => path,
         Err(detail) => {
@@ -1267,6 +1317,153 @@ fn build_asr_fallback_engine() -> Option<Arc<dyn ProviderAdapter>> {
     )))
 }
 
+/// Build the Parakeet ASR engine (sherpa-onnx, nvidia/parakeet-tdt-0.6b-v2 int8
+/// ONNX). All four artifacts are fail-closed verified against `models.lock`
+/// (loader `"sherpa-onnx"`, size + SHA-256) before the recognizer is created.
+/// Returns `None` on any failure so the caller can fall back to Gemma.
+fn build_parakeet_asr_engine() -> Option<Arc<dyn ProviderAdapter>> {
+    let models_dir = parakeet_models_dir();
+    let lock = match load_installed_models_lock() {
+        Ok(lock) => lock,
+        Err(detail) => {
+            eprintln!("fae-daemon: parakeet ASR disabled; models.lock: {detail}");
+            return None;
+        }
+    };
+    let encoder =
+        match locked_parakeet_path(&lock, PARAKEET_ENCODER_ID, "parakeet_encoder", &models_dir) {
+            Ok(path) => path,
+            Err(detail) => {
+                eprintln!("fae-daemon: parakeet ASR disabled; {detail}");
+                return None;
+            }
+        };
+    let decoder =
+        match locked_parakeet_path(&lock, PARAKEET_DECODER_ID, "parakeet_decoder", &models_dir) {
+            Ok(path) => path,
+            Err(detail) => {
+                eprintln!("fae-daemon: parakeet ASR disabled; {detail}");
+                return None;
+            }
+        };
+    let joiner =
+        match locked_parakeet_path(&lock, PARAKEET_JOINER_ID, "parakeet_joiner", &models_dir) {
+            Ok(path) => path,
+            Err(detail) => {
+                eprintln!("fae-daemon: parakeet ASR disabled; {detail}");
+                return None;
+            }
+        };
+    let tokens =
+        match locked_parakeet_path(&lock, PARAKEET_TOKENS_ID, "parakeet_tokens", &models_dir) {
+            Ok(path) => path,
+            Err(detail) => {
+                eprintln!("fae-daemon: parakeet ASR disabled; {detail}");
+                return None;
+            }
+        };
+    match fae_engine::ParakeetAsrAdapter::new(encoder, decoder, joiner, tokens) {
+        Ok(adapter) => Some(Arc::new(adapter)),
+        Err(detail) => {
+            eprintln!("fae-daemon: parakeet ASR disabled; sherpa-onnx load failed: {detail}");
+            None
+        }
+    }
+}
+
+/// Resolve + fail-closed verify one Parakeet artifact from `models.lock`. Pins
+/// loader `"sherpa-onnx"` and the Parakeet source repo/revision, then checks the
+/// on-disk file's size + SHA-256. A missing/mismatched file is a hard error
+/// (refuse to load) — the caller surfaces it as a loud Gemma fallback.
+fn locked_parakeet_path(
+    lock: &ModelsLock,
+    id: &str,
+    expected_role: &str,
+    models_dir: &Path,
+) -> Result<PathBuf, String> {
+    let artifact = lock
+        .artifacts
+        .iter()
+        .find(|candidate| candidate.id == id)
+        .ok_or_else(|| format!("missing required artifact {id}"))?;
+    if artifact.role != expected_role {
+        return Err(format!(
+            "artifact {id} role mismatch: expected {expected_role}, got {}",
+            artifact.role
+        ));
+    }
+    if artifact.loader != Loader::SherpaOnnx {
+        return Err(format!(
+            "artifact {id} loader mismatch: expected sherpa-onnx, got {}",
+            artifact.loader
+        ));
+    }
+    if artifact.source_repo != PARAKEET_ASR_REPO
+        || artifact.source_revision != PARAKEET_ASR_REVISION
+    {
+        return Err(format!(
+            "artifact {id} pins unexpected source {}@{}",
+            artifact.source_repo, artifact.source_revision
+        ));
+    }
+    artifact
+        .verify(models_dir)
+        .map_err(|error| format!("artifact {id}: {error}"))?;
+    Ok(artifact.resolved_path(models_dir))
+}
+
+/// The on-disk directory holding the four Parakeet artifacts. Overridable via
+/// `FAE_PARAKEET_MODELS_DIR`; defaults to `<data>/models/parakeet`.
+fn parakeet_models_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("FAE_PARAKEET_MODELS_DIR") {
+        return PathBuf::from(dir);
+    }
+    data_directory()
+        .map(|dir| dir.join("models/parakeet"))
+        .unwrap_or_else(|_| PathBuf::from("models/parakeet"))
+}
+
+/// The dedicated ASR engine to build, from `FAE_ASR_ENGINE` (highest precedence)
+/// or the `[asr] engine` field of the data-dir `config.toml`; default `gemma`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsrEngine {
+    Gemma,
+    Parakeet,
+}
+
+fn asr_engine_choice() -> AsrEngine {
+    let raw = std::env::var("FAE_ASR_ENGINE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(read_config_asr_engine)
+        .unwrap_or_else(|| "gemma".to_owned());
+    if raw.trim().eq_ignore_ascii_case("parakeet") {
+        AsrEngine::Parakeet
+    } else {
+        AsrEngine::Gemma
+    }
+}
+
+/// Read `[asr] engine` from the data-dir `config.toml`. `None` when the file is
+/// absent, unparseable, or has no `[asr] engine`. Unknown fields are ignored so
+/// the full Swift-era config schema parses cleanly.
+fn read_config_asr_engine() -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct AsrSection {
+        engine: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct ConfigRoot {
+        #[serde(default)]
+        asr: Option<AsrSection>,
+    }
+    let path = data_directory().ok()?.join("config.toml");
+    let text = std::fs::read_to_string(&path).ok()?;
+    let parsed: ConfigRoot = toml::from_str(&text).ok()?;
+    let engine = parsed.asr?.engine;
+    (!engine.trim().is_empty()).then_some(engine)
+}
+
 fn qwen3_asr_locked_artifacts(
 ) -> Result<(String, String, RemoteModelArtifact, RemoteModelArtifact), String> {
     let lock = load_installed_models_lock()?;
@@ -1318,7 +1515,7 @@ fn locked_remote_artifact(
             artifact.role
         ));
     }
-    if artifact.loader != "llamacpp-sidecar" {
+    if artifact.loader != Loader::LlamacppSidecar {
         return Err(format!(
             "artifact {id} loader mismatch: expected llamacpp-sidecar, got {}",
             artifact.loader
@@ -1490,7 +1687,7 @@ fn verify_unsigned_llama_server_binary(path: &Path) -> Result<(), String> {
         .iter()
         .find(|artifact| artifact.id == LLAMA_SERVER_BINARY_ARTIFACT_ID)
         .ok_or_else(|| format!("missing required artifact {LLAMA_SERVER_BINARY_ARTIFACT_ID}"))?;
-    if artifact.role != "asr_binary" || artifact.loader != "llamacpp-sidecar" {
+    if artifact.role != "asr_binary" || artifact.loader != Loader::LlamacppSidecar {
         return Err(format!(
             "artifact {LLAMA_SERVER_BINARY_ARTIFACT_ID} must be role=asr_binary loader=llamacpp-sidecar"
         ));

@@ -11,6 +11,32 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+/// The loader/runtime that consumes a `models.lock` artifact, deserialized
+/// kebab-case from the lock. Enumerating these (rather than a free-form string)
+/// means a typo in a loader value fails at PARSE time, not silently at a later
+/// string match. `Display` returns the canonical kebab-case form so diagnostics
+/// stay identical to the prior string field.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Loader {
+    Mistralrs,
+    LlamacppSidecar,
+    PiperSidecar,
+    VoiceTts,
+    SherpaOnnx,
+}
+
+impl std::fmt::Display for Loader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Loader::Mistralrs => f.write_str("mistralrs"),
+            Loader::LlamacppSidecar => f.write_str("llamacpp-sidecar"),
+            Loader::PiperSidecar => f.write_str("piper-sidecar"),
+            Loader::VoiceTts => f.write_str("voice-tts"),
+            Loader::SherpaOnnx => f.write_str("sherpa-onnx"),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
@@ -45,7 +71,7 @@ pub struct ModelsLock {
 pub struct Artifact {
     pub id: String,
     pub role: String,
-    pub loader: String,
+    pub loader: Loader,
     #[serde(default)]
     pub source_repo: String,
     #[serde(default)]
@@ -202,7 +228,7 @@ mod tests {
             artifacts: vec![Artifact {
                 id: "m".to_owned(),
                 role: "llm".to_owned(),
-                loader: "mistralrs".to_owned(),
+                loader: Loader::Mistralrs,
                 source_repo: String::new(),
                 source_revision: String::new(),
                 filename: filename.to_owned(),
@@ -224,6 +250,39 @@ mod tests {
             ModelsLock::parse(toml),
             Err(LockError::UnsupportedSchema(99))
         ));
+    }
+
+    #[test]
+    fn loader_enum_rejects_unknown_value_at_parse() {
+        // A typo'd loader must fail at PARSE, not survive as a free-form string
+        // to mismatch silently later. Every shipped loader value must parse.
+        for valid in [
+            "mistralrs",
+            "llamacpp-sidecar",
+            "piper-sidecar",
+            "voice-tts",
+            "sherpa-onnx",
+        ] {
+            let toml = format!(
+                "schema_version = 1\n[[artifact]]\nid = \"x\"\nrole = \"llm\"\n\
+                 loader = \"{valid}\"\nfilename = \"f\"\nsha256 = \"{}\"\n",
+                "a".repeat(64),
+            );
+            assert!(
+                ModelsLock::parse(&toml).is_ok(),
+                "valid loader {valid:?} rejected"
+            );
+        }
+        // Underscore instead of kebab-case hyphen → unknown variant → parse error.
+        let bad = format!(
+            "schema_version = 1\n[[artifact]]\nid = \"x\"\nrole = \"llm\"\n\
+             loader = \"llamacpp_sidecar\"\nfilename = \"f\"\nsha256 = \"{}\"\n",
+            "a".repeat(64),
+        );
+        assert!(
+            matches!(ModelsLock::parse(&bad), Err(LockError::Parse(_))),
+            "underscore typo must fail at parse"
+        );
     }
 
     #[test]
