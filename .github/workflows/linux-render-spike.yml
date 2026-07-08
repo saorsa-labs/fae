@@ -157,3 +157,20 @@ jobs:
       - name: P1 deferred proof — zigbuild fae-daemon for Linux x86_64
         working-directory: crates
         run: cargo zigbuild --target x86_64-unknown-linux-gnu -p fae-daemon --all-features
+
+      - name: Verify zigbuilt binary runtime deps (ldd)
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          BIN="target/x86_64-unknown-linux-gnu/debug/fae-daemon"
+          test -x "$BIN"
+          echo "=== ldd $BIN ==="
+          ldd "$BIN" | tee /tmp/ldd.txt
+          # sherpa-onnx is STATIC-linked, so the ONLY new runtime dep it may add
+          # is libstdc++.so.6 (universally present on Linux). Fail if it pulled in
+          # onnxruntime/sherpa shared libs (static mode broke) or anything else.
+          if grep -Ei 'lib(onnxruntime|sherpa|kaldi|openfst)' /tmp/ldd.txt; then
+            echo "ERROR: sherpa-onnx introduced shared runtime deps — expected static linking" >&2
+            exit 1
+          fi
+          echo "runtime deps OK: libstdc++.so.6 (the only C++ dep) is universally present on Linux"
