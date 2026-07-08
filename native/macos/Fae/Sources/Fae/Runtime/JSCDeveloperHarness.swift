@@ -97,6 +97,7 @@ struct JSCDeveloperHarness {
                     speakerId: nil,
                     actionSource: .voice,
                     proactiveContext: nil,
+                    isScriptBlock: true,
                     visionEnabled: false,
                     firstOwnerEnrollmentActive: false,
                     workflowTurnID: nil,

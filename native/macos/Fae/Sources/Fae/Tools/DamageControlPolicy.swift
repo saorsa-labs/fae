@@ -176,23 +176,31 @@ actor DamageControlPolicy {
         // nonLocalOnly=false → blocked for all models (always)
 
         self.zeroAccessPaths = [
-            // Secrets files — always zero-access regardless of model
+            // Secrets tier — ALWAYS zero-access, for every model (security-override
+            // FLAW-3). This set mirrors the daemon's `secrets_relative()`
+            // (`crates/fae-daemon/src/toolhost/isolation.rs`) EXACTLY. These were
+            // previously split: only the first four were always-on, and the rest
+            // were nonLocalOnly:true — but `ModelLocality` is permanently `.local`
+            // in production, so those rules NEVER fired: no block, therefore no
+            // `SecurityDenial`, therefore the human-gated authorize card could
+            // never be offered for `~/.ssh` etc. Always-blocking (a) hardens
+            // local-model reads as defense-in-depth (the daemon seatbelt already
+            // denies them for routed bash) and (b) makes every daemon Secrets-tier
+            // path produce the card with a precise target. They stay Secrets tier
+            // (allow-once / 5-min only, never "always") via `SecurityTier.classify`.
             PathRule(path: "~/.secrets",              nonLocalOnly: false),
             PathRule(path: "~/.env",                  nonLocalOnly: false),
             PathRule(path: "~/.envrc",                nonLocalOnly: false),
             PathRule(path: "~/.saorsa-keys",          nonLocalOnly: false),
-            // Cryptographic keys — zero-access for non-local models
-            PathRule(path: "~/.ssh",                  nonLocalOnly: true),
-            PathRule(path: "~/.gnupg",                nonLocalOnly: true),
-            // Cloud provider credentials — zero-access for non-local models
-            PathRule(path: "~/.aws",                  nonLocalOnly: true),
-            PathRule(path: "~/.azure",                nonLocalOnly: true),
-            PathRule(path: "~/.kube",                 nonLocalOnly: true),
-            PathRule(path: "~/.docker/config.json",   nonLocalOnly: true),
-            // Network / package credentials — zero-access for non-local models
-            PathRule(path: "~/.netrc",                nonLocalOnly: true),
-            PathRule(path: "~/.npmrc",                nonLocalOnly: true),
-            PathRule(path: "~/.pypirc",               nonLocalOnly: true),
+            PathRule(path: "~/.ssh",                  nonLocalOnly: false),
+            PathRule(path: "~/.gnupg",                nonLocalOnly: false),
+            PathRule(path: "~/.aws",                  nonLocalOnly: false),
+            PathRule(path: "~/.azure",                nonLocalOnly: false),
+            PathRule(path: "~/.kube",                 nonLocalOnly: false),
+            PathRule(path: "~/.docker/config.json",   nonLocalOnly: false),
+            PathRule(path: "~/.netrc",                nonLocalOnly: false),
+            PathRule(path: "~/.npmrc",                nonLocalOnly: false),
+            PathRule(path: "~/.pypirc",               nonLocalOnly: false),
             // Fae identity — ALWAYS zero-access (nonLocalOnly:false). These are the
             // three paths CLAUDE.md documents as unconditionally "zero-access via
             // DamageControlPolicy": the Git Vault, voice identity, and the system
@@ -211,6 +219,14 @@ actor DamageControlPolicy {
             PathRule(path: "~/Library/Application Support/fae/directive.md",       nonLocalOnly: false),
             PathRule(path: "~/Library/Application Support/fae-dev/speakers.json", nonLocalOnly: false),
             PathRule(path: "~/Library/Application Support/fae-dev/directive.md",  nonLocalOnly: false),
+            // Fae-integrity, ALWAYS zero-access (security-override Wave 2, L8):
+            // the standing grant store + the model-artifact lock are Fae's own
+            // trust anchors. The daemon's Fae-integrity/never set covers these too,
+            // and refuses any human-gated override for them (belt-and-suspenders).
+            PathRule(path: "~/Library/Application Support/fae/grant-store.json",     nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae/models.lock",          nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae-dev/grant-store.json", nonLocalOnly: false),
+            PathRule(path: "~/Library/Application Support/fae-dev/models.lock",      nonLocalOnly: false),
             // config.toml + soul.md are NOT in the documented zero-access set: they
             // stay non-local-only (the pre-existing behavior — the local model may
             // read its own config/soul; only an external model is denied).
@@ -238,10 +254,18 @@ actor DamageControlPolicy {
     ///
     /// Called in `PipelineCoordinator.executeTool` before the outbound guard and
     /// `TrustedActionBroker`. A non-`.allow` verdict short-circuits the normal evaluation.
+    ///
+    /// `exemptZeroAccessTarget` (security-override FLAW-2): the ONE home-expanded
+    /// zero-access rule path a human just authorized on the hardware card. On the
+    /// approved re-submit the gate re-runs in FULL — catastrophe patterns,
+    /// no-delete paths, read-only paths, and every OTHER zero-access rule still
+    /// apply — and skips ONLY the single rule whose expanded path exactly equals
+    /// the authorized target. `nil` (every ordinary call) ⇒ no exemption.
     func evaluate(
         toolName: String,
         arguments: [String: Any],
-        locality: ModelLocality
+        locality: ModelLocality,
+        exemptZeroAccessTarget: String? = nil
     ) -> DCVerdict {
         // Zero-access path check: applies to read, write, edit, and bash.
         //
@@ -259,6 +283,10 @@ actor DamageControlPolicy {
             for rule in zeroAccessPaths {
                 guard !rule.nonLocalOnly || locality == .nonLocal else { continue }
                 let expanded = Self.expandPath(rule.path)
+                // FLAW-2: skip ONLY the exact rule the human authorized (compare on
+                // the same expanded form `securityDenialTarget` returned). Every
+                // other zero-access rule still blocks a chained second target.
+                if let exempt = exemptZeroAccessTarget, expanded == exempt { continue }
                 let hitByArg = argForms.contains { $0 == expanded || $0.hasPrefix(expanded + "/") }
                 let hitByBash = bashCommand.map {
                     Self.commandReferencesPath(command: $0, expandedPath: expanded)
@@ -325,6 +353,34 @@ actor DamageControlPolicy {
         }
 
         return .allow
+    }
+
+    /// The protected zero-access path this tool call would touch, if any
+    /// (security-override Wave 2, Part A). Returns the home-EXPANDED absolute path
+    /// of the first matching zero-access rule — the `target` a `SecurityDenial`
+    /// carries and a post-click override relaxes. `nil` if the call touches no
+    /// zero-access path, so an ordinary bash-pattern / read-only block is NOT
+    /// surfaced as an (overridable) security denial. Mirrors the zero-access scan
+    /// in `evaluate` exactly (same rules, same match logic).
+    func securityDenialTarget(
+        toolName: String,
+        arguments: [String: Any],
+        locality: ModelLocality
+    ) -> String? {
+        guard ["read", "write", "edit", "bash"].contains(toolName) else { return nil }
+        let argForms = Self.normalizedArgumentForms(
+            Self.extractPath(toolName: toolName, arguments: arguments))
+        let bashCommand = toolName == "bash" ? (arguments["command"] as? String ?? "") : nil
+        for rule in zeroAccessPaths {
+            guard !rule.nonLocalOnly || locality == .nonLocal else { continue }
+            let expanded = Self.expandPath(rule.path)
+            let hitByArg = argForms.contains { $0 == expanded || $0.hasPrefix(expanded + "/") }
+            let hitByBash = bashCommand.map {
+                Self.commandReferencesPath(command: $0, expandedPath: expanded)
+            } ?? false
+            if hitByArg || hitByBash { return expanded }
+        }
+        return nil
     }
 
     // MARK: - Helpers

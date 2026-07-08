@@ -474,6 +474,7 @@ pub fn wrap_host_bash_command(
     command: &str,
     home: Option<&str>,
     relax: Option<&HostBashRelax>,
+    network_denied_root: Option<&Path>,
 ) -> Result<String, &'static str> {
     // Fail closed: without a home dir the protected set is empty — refuse rather
     // than run a bash that could read `~/.secrets` unguarded.
@@ -484,10 +485,17 @@ pub fn wrap_host_bash_command(
     if !Path::new(SANDBOX_EXEC_PATH).is_file() {
         return Err("host_bash_sandbox_unavailable");
     }
-    // `relax` is `None` for every un-overridden call ⇒ the profile is byte-identical
+    // `relax` is `None` for every un-overridden call ⇒ the read set is byte-identical
     // to today's full read-deny (Invariant F). A validated relaxation lifts EXACTLY
-    // one canonical file leaf (+ Secrets-tier network/write denials).
-    let profile = read_deny_seatbelt_profile_relaxed(home, relax);
+    // one canonical file leaf. Network confinement is set for a Secrets-tier override
+    // (L5) OR — independently — a network-tainted turn (FLAW-1): a subsequent bash
+    // after an approved Secrets read runs network-denied + workspace-write-only.
+    let relax_target = relax.map(|r| r.canonical_target.as_path());
+    let network_confine: Option<&Path> = match relax {
+        Some(r) if r.deny_network => Some(r.workspace_root.as_path()),
+        _ => network_denied_root,
+    };
+    let profile = read_deny_seatbelt_profile_relaxed(home, relax_target, network_confine);
     Ok(format!(
         "{} {} -p {} /bin/sh -c {}",
         scrubbed_env_i_prefix(),
@@ -507,6 +515,11 @@ pub fn wrap_host_bash_command(
     // read-deny to relax (documented residual), so an approved override simply has
     // no read-deny profile to modify here. The daemon still validates + audits it.
     _relax: Option<&HostBashRelax>,
+    // Network confinement (L5 / FLAW-1 turn taint) is likewise a macOS-seatbelt
+    // concept here; Landlock network rules are grant-based + kernel-version gated,
+    // so Linux relies on the substring DamageControl guard. Accepted for signature
+    // parity; the daemon still validates + audits.
+    _network_denied_root: Option<&Path>,
 ) -> Result<String, &'static str> {
     // C1 (env exfil) is closed by `env -i <allowlist>`. C2 (protected reads) is
     // NOT enforced here: Landlock is grant-based and cannot express a deny-read
@@ -529,6 +542,7 @@ pub fn wrap_host_bash_command(
     _command: &str,
     _home: Option<&str>,
     _relax: Option<&HostBashRelax>,
+    _network_denied_root: Option<&Path>,
 ) -> Result<String, &'static str> {
     Err("host_bash_unsupported_platform")
 }
@@ -560,27 +574,33 @@ fn protected_read_paths(home: &str) -> Vec<String> {
 /// ancestor (`/var` → `/private/var`) cannot slip a protected read past the deny.
 #[cfg(target_os = "macos")]
 fn read_deny_seatbelt_profile(home: &str) -> String {
-    read_deny_seatbelt_profile_relaxed(home, None)
+    read_deny_seatbelt_profile_relaxed(home, None, None)
 }
 
 /// The read-deny profile, optionally relaxing EXACTLY one canonical file leaf for
 /// an approved `security_override`.
 ///
-/// * `relax == None` ⇒ byte-identical to the un-overridden full-deny profile
-///   (Invariant F — this is the load-bearing "no override = today's behavior").
-/// * `relax == Some(r)` ⇒ every protected entry whose canonical form equals
-///   `r.canonical_target` is OMITTED from the read-deny set (file-granular — a
-///   directory-secret like `~/.ssh` whose canonical form does NOT equal a named
-///   sub-file stays fully denied, so a symlink→`~/.ssh/id_rsa` stays blocked). When
-///   `r.deny_network` (Secrets tier, L5) the profile ALSO denies `network*` and
-///   confines writes to the workspace root + temp dirs, so an approved secret read
-///   cannot be piped to the network (or spilled to a non-workspace file) in the
-///   same command.
+/// * `relax_target == None` ⇒ no read leaf lifted (Invariant F — the load-bearing
+///   "no override = today's behavior" when `network_confine` is also `None`).
+/// * `relax_target == Some(t)` ⇒ every protected entry whose canonical form equals
+///   `t` is OMITTED from the read-deny set (file-granular — a directory-secret like
+///   `~/.ssh` whose canonical form does NOT equal a named sub-file stays fully
+///   denied, so a symlink→`~/.ssh/id_rsa` stays blocked).
+/// * `network_confine == Some(root)` ⇒ the profile ALSO denies `network*` and
+///   confines writes to `root` + temp dirs. This is set BOTH for a Secrets-tier
+///   override (L5 — an approved secret read can't be piped to the network in the
+///   same command) AND, independently of any override, for a network-tainted turn
+///   (FLAW-1 fix — a subsequent bash in the same turn after an approved Secrets
+///   read is also network-denied + workspace-write-only, so the read secret can't
+///   be exfiltrated by a later split call).
 #[cfg(target_os = "macos")]
-fn read_deny_seatbelt_profile_relaxed(home: &str, relax: Option<&HostBashRelax>) -> String {
+fn read_deny_seatbelt_profile_relaxed(
+    home: &str,
+    relax_target: Option<&Path>,
+    network_confine: Option<&Path>,
+) -> String {
     use std::collections::HashSet;
     let raw = protected_read_paths(home);
-    let relax_target: Option<&Path> = relax.map(|r| r.canonical_target.as_path());
     let mut seen: HashSet<String> = HashSet::new();
     let mut paths: Vec<String> = Vec::new();
     for p in &raw {
@@ -606,12 +626,12 @@ fn read_deny_seatbelt_profile_relaxed(home: &str, relax: Option<&HostBashRelax>)
         .join("\n");
 
     let mut profile = String::from("(version 1)\n(allow default)\n");
-    // L5: a Secrets-tier unlock also cuts network + non-workspace writes for THIS
-    // call. `(allow default)` opened both; last-match-wins deny/allow closes them
-    // back down to workspace + temp writes and no network.
-    if let Some(r) = relax.filter(|r| r.deny_network) {
+    // L5 / FLAW-1: cut network + non-workspace writes for THIS call. `(allow
+    // default)` opened both; last-match-wins deny/allow closes them back down to
+    // workspace + temp writes and no network.
+    if let Some(root) = network_confine {
         profile.push_str("(deny network*)\n");
-        let mut write_subpaths: Vec<String> = vec![r.workspace_root.to_string_lossy().into_owned()];
+        let mut write_subpaths: Vec<String> = vec![root.to_string_lossy().into_owned()];
         if let Ok(tmp) = std::fs::canonicalize(std::env::temp_dir()) {
             write_subpaths.push(tmp.to_string_lossy().into_owned());
         }
@@ -1063,13 +1083,13 @@ mod tests {
         // baseline (the override mechanism adds ZERO relaxation when absent).
         let home = "/Users/tester";
         let baseline = read_deny_seatbelt_profile(home);
-        let none = read_deny_seatbelt_profile_relaxed(home, None);
+        let none = read_deny_seatbelt_profile_relaxed(home, None, None);
         assert_eq!(
             baseline, none,
             "absent override must equal baseline verbatim"
         );
         // The wrapped command embeds exactly that baseline profile.
-        let wrapped = wrap_host_bash_command("echo hi", Some(home), None).expect("wrap");
+        let wrapped = wrap_host_bash_command("echo hi", Some(home), None, None).expect("wrap");
         assert!(
             wrapped.contains(&sh_single_quote(&baseline)),
             "wrapped command must embed the baseline profile verbatim: {wrapped}"
@@ -1081,13 +1101,15 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn secrets_unlock_denies_network_and_relaxes_only_target() {
+        // A Secrets-tier relax maps to (relax_target, network_confine=workspace)
+        // in `wrap_host_bash_command`; exercise the profile builder with exactly
+        // that mapping.
         let home = "/Users/tester";
-        let relax = HostBashRelax {
-            canonical_target: PathBuf::from("/Users/tester/.secrets"),
-            deny_network: true,
-            workspace_root: PathBuf::from("/tmp/ws-root"),
-        };
-        let profile = read_deny_seatbelt_profile_relaxed(home, Some(&relax));
+        let profile = read_deny_seatbelt_profile_relaxed(
+            home,
+            Some(Path::new("/Users/tester/.secrets")),
+            Some(Path::new("/tmp/ws-root")),
+        );
         // L5: network denied + writes confined to workspace + temp.
         assert!(profile.contains("(deny network*)"), "{profile}");
         assert!(
@@ -1116,13 +1138,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn general_unlock_keeps_network_and_denies_protected() {
+        // A General-tier relax (deny_network=false, untainted turn) maps to
+        // (relax_target, network_confine=None).
         let home = "/Users/tester";
-        let relax = HostBashRelax {
-            canonical_target: PathBuf::from("/Users/tester/project/notes.txt"),
-            deny_network: false,
-            workspace_root: PathBuf::from("/tmp/ws-root"),
-        };
-        let profile = read_deny_seatbelt_profile_relaxed(home, Some(&relax));
+        let profile = read_deny_seatbelt_profile_relaxed(
+            home,
+            Some(Path::new("/Users/tester/project/notes.txt")),
+            None,
+        );
         // General: network stays allowed (no deny), no write clampdown.
         assert!(!profile.contains("(deny network*)"), "{profile}");
         assert!(
@@ -1149,16 +1172,69 @@ mod tests {
         // defense: a workspace symlink→~/.ssh/id_rsa canonicalizes under ~/.ssh and
         // stays denied.
         let home = "/Users/tester";
-        let relax = HostBashRelax {
-            canonical_target: PathBuf::from("/Users/tester/.ssh/id_rsa"),
-            deny_network: true,
-            workspace_root: PathBuf::from("/tmp/ws-root"),
-        };
-        let profile = read_deny_seatbelt_profile_relaxed(home, Some(&relax));
+        let profile = read_deny_seatbelt_profile_relaxed(
+            home,
+            Some(Path::new("/Users/tester/.ssh/id_rsa")),
+            Some(Path::new("/tmp/ws-root")),
+        );
         assert!(
             profile.contains("(subpath \"/Users/tester/.ssh\")"),
             "directory-secret must stay denied — relaxation is file-granular: {profile}"
         );
+    }
+
+    // -- security-override FLAW-1: turn-taint network confinement --
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn network_denied_plain_bash_denies_network_and_relaxes_no_read_leaf() {
+        // FLAW-1 (same-turn split-call exfil): a PLAIN Host bash carrying the
+        // turn-taint flag runs network-denied + workspace-write-only WITHOUT any
+        // read leaf being lifted — the secret already in model context cannot be
+        // curl'd out (or spilled outside the workspace) by a later call in the
+        // same turn.
+        let home = "/Users/tester";
+        let profile =
+            read_deny_seatbelt_profile_relaxed(home, None, Some(Path::new("/tmp/ws-root")));
+        // Network cut + writes clamped to workspace + temp.
+        assert!(profile.contains("(deny network*)"), "{profile}");
+        assert!(
+            profile.contains("(deny file-write* (subpath \"/\"))"),
+            "{profile}"
+        );
+        assert!(profile.contains("(subpath \"/tmp/ws-root\")"), "{profile}");
+        // NO read leaf relaxed: the full protected read-deny set stays intact.
+        let baseline = read_deny_seatbelt_profile(home);
+        for line in baseline.lines().filter(|l| l.contains("(subpath")) {
+            assert!(
+                profile.contains(line),
+                "tainted profile must keep every baseline read-deny entry: missing {line}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn network_denied_wraps_confined_profile_absent_flag_byte_identical() {
+        let home = "/Users/tester";
+        // Tainted: the wrapped command embeds a network-denied profile.
+        let tainted =
+            wrap_host_bash_command("echo hi", Some(home), None, Some(Path::new("/tmp/ws-root")))
+                .expect("wrap");
+        let expected =
+            read_deny_seatbelt_profile_relaxed(home, None, Some(Path::new("/tmp/ws-root")));
+        assert!(
+            tainted.contains(&sh_single_quote(&expected)),
+            "tainted wrap must embed the network-denied profile verbatim: {tainted}"
+        );
+        // Absent flag ⇒ byte-identical to today's un-overridden wrap (Invariant F).
+        let plain = wrap_host_bash_command("echo hi", Some(home), None, None).expect("wrap");
+        let baseline = read_deny_seatbelt_profile(home);
+        assert!(
+            plain.contains(&sh_single_quote(&baseline)),
+            "absent network_denied must embed the byte-identical baseline: {plain}"
+        );
+        assert_ne!(tainted, plain);
     }
 
     #[cfg(target_os = "macos")]
@@ -1167,11 +1243,11 @@ mod tests {
         // No home ⇒ the protected set cannot be derived ⇒ refuse (never run an
         // unguarded bash that could read `~/.secrets`).
         assert_eq!(
-            wrap_host_bash_command("echo hi", None, None),
+            wrap_host_bash_command("echo hi", None, None, None),
             Err("host_bash_home_unresolved")
         );
         assert_eq!(
-            wrap_host_bash_command("echo hi", Some(""), None),
+            wrap_host_bash_command("echo hi", Some(""), None, None),
             Err("host_bash_home_unresolved")
         );
     }
@@ -1181,8 +1257,9 @@ mod tests {
     fn wrap_host_bash_wraps_env_scrub_and_sandbox_and_quotes() {
         // With a home + sandbox-exec present (stock macOS), the wrapper scrubs the
         // env, invokes the seatbelt driver, and single-quotes the original command.
-        let wrapped = wrap_host_bash_command("cat \"$HOME/.secrets\"", Some("/Users/tester"), None)
-            .expect("wrap");
+        let wrapped =
+            wrap_host_bash_command("cat \"$HOME/.secrets\"", Some("/Users/tester"), None, None)
+                .expect("wrap");
         assert!(
             wrapped.starts_with("/usr/bin/env -i "),
             "must clear env: {wrapped}"

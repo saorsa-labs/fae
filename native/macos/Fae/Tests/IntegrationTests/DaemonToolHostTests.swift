@@ -3967,7 +3967,7 @@ extension DaemonToolHostTests {
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
             .routed(
                 result: ["content": [["type": "text", "text": "[exit 0]\n--- stdout ---\nhello\n--- stderr ---\n"]]],
                 preStateContent: nil,
@@ -4014,7 +4014,7 @@ extension DaemonToolHostTests {
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
         // The spy MUST NOT be called — DamageControl intercepts first.
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
             .failClosed("routed bash executor must not be called for a catastrophe command")
         }
 
@@ -4055,7 +4055,7 @@ extension DaemonToolHostTests {
             HookResponse(systemMessage: "blocked-by-test", block: true, metadata: nil))
         let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
         let executor = await makeSpiedRoutedBashExecutor(
-            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _ in
+            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _, _, _ in
                 .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
             }
 
@@ -4115,7 +4115,7 @@ extension DaemonToolHostTests {
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
             .failClosed("routed executor must not be called for legacy fall-through")
         }
 
@@ -4152,7 +4152,7 @@ extension DaemonToolHostTests {
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
         await executor.setRoutedBashTimeoutForTesting(0.4)
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             return .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
         }
@@ -4226,7 +4226,7 @@ extension DaemonToolHostTests {
     /// the bash executor + BashTool).
     private func makeSpiedRoutedBashExecutor(
         tmp: URL, hookRunner: SpyHookRunner?, logger: SpySecurityLogger,
-        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan) async -> DaemonToolRouting.BashExecutionOutcome
+        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan, DaemonToolOrigin, Bool) async -> DaemonToolRouting.BashExecutionOutcome
     ) async -> ToolExecutor {
         let session = DaemonToolHostSession(
             workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
@@ -4329,7 +4329,7 @@ extension DaemonToolHostTests {
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session)
         // The spy MUST NOT be called — the fail-closed plan short-circuits first.
-        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
             .failClosed("routed bash executor must not be called on a fail-closed plan")
         }
 
@@ -4351,5 +4351,306 @@ extension DaemonToolHostTests {
         let hasRoot = await session.hasRoot()
         XCTAssertFalse(hasRoot,
                        "a fail-closed plan must not root the daemon (no daemon contact)")
+    }
+}
+
+// MARK: - Security-override must-fix seams (FLAW-1 turn taint + FLAW-2 re-gate)
+
+extension DaemonToolHostTests {
+
+    /// Context builder with an explicit workflow turn id (the FLAW-1 taint key).
+    private func fullContext(turnID: String?) -> ToolExecutorContext {
+        ToolExecutorContext(
+            toolMode: "full",
+            privacyMode: "local_preferred",
+            modelLocality: .local,
+            explicitUserAuthorization: false,
+            isOwner: true,
+            livenessScore: nil,
+            speakerId: nil,
+            actionSource: .voice,
+            proactiveContext: nil,
+            visionEnabled: false,
+            firstOwnerEnrollmentActive: false,
+            workflowTurnID: turnID,
+            traceToolCallID: nil,
+            workflowRunID: nil
+        )
+    }
+
+    /// Build fake secret material by CONCATENATION (owner rule: no literal
+    /// credential-looking fixtures).
+    private func fakeSecretsTilde() -> String { "~/" + "." + "secrets" }
+
+    /// FLAW-2: the approved re-submit RE-RUNS DamageControl, exempting ONLY the
+    /// authorized target. A command that chains a home-folder catastrophe after
+    /// the approved secret read is STILL blocked — the human approved ONE path,
+    /// not the rest of the command — and the daemon is never contacted.
+    func testApprovedResubmitReRunsDamageControlOnChainedCatastrophe() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-so2-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        // The human clicks Allow on the card…
+        await executor.setSecurityOverridePresenter { _, _ in .allow(.once) }
+        // …but the routed executor must NEVER run (the re-gate blocks first).
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
+            .failClosed("routed bash executor must not be called for a re-blocked resubmit")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "bash",
+                     arguments: ["command": "cat \(fakeSecretsTilde()) && rm -rf ~/Documents"]),
+            context: fullContext(turnID: "turn-A"),
+            callbacks: .noop)
+
+        XCTAssertTrue(outcome.result.isError,
+                      "the chained catastrophe must stay blocked after approval")
+        XCTAssertTrue(
+            outcome.result.output.contains("cancelled") || outcome.result.output.contains("dangerous"),
+            "the disaster verdict must surface on the resubmit: \(outcome.result.output)")
+        XCTAssertFalse(outcome.result.output.contains("must not be called"),
+                       "the routed executor must not have been reached")
+        XCTAssertTrue(outcome.damageControlIntervened)
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "a re-blocked resubmit must never contact the daemon")
+    }
+
+    /// FLAW-1: an approved Secrets-tier override taints the REST of the turn —
+    /// the NEXT bash in the same turn carries `networkDenied == true` into the
+    /// routed executor — and the taint resets at the next turn boundary
+    /// (`beginTurn`) and does not leak to a different turn id.
+    func testApprovedSecretsOverrideTaintsSubsequentBashSameTurnAndResets() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-so1-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setSecurityOverridePresenter { _, _ in .allow(.once) }
+
+        actor Captured {
+            var flags: [Bool] = []
+            func record(_ f: Bool) { flags.append(f) }
+        }
+        let captured = Captured()
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, networkDenied in
+            await captured.record(networkDenied)
+            return .routed(
+                result: ["content": [["type": "text", "text": "[exit 0] ok"]]],
+                preStateContent: nil, absoluteTargetPath: nil)
+        }
+
+        // Call 1 (turn-A): approve a Secrets read whose resubmit is then
+        // re-blocked (chained rm) — sets the taint WITHOUT contacting the daemon.
+        _ = await executor.execute(
+            ToolCall(name: "bash",
+                     arguments: ["command": "cat \(fakeSecretsTilde()) && rm -rf ~/Documents"]),
+            context: fullContext(turnID: "turn-A"), callbacks: .noop)
+
+        // Call 2 (same turn): a benign bash MUST ride network-denied.
+        let sameTurn = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "echo hi"]),
+            context: fullContext(turnID: "turn-A"), callbacks: .noop)
+        XCTAssertFalse(sameTurn.result.isError)
+
+        // Call 3 (different turn id, no beginTurn): the scoped taint expires.
+        _ = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "echo hi"]),
+            context: fullContext(turnID: "turn-B"), callbacks: .noop)
+
+        // Turn boundary reset, then call 4 back on the ORIGINAL turn id: the
+        // explicit reset must clear even a re-appearing id.
+        await executor.beginTurn()
+        _ = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "echo hi"]),
+            context: fullContext(turnID: "turn-A"), callbacks: .noop)
+
+        let flags = await captured.flags
+        XCTAssertEqual(
+            flags, [true, false, false],
+            "taint must hold within the turn, expire on a new turn id, and clear on beginTurn: \(flags)")
+    }
+
+    /// FLAW-1+FLAW-2 end-to-end wire proof: a CLEAN approved `cat ~/.secrets`
+    /// passes the exempted re-gate and reaches the fake daemon; the
+    /// `toolhost.execute` frame carries the `security_override` sibling AND
+    /// `network_denied:true` (the Secrets authorization tainted its own turn).
+    func testApprovedCleanSecretsReadPassesReGateAndCarriesWireFlags() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-so3-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+
+        let session = DaemonToolHostSession(
+            serverRequestHandler: { _, params in
+                ["approved": true, "call_id": (params["call_id"] as? String) ?? ""]
+            },
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp),
+            daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setSecurityOverridePresenter { _, _ in .allow(.once) }
+        // NO routed-bash seam: the approved resubmit routes DIRECTLY so the
+        // override + taint flag reach the (fake) daemon socket.
+
+        let run = Task {
+            await executor.execute(
+                ToolCall(name: "bash", arguments: ["command": "cat \(fakeSecretsTilde())"]),
+                context: fullContext(turnID: "turn-C"), callbacks: .noop)
+        }
+        let client = try peer.accept()
+        try driveAuth(client)
+        // Root binding first (th-1).
+        let setRootReq = try await recvWithTimeout(client)
+        XCTAssertTrue(setRootReq.contains("\"command\":\"toolhost.set_root\""),
+                      "expected set_root, got: \(setRootReq)")
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(tmp.path)"}}
+        """)
+        // The approved execute frame (th-2) — the wire proof.
+        let executeReq = try await recvWithTimeout(client)
+        XCTAssertTrue(executeReq.contains("\"command\":\"toolhost.execute\""),
+                      "expected execute, got: \(executeReq)")
+        XCTAssertTrue(executeReq.contains("\"security_override\""),
+                      "the resubmit must carry the override sibling: \(executeReq)")
+        XCTAssertTrue(executeReq.contains("\"network_denied\":true"),
+                      "the Secrets approval must taint its own turn on the wire: \(executeReq)")
+        XCTAssertTrue(executeReq.contains("\"origin\":\"owner_interactive\""),
+                      "only an interactive turn can carry an override: \(executeReq)")
+        try client.send("""
+        {"v":2,"request_id":"th-2","ok":true,"result":{"content":[{"type":"text","text":"[exit 0] fake-secret-material"}]}}
+        """)
+
+        let outcome = try await withTimeoutAsNever(run)
+        XCTAssertFalse(outcome.result.isError,
+                       "the clean approved read must proceed: \(outcome.result.output)")
+        XCTAssertEqual(outcome.approvedByUser, true,
+                       "the resubmit is the human-approved call")
+        XCTAssertFalse(outcome.result.output.contains("zero-access"),
+                       "DamageControl must not re-block the ONE authorized target")
+    }
+    /// Test-only stand-in for an arbitrary named tool: executing it leaves a
+    /// visible marker, so a gate-denied call is distinguishable from a run one.
+    private struct EgressStubTool: Tool {
+        let name: String
+        let description = "test-only egress stub"
+        let parametersSchema = "{}"
+        let requiresApproval = false
+        let riskLevel: ToolRiskLevel = .low
+        let example = ""
+        func execute(input: [String: Any]) async throws -> ToolResult {
+            .success("stub-executed:\(name)")
+        }
+    }
+
+    /// FLAW-1 extension: after an approved Secrets read, the DEFAULT-DENY egress
+    /// gate blocks every tool not on `localSafeToolsAfterSecretRead` (including
+    /// a made-up future tool), allows the local-safe set, and re-allows egress
+    /// after the turn boundary. `bash` stays allowed (network-confined — proven
+    /// by testApprovedSecretsOverrideTaintsSubsequentBashSameTurnAndResets).
+    func testSecretTaintEgressGateDefaultDeniesNonLocalTools() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-so4-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let deniedNames = [
+            "fetch_url", "web_search", "mail", "delegate_agent", "run_skill",
+            "type_text",
+            // A tool that exists in NO allowlist: default-deny must catch it.
+            "future_egress_tool",
+        ]
+        let allowedNames = ["session_search", "scheduler_list", "roleplay"]
+        var tools: [any Tool] = [BashTool()]
+        for n in deniedNames + allowedNames { tools.append(EgressStubTool(name: n)) }
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: tools),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setSecurityOverridePresenter { _, _ in .allow(.once) }
+        await executor.setRoutedBashExecutorForTesting { _, _, _, _, _ in
+            .failClosed("no daemon in this test")
+        }
+
+        // Taint the turn: approve a Secrets read whose resubmit is re-blocked
+        // (no daemon contact), exactly as in the taint test above.
+        _ = await executor.execute(
+            ToolCall(name: "bash",
+                     arguments: ["command": "cat \(fakeSecretsTilde()) && rm -rf ~/Documents"]),
+            context: fullContext(turnID: "turn-E"), callbacks: .noop)
+
+        // Every egress-capable (or unknown) tool is DENIED in the tainted turn.
+        for name in deniedNames {
+            let out = await executor.execute(
+                ToolCall(name: name, arguments: [:]),
+                context: fullContext(turnID: "turn-E"), callbacks: .noop)
+            XCTAssertTrue(out.result.isError, "\(name) must be denied in a tainted turn")
+            XCTAssertTrue(out.result.output.contains("off this machine"),
+                          "\(name) must surface the security message: \(out.result.output)")
+            XCTAssertFalse(out.result.output.contains("stub-executed"),
+                           "\(name) must never execute in a tainted turn")
+            XCTAssertTrue(out.damageControlIntervened)
+        }
+
+        // The local-safe allowlist still executes.
+        for name in allowedNames {
+            let out = await executor.execute(
+                ToolCall(name: name, arguments: [:]),
+                context: fullContext(turnID: "turn-E"), callbacks: .noop)
+            XCTAssertEqual(out.result.output, "stub-executed:\(name)",
+                           "\(name) is local-safe and must run in a tainted turn")
+        }
+        // The routed file tools are on the allowlist too (they run through the
+        // daemon-confined routing branch, not this stub registry).
+        for name in ["read", "write", "edit"] {
+            XCTAssertTrue(ToolExecutor.localSafeToolsAfterSecretRead.contains(name))
+        }
+        XCTAssertFalse(ToolExecutor.localSafeToolsAfterSecretRead.contains("bash"),
+                       "bash is allowed via network confinement, not the allowlist")
+
+        // Turn boundary: egress is re-allowed on the next turn.
+        await executor.beginTurn()
+        let nextTurn = await executor.execute(
+            ToolCall(name: "fetch_url", arguments: [:]),
+            context: fullContext(turnID: "turn-F"), callbacks: .noop)
+        XCTAssertEqual(nextTurn.result.output, "stub-executed:fetch_url",
+                       "a new turn clears the taint and re-allows egress")
     }
 }

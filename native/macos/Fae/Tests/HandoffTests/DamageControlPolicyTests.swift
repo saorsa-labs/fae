@@ -154,10 +154,14 @@ final class DamageControlPolicyTests: XCTestCase {
         assertBlock(await editTool("\(home)/.ssh/config", locality: .nonLocal), "editing ~/.ssh must be blocked for non-local model")
     }
 
-    func testZeroAccessSSHAllowedForLocal() async {
+    func testZeroAccessSSHBlockedForLocalToo() async {
+        // Security-override FLAW-3: the FULL secrets set (mirroring the daemon's
+        // `secrets_relative()`) is always-block, LOCAL model included — locality
+        // is permanently `.local` in production, so a nonLocalOnly rule never
+        // fired and no override card could ever be offered for these paths.
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        assertAllow(await readTool("\(home)/.ssh/id_rsa", locality: .local), "reading ~/.ssh must be allowed for local model")
-        assertAllow(await writeTool("\(home)/.ssh/id_rsa", locality: .local), "writing ~/.ssh must be allowed for local model")
+        assertBlock(await readTool("\(home)/.ssh/id_rsa", locality: .local), "reading ~/.ssh must be blocked for the local model too (FLAW-3)")
+        assertBlock(await writeTool("\(home)/.ssh/id_rsa", locality: .local), "writing ~/.ssh must be blocked for the local model too (FLAW-3)")
     }
 
     func testZeroAccessAWSBlockedForNonLocal() async {
@@ -187,7 +191,12 @@ final class DamageControlPolicyTests: XCTestCase {
         assertBlock(await readTool("\(home)/.npmrc", locality: .nonLocal), "reading ~/.npmrc must be blocked for non-local model")
     }
 
-    func testZeroAccessPathsAllowedForLocalModel() async {
+    func testZeroAccessPathsBlockedForLocalModelToo() async {
+        // Security-override FLAW-3: previously these were `nonLocalOnly:true`
+        // and this test asserted they were readable by the local model. That
+        // meant no SecurityDenial and no human-gated authorize card. The whole
+        // secrets set now blocks for every model; access goes through the card
+        // (allow-once / 5-min), never silently.
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let credentialPaths = [
             "\(home)/.ssh/id_rsa",
@@ -199,7 +208,7 @@ final class DamageControlPolicyTests: XCTestCase {
             "\(home)/.npmrc",
         ]
         for path in credentialPaths {
-            assertAllow(await readTool(path, locality: .local), "'\(path)' must be readable by local model")
+            assertBlock(await readTool(path, locality: .local), "'\(path)' must be zero-access for the local model too (FLAW-3)")
         }
     }
 

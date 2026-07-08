@@ -166,6 +166,12 @@ enum FaeDirectories {
     /// `speakers.json` — speaker voice profiles.
     static let speakersFile: URL = root.appendingPathComponent("speakers.json")
 
+    /// `grant-store.json` — the owner's standing sandbox-override grants
+    /// (security-override Wave 2, L8). DamageControl zero-accesses this path and
+    /// the daemon's Fae-integrity/never set covers it, so no tool can read or
+    /// rewrite it.
+    static let grantStoreFile: URL = root.appendingPathComponent("grant-store.json")
+
     /// `wake_lexicon.json` — wake word profiles.
     static let wakeLexiconFile: URL = root.appendingPathComponent("wake_lexicon.json")
 

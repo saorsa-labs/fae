@@ -106,6 +106,15 @@ actor PipelineCoordinator {
     func setReceiptStore(_ store: ReceiptStore) async {
         narrationReceiptStore = store
         await toolExecutor.setReceiptStore(store)
+        // Security-override Wave 2: enable the standing grant store (L8/L9) + the
+        // hardware-only authorize-card presenter (L2/L12). The presenter is wired
+        // ONLY to `SecurityOverridePanel` — never a legacy approval route a model
+        // could self-trigger. Runs once at coordinator setup alongside the receipt
+        // wire; before this, the executor's presenter fails closed (Deny).
+        await toolExecutor.setGrantStore(GrantStore())
+        await toolExecutor.setSecurityOverridePresenter { denial, command in
+            await SecurityOverridePanel.present(denial: denial, command: command)
+        }
     }
 
     /// Receipt store retained for narration-time undo.
@@ -2359,6 +2368,10 @@ actor PipelineCoordinator {
     ) async {
         currentTurnID = UUID().uuidString
         ttsState.resetForNewTurn()
+        // Security-override FLAW-1: the turn boundary. Clears the secret-read
+        // taint so a NEW turn's bash is not network-denied by the previous turn's
+        // authorized Secrets read (within a turn the taint holds).
+        await toolExecutor.beginTurn()
         // Per-turn reset for the deterministic secure-input pre-detector, and a
         // snapshot of the Keychain-store count so the anti-hallucination backstop
         // can tell a real save from a hallucinated one.
@@ -6497,6 +6510,7 @@ actor PipelineCoordinator {
             speakerId: speakerGate.currentSpeakerLabel,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
+            isScriptBlock: false,
             visionEnabled: effectiveVisionEnabled(),
             firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
             workflowTurnID: workflowTurnID,
@@ -6649,6 +6663,7 @@ actor PipelineCoordinator {
             speakerId: speakerGate.currentSpeakerLabel,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
+            isScriptBlock: true,
             visionEnabled: effectiveVisionEnabled(),
             firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
             workflowTurnID: currentTurnID,

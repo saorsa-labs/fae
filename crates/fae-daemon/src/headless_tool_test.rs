@@ -141,6 +141,7 @@ fn req(tool: &str, input: Value, origin: ToolOrigin, call_id: &str) -> ToolHostR
         cancel: CancellationToken::new(),
         origin,
         security_override: None,
+        network_denied: false,
     }
 }
 
