@@ -66,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         port: 18134,
         ctx_size: 4096,
         ngl: 99,
+        pidfile_root: None,
     };
     eprintln!("[v2-dryrun] spawning sidecar (BASE model, no LoRA)…");
     let adapter = LlamaServerAdapter::spawn(config, "gemma-4-e4b").await?;

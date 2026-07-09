@@ -1318,6 +1318,7 @@ fn build_qwen3_asr_engine() -> Option<Arc<dyn ProviderAdapter>> {
         port: env_parsed("FAE_ASR_LLAMA_PORT", 18_081_u16),
         ctx_size: env_parsed("FAE_ASR_LLAMA_CTX", 4096_u32),
         ngl: env_parsed("FAE_ASR_LLAMA_NGL", 999_u32),
+        pidfile_root: run_directory().ok(),
     };
     Some(Arc::new(LazyLlamaServerAdapter::new(
         config,
@@ -2204,6 +2205,7 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
         // this raised default only applies to standalone/headless launches.
         ctx_size: env_parsed("FAE_LLAMA_CTX", 32_768),
         ngl: env_parsed("FAE_LLAMA_NGL", 999),
+        pidfile_root: run_directory().ok(),
     };
     config
         .preflight_pinned_artifacts()

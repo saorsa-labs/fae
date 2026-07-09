@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         port: 18100,
         ctx_size: 4096,
         ngl: 99,
+        pidfile_root: None,
     };
     eprintln!("[reload] spawning managed sidecar (no LoRA)…");
     let adapter = LlamaServerAdapter::spawn(config, "gemma-4-e4b").await?;
