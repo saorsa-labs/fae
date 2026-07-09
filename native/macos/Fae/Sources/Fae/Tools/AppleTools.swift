@@ -688,7 +688,7 @@ struct RemindersTool: Tool {
 /// Requires Contacts permission (System Settings > Privacy > Contacts).
 struct ContactsTool: Tool {
     let name = "contacts"
-    let description = "Search macOS Contacts. Actions: search, get_phone, get_email."
+    let description = "Look up contact details you do not already know (phone, email). Actions: search, get_phone, get_email."
     let parametersSchema = """
         {"action": "string (required: search|get_phone|get_email)", \
         "query": "string (required)"}

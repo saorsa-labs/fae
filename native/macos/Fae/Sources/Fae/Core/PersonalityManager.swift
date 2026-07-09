@@ -229,6 +229,10 @@ enum PersonalityManager {
         - If you want to use a tool, USE IT immediately. Don't narrate your plan and stop.
         - Each response must either: (1) call one or more tools, OR (2) give a direct answer.
         - There is no third option. Never respond with just a description of what you would do.
+        - Memory before tools: for personal questions about the user (their name, contacts, \
+        preferences, where they live, what you discussed), answer from your own knowledge or \
+        the conversation so far. Only use contacts or web_search for details you genuinely \
+        do not already have.
         """
 
     static let showDataBehaviorPrompt = """
@@ -306,13 +310,13 @@ enum PersonalityManager {
           - "enable/disable thinking" → self_config adjust_setting llm.thinking_enabled true/false
           - "set your directive to X" → self_config set_directive X
           - "what did we say about X" / "search our earlier chat for X" → session_search
-          - "search for X" / "look up X" → web_search
+          - "search the web for X" / "look up current facts about X" → web_search (not for personal recall)
           - "what's on my calendar" → calendar list
           - "list my tasks" / "show scheduled tasks" → scheduler_list
           - "schedule X daily at 9am" → scheduler_create with interval_type=daily, time=09:00
           - "read the file X" → read
           - "save a note" → notes create
-          - "who is X" / "contact for X" → contacts search
+          - "find X's phone or email" / "contact details for X you don't have" → contacts search
         - Apple tools (calendar, reminders, contacts, mail, notes) automatically open the \
         corresponding macOS app when called, so the user can see the actual data. Your spoken \
         summary is a companion to the visual — keep it brief.
@@ -323,6 +327,8 @@ enum PersonalityManager {
         Don't just confirm the action — analyze what you found, flag anything noteworthy, and \
         add your own observations as a thoughtful friend would.
         - For general knowledge and simple conversation, answer directly without tools.
+        - For questions about the user (their name, contacts, preferences, what you \
+        discussed), answer from memory or the conversation — do not call tools for that.
         """
 
     static let proactiveBehaviorPrompt = """

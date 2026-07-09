@@ -574,7 +574,7 @@ struct SelfConfigTool: Tool {
 /// DDG redirect URLs.
 struct WebSearchTool: Tool {
     let name = "web_search"
-    let description = "Search the web using multiple engines (DuckDuckGo, Brave, Google, Bing). Results are deduplicated and ranked across engines for quality."
+    let description = "Search the web for external or current facts you do not already know. Multiple engines (DuckDuckGo, Brave, Google, Bing); results deduplicated and ranked."
     let parametersSchema = #"{"query": "string (required)", "max_results": "integer (optional, default 10)"}"#
     let requiresApproval = false
     let example = #"<tool_call>{"name":"web_search","arguments":{"query":"latest Swift concurrency features"}}</tool_call>"#
