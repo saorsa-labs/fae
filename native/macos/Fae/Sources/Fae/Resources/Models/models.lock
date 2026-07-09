@@ -302,6 +302,75 @@ hardware_profile = "llama.cpp sidecar ASR audio projector, cross-platform GPU/CP
 approved_by = "owner"
 created_at = "2026-06-18T00:00:00Z"
 
+# --- Parakeet ASR (sherpa-onnx, ADR scout-adr.md). NVIDIA parakeet-tdt-0.6b-v2
+# Int8 ONNX export, selected by asr.engine = "parakeet". The four artifacts live
+# under <data>/models/parakeet (FAE_PARAKEET_MODELS_DIR) and are fail-closed
+# verified (loader "sherpa-onnx", size + SHA-256) by locked_parakeet_path. The
+# Int8 ONNX export is a derivative of nvidia/parakeet-tdt-0.6b-v2 (CC-BY-4.0) by
+# csukuangfj; see THIRD_PARTY_LICENSES.md for the "indicate changes" notice.
+# The ONNX sha256 values are the Hugging Face LFS content oids (Git LFS hashes
+# the file content with SHA-256); tokens.txt is a plain git blob hashed locally.
+
+[[artifact]]
+id = "csukuangfj-parakeet-tdt-0-6b-v2-int8-encoder"
+role = "parakeet_encoder"
+loader = "sherpa-onnx"
+source_repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+source_revision = "1ab9323565ddb038682214b292f588070a538ce2"
+filename = "encoder.int8.onnx"
+size_bytes = 652184296
+sha256 = "a32b12d17bbbc309d0686fbbcc2987b5e9b8333a7da83fa6b089f0a2acd651ab"
+signature = ""
+license = "cc-by-4.0 (NVIDIA parakeet-tdt-0.6b-v2, Int8 ONNX export by csukuangfj)"
+hardware_profile = "sherpa-onnx offline transducer encoder, CPU on Apple Silicon / CUDA-optional on Linux"
+approved_by = "owner"
+created_at = "2026-07-08T00:00:00Z"
+
+[[artifact]]
+id = "csukuangfj-parakeet-tdt-0-6b-v2-int8-decoder"
+role = "parakeet_decoder"
+loader = "sherpa-onnx"
+source_repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+source_revision = "1ab9323565ddb038682214b292f588070a538ce2"
+filename = "decoder.int8.onnx"
+size_bytes = 7257753
+sha256 = "b6bb64963457237b900e496ee9994b59294526439fbcc1fecf705b31a15c6b4e"
+signature = ""
+license = "cc-by-4.0 (NVIDIA parakeet-tdt-0.6b-v2, Int8 ONNX export by csukuangfj)"
+hardware_profile = "sherpa-onnx offline transducer decoder, CPU on Apple Silicon / CUDA-optional on Linux"
+approved_by = "owner"
+created_at = "2026-07-08T00:00:00Z"
+
+[[artifact]]
+id = "csukuangfj-parakeet-tdt-0-6b-v2-int8-joiner"
+role = "parakeet_joiner"
+loader = "sherpa-onnx"
+source_repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+source_revision = "1ab9323565ddb038682214b292f588070a538ce2"
+filename = "joiner.int8.onnx"
+size_bytes = 1739080
+sha256 = "7946164367946e7f9f29a122407c3252b680dbae9a51343eb2488d057c3c43d2"
+signature = ""
+license = "cc-by-4.0 (NVIDIA parakeet-tdt-0.6b-v2, Int8 ONNX export by csukuangfj)"
+hardware_profile = "sherpa-onnx offline transducer joiner, CPU on Apple Silicon / CUDA-optional on Linux"
+approved_by = "owner"
+created_at = "2026-07-08T00:00:00Z"
+
+[[artifact]]
+id = "csukuangfj-parakeet-tdt-0-6b-v2-int8-tokens"
+role = "parakeet_tokens"
+loader = "sherpa-onnx"
+source_repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+source_revision = "1ab9323565ddb038682214b292f588070a538ce2"
+filename = "tokens.txt"
+size_bytes = 9384
+sha256 = "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d"
+signature = ""
+license = "cc-by-4.0 (NVIDIA parakeet-tdt-0.6b-v2, Int8 ONNX export by csukuangfj)"
+hardware_profile = "sherpa-onnx offline transducer token table"
+approved_by = "owner"
+created_at = "2026-07-08T00:00:00Z"
+
 # --- Piper TTS sidecar (Linux-only TTS lane, P5/D2-V5). macOS uses Kokoro/voice-tts
 # and never reads these. The `piper` binary entries share the `piper` filename across
 # arches (platform-aware resolution at the daemon, same convention as llama-server);

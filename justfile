@@ -478,6 +478,13 @@ _embed-llamacpp-runtime:
 install-kokoro-model:
     uv run --script scripts/install-kokoro-model.py
 
+# Download + size/SHA-256-verify (against models.lock) the four Parakeet ASR
+# artifacts (sherpa-onnx, ~661 MB) into the per-user <data>/models/parakeet —
+# the daemon's asr.engine = "parakeet" production default. Mirrors
+# install-kokoro-model; the llama.cpp -hf downloader is intentionally not used.
+install-parakeet-models:
+    uv run --script scripts/install-parakeet-models.py
+
 # (internal) Embed the bundled Kokoro-82M TTS model in the app bundle. Runs before
 # signing so the model files ship inside the signed app. DaemonLLMEngine points
 # FAE_TTS_MODEL_ID at this dir so voice-tts loads Kokoro locally (no HF 401).
