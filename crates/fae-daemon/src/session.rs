@@ -2063,8 +2063,14 @@ async fn audio_play(
 
 /// Default Kokoro voice when the client does not name one.
 const TTS_DEFAULT_VOICE: &str = "af_heart";
-/// Bound a single synthesis request — long text should be sentence-chunked
-/// by the client (matching the Swift TTS pipeline's behaviour).
+/// Bound a single synthesis request (in CHARACTERS) — long text should be
+/// sentence-chunked by the client (matching the Swift TTS pipeline's
+/// `String.prefix(2_000)`). Bounding by `chars().count()` — NOT `str::len()`
+/// (bytes) — keeps multibyte UTF-8 payloads under the cap from being rejected.
+/// Accepted residual: `chars()` counts Unicode SCALARS while Swift
+/// `String.count` counts grapheme CLUSTERS, so a ZWJ-emoji-heavy payload right
+/// at the 2_000 boundary can still be rejected here — acceptable for TTS
+/// content (real utterances sit far below the cap).
 const TTS_MAX_TEXT_CHARS: usize = 2_000;
 
 /// Parsed `{ text, voice?, speed? }` payload shared by `tts.synthesize` and
@@ -2081,7 +2087,7 @@ fn parse_tts_payload(cmd: &Command) -> Result<TtsPayload<'_>, &'static str> {
         .get("text")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
-    if text.trim().is_empty() || text.len() > TTS_MAX_TEXT_CHARS {
+    if text.trim().is_empty() || text.chars().count() > TTS_MAX_TEXT_CHARS {
         return Err("bad_request");
     }
     let voice = cmd

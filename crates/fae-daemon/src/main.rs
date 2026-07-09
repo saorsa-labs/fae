@@ -1516,15 +1516,48 @@ fn qwen3_asr_locked_artifacts(
     ))
 }
 
+/// Trusted, in-process lock-path override set ONLY by the `--verify-runtime
+/// --models-lock` CLI flag. It is never reachable from the process
+/// environment — so a launchd/parent-process injection of
+/// `FAE_MODELS_LOCK_PATH` cannot redirect verification at a crafted lock
+/// matching a swapped model. A `RwLock<Option<PathBuf>>` (not `OnceLock`) is
+/// deliberate: the test suite can reset it in `clear_fae_env()`, whereas a
+/// process-global `OnceLock` can never be cleared — which would let the first
+/// `--models-lock` test silently corrupt every later models-lock test.
+static VERIFY_CLI_LOCK_PATH: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
 fn load_installed_models_lock() -> Result<ModelsLock, String> {
-    // `FAE_MODELS_LOCK_PATH` lets the release-CI `--verify-runtime` gate point the
-    // SAME verification at a specific lock (e.g. the re-signed bundle's copy)
-    // without a separate code path; unset in normal operation → installed lock.
-    let path = match std::env::var_os("FAE_MODELS_LOCK_PATH") {
-        Some(override_path) => PathBuf::from(override_path),
-        None => data_directory()
-            .map_err(|error| error.to_string())?
-            .join("models.lock"),
+    // Resolution order:
+    // 1. Trusted CLI override (`--verify-runtime --models-lock`) — in-process
+    //    only; the release-CI verifier's legitimate way to point the SAME
+    //    checks at a specific lock (e.g. the re-signed bundle's copy).
+    // 2. `FAE_MODELS_LOCK_PATH` env override — DEV ONLY, mirroring the
+    //    `FAE_MODELS_LOCK=off` gate. A production build never honors an
+    //    externally-injected lock path.
+    // 3. The installed `<data>/models.lock` (normal operation).
+    let dev = dev_mode();
+    let cli_override = VERIFY_CLI_LOCK_PATH
+        .read()
+        // A poisoned lock means a panic held it mid-write; fail safe to "no
+        // override" (→ installed lock) instead of propagating the panic.
+        .map(|guard| guard.clone())
+        .unwrap_or(None);
+    let path: PathBuf = if let Some(cli_path) = cli_override {
+        cli_path
+    } else {
+        let env_override = std::env::var_os("FAE_MODELS_LOCK_PATH");
+        if env_override.is_some() && !dev {
+            eprintln!(
+                "fae-daemon: WARNING: ignoring FAE_MODELS_LOCK_PATH in production \
+                 (set FAE_DEV=1 to honor it); using installed models.lock"
+            );
+        }
+        match (env_override, dev) {
+            (Some(override_path), true) => PathBuf::from(override_path),
+            _ => data_directory()
+                .map_err(|error| error.to_string())?
+                .join("models.lock"),
+        }
     };
     ModelsLock::load(&path).map_err(|error| error.to_string())
 }
@@ -1654,7 +1687,25 @@ fn verify_runtime_cli(flags: &[String]) -> Result<(), (&'static str, String)> {
                 let value = iter
                     .next()
                     .ok_or(("verify_runtime", "--models-lock requires a path".to_owned()))?;
-                std::env::set_var("FAE_MODELS_LOCK_PATH", value);
+                // Route through the trusted in-process channel (not the env
+                // var) so `--models-lock` works in release-CI without FAE_DEV,
+                // while the external `FAE_MODELS_LOCK_PATH` env var stays
+                // dev-gated. First value wins; passing the flag twice is an
+                // operator error surfaced loudly.
+                match VERIFY_CLI_LOCK_PATH.write() {
+                    Ok(mut guard) => {
+                        if guard.is_some() {
+                            return Err(("verify_runtime", "--models-lock already set".to_owned()));
+                        }
+                        *guard = Some(PathBuf::from(value.as_str()));
+                    }
+                    Err(_) => {
+                        return Err((
+                            "verify_runtime",
+                            "--models-lock: configuration lock poisoned".to_owned(),
+                        ));
+                    }
+                }
             }
             other => {
                 return Err((
@@ -2536,10 +2587,17 @@ mod tests {
             "FAE_LLAMA_SHARED_SERVER_URL",
             "FAE_LLAMA_SHARED_SERVER_TIMEOUT_MS",
             "FAE_MODELS_LOCK",
+            "FAE_MODELS_LOCK_PATH",
             "FAE_AUDIO_FALLBACK",
             "FAE_ASR_LLAMA_CACHE_DIR",
         ] {
             std::env::remove_var(key);
+        }
+        // Reset the trusted CLI lock-path override so a `--models-lock` test
+        // cannot leak into later models-lock tests (the RwLock is resettable,
+        // unlike a OnceLock).
+        if let Ok(mut guard) = VERIFY_CLI_LOCK_PATH.write() {
+            *guard = None;
         }
     }
 
@@ -2739,6 +2797,66 @@ created_at = "test"
         std::env::set_var("FAE_DEV", "1");
         validate_models_lock_escape().unwrap();
         verify_llama_server_binary(&bin).unwrap();
+    }
+
+    #[test]
+    fn models_lock_path_env_override_is_dev_only() {
+        // Security gate (#1): a production build must load the INSTALLED lock
+        // even when FAE_MODELS_LOCK_PATH is injected (launchd/parent), so a
+        // crafted lock cannot redirect verification at a swapped model. Only
+        // FAE_DEV honors the env override — mirroring FAE_MODELS_LOCK=off.
+        let _g = _lock_env();
+        clear_fae_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        // Installed lock carries "installed-marker"; a crafted override file
+        // carries "override-marker".
+        write_test_models_lock(
+            dir.path(),
+            &artifact_toml(
+                "installed-marker",
+                "asr_model",
+                "installed.gguf",
+                1,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        );
+        let crafted = dir.path().join("crafted-override.lock");
+        std::fs::write(
+            &crafted,
+            format!(
+                "schema_version = 1\ncreated_at = \"test\"\n{}",
+                artifact_toml(
+                    "override-marker",
+                    "asr_model",
+                    "override.gguf",
+                    2,
+                    "1111111111111111111111111111111111111111111111111111111111111111",
+                )
+            ),
+        )
+        .unwrap();
+
+        // PRODUCTION (no FAE_DEV): the injected override is ignored.
+        std::env::set_var("FAE_MODELS_LOCK_PATH", &crafted);
+        let loaded = load_installed_models_lock().expect("installed lock loads");
+        assert!(
+            loaded.artifacts.iter().any(|a| a.id == "installed-marker"),
+            "production must ignore an injected FAE_MODELS_LOCK_PATH"
+        );
+        assert!(
+            !loaded.artifacts.iter().any(|a| a.id == "override-marker"),
+            "production must not honor an externally-injected lock path"
+        );
+
+        // DEV (FAE_DEV=1): the override IS honored — the escape hatch.
+        std::env::set_var("FAE_DEV", "1");
+        let loaded = load_installed_models_lock().expect("override lock loads in dev");
+        assert!(
+            loaded.artifacts.iter().any(|a| a.id == "override-marker"),
+            "dev mode must honor FAE_MODELS_LOCK_PATH"
+        );
     }
 
     #[test]
