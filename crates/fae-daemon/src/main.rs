@@ -1517,12 +1517,14 @@ fn qwen3_asr_locked_artifacts(
 }
 
 /// Trusted, in-process lock-path override set ONLY by the `--verify-runtime
-/// --models-lock` CLI flag. `OnceLock` (not `LazyLock`) is deliberate: the
-/// value is runtime input from the flag, not a fixed initializer, and it is
-/// never reachable from the process environment — so a launchd/parent-process
-/// injection of `FAE_MODELS_LOCK_PATH` cannot redirect verification at a
-/// crafted lock matching a swapped model.
-static VERIFY_CLI_LOCK_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// --models-lock` CLI flag. It is never reachable from the process
+/// environment — so a launchd/parent-process injection of
+/// `FAE_MODELS_LOCK_PATH` cannot redirect verification at a crafted lock
+/// matching a swapped model. A `RwLock<Option<PathBuf>>` (not `OnceLock`) is
+/// deliberate: the test suite can reset it in `clear_fae_env()`, whereas a
+/// process-global `OnceLock` can never be cleared — which would let the first
+/// `--models-lock` test silently corrupt every later models-lock test.
+static VERIFY_CLI_LOCK_PATH: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
 
 fn load_installed_models_lock() -> Result<ModelsLock, String> {
     // Resolution order:
@@ -1534,8 +1536,14 @@ fn load_installed_models_lock() -> Result<ModelsLock, String> {
     //    externally-injected lock path.
     // 3. The installed `<data>/models.lock` (normal operation).
     let dev = dev_mode();
-    let path: PathBuf = if let Some(cli_path) = VERIFY_CLI_LOCK_PATH.get() {
-        cli_path.clone()
+    let cli_override = VERIFY_CLI_LOCK_PATH
+        .read()
+        // A poisoned lock means a panic held it mid-write; fail safe to "no
+        // override" (→ installed lock) instead of propagating the panic.
+        .map(|guard| guard.clone())
+        .unwrap_or(None);
+    let path: PathBuf = if let Some(cli_path) = cli_override {
+        cli_path
     } else {
         let env_override = std::env::var_os("FAE_MODELS_LOCK_PATH");
         if env_override.is_some() && !dev {
@@ -1684,11 +1692,19 @@ fn verify_runtime_cli(flags: &[String]) -> Result<(), (&'static str, String)> {
                 // while the external `FAE_MODELS_LOCK_PATH` env var stays
                 // dev-gated. First value wins; passing the flag twice is an
                 // operator error surfaced loudly.
-                if VERIFY_CLI_LOCK_PATH
-                    .set(PathBuf::from(value.as_str()))
-                    .is_err()
-                {
-                    return Err(("verify_runtime", "--models-lock already set".to_owned()));
+                match VERIFY_CLI_LOCK_PATH.write() {
+                    Ok(mut guard) => {
+                        if guard.is_some() {
+                            return Err(("verify_runtime", "--models-lock already set".to_owned()));
+                        }
+                        *guard = Some(PathBuf::from(value.as_str()));
+                    }
+                    Err(_) => {
+                        return Err((
+                            "verify_runtime",
+                            "--models-lock: configuration lock poisoned".to_owned(),
+                        ));
+                    }
                 }
             }
             other => {
@@ -2576,6 +2592,12 @@ mod tests {
             "FAE_ASR_LLAMA_CACHE_DIR",
         ] {
             std::env::remove_var(key);
+        }
+        // Reset the trusted CLI lock-path override so a `--models-lock` test
+        // cannot leak into later models-lock tests (the RwLock is resettable,
+        // unlike a OnceLock).
+        if let Ok(mut guard) = VERIFY_CLI_LOCK_PATH.write() {
+            *guard = None;
         }
     }
 

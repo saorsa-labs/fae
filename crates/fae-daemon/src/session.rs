@@ -2067,6 +2067,10 @@ const TTS_DEFAULT_VOICE: &str = "af_heart";
 /// sentence-chunked by the client (matching the Swift TTS pipeline's
 /// `String.prefix(2_000)`). Bounding by `chars().count()` — NOT `str::len()`
 /// (bytes) — keeps multibyte UTF-8 payloads under the cap from being rejected.
+/// Accepted residual: `chars()` counts Unicode SCALARS while Swift
+/// `String.count` counts grapheme CLUSTERS, so a ZWJ-emoji-heavy payload right
+/// at the 2_000 boundary can still be rejected here — acceptable for TTS
+/// content (real utterances sit far below the cap).
 const TTS_MAX_TEXT_CHARS: usize = 2_000;
 
 /// Parsed `{ text, voice?, speed? }` payload shared by `tts.synthesize` and
