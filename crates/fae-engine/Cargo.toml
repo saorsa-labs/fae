@@ -32,7 +32,18 @@ tokio = { workspace = true }
 # Apple Silicon, onnxruntime's CoreML EP falls back to CPU for Parakeet's
 # FastConformer-transducer ops (sherpa-onnx #152) — Parakeet runs CPU-bound,
 # which is acceptable for short-utterance fallback ASR.
-sherpa-onnx = "1.13.4"
+sherpa-onnx = { version = "1.13.4", optional = true }
+
+[features]
+# Parakeet ASR (sherpa-onnx) is a DEFAULT-ON cargo feature: the daemon ships with
+# local ASR by default, but can be built WITHOUT it (`--no-default-features`) for
+# targets where sherpa-onnx's prebuilt C++ static lib can't link — notably the
+# cargo-zigbuild packaging-proof, whose hermetic zig sysroot lacks GNU libstdc++
+# (glibc/libc++ mismatch). Native ci-linux (both arches) + macOS build with it ON.
+# `Loader::SherpaOnnx` stays in the models.lock enum regardless so the lock still
+# parses when the feature is off (the entries are just unused).
+default = ["parakeet"]
+parakeet = ["dep:sherpa-onnx"]
 
 # mistral.rs is a hard dependency (owner decision — not feature-gated). Accel is
 # target-conditional: Metal on Apple Silicon, plain candle (CPU/CUDA) elsewhere.

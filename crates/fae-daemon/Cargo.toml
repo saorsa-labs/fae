@@ -18,11 +18,20 @@ path = "src/main.rs"
 name = "mock_mcp_server"
 path = "src/bin/mock_mcp_server.rs"
 
+[features]
+# Parakeet ASR is a default-on feature (forwards to fae-engine's `parakeet`).
+# Build WITHOUT it (`--no-default-features`) for the cargo-zigbuild packaging
+# lane, whose hermetic zig sysroot can't link sherpa-onnx's GNU-libstdc++ static
+# lib. When the feature is OFF and a caller requests parakeet, the daemon prints
+# a LOUD "not compiled into this build" message and falls back to Gemma.
+default = ["parakeet"]
+parakeet = ["fae-engine/parakeet"]
+
 [dependencies]
 fae-audio = { path = "../fae-audio" }
 fae-control-plane = { path = "../fae-control-plane" }
 fae-envelope-gate = { path = "../fae-envelope-gate" }
-fae-engine = { path = "../fae-engine" }
+fae-engine = { path = "../fae-engine", default-features = false }
 fae-acp = { path = "../fae-acp" }
 fae-pii-membrane = { path = "../fae-pii-membrane" }
 # ADR-013 Vision A (A1): fluers as the daemon tool/skill execution substrate.

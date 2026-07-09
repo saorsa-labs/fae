@@ -26,6 +26,7 @@ mod mistralrs_adapter;
 mod mock;
 mod models_lock;
 mod openrouter_adapter;
+#[cfg(feature = "parakeet")]
 mod parakeet_asr;
 #[cfg(not(target_os = "macos"))]
 mod piper_tts_adapter;
@@ -44,6 +45,7 @@ pub use models_lock::{Artifact, Loader, LockError, ModelsLock, SUPPORTED_SCHEMA_
 pub use openrouter_adapter::{
     OpenRouterAdapter, OpenRouterConfig, DEFAULT_OPENROUTER_CONTEXT_WINDOW,
 };
+#[cfg(feature = "parakeet")]
 pub use parakeet_asr::ParakeetAsrAdapter;
 #[cfg(not(target_os = "macos"))]
 pub use piper_tts_adapter::PiperTtsAdapter;

@@ -154,9 +154,15 @@ jobs:
         working-directory: crates
         run: cargo build -p fae-daemon --all-features
 
-      - name: P1 deferred proof — zigbuild fae-daemon for Linux x86_64
+      # zigbuild packaging-proof: build WITHOUT the `parakeet` feature. zig's
+      # hermetic cross-sysroot lacks GNU libstdc++ (and targets older glibc), so
+      # it cannot link sherpa-onnx's prebuilt C++ static lib; `parakeet` is a
+      # default-on cargo feature, excluded here via --no-default-features. Native
+      # ci-linux (both arches) + macOS build WITH it. The packaged/zigbuilt Linux
+      # daemon temporarily ships without Parakeet (gap; see PR description).
+      - name: P1 deferred proof — zigbuild fae-daemon for Linux x86_64 (no parakeet feature)
         working-directory: crates
-        run: cargo zigbuild --target x86_64-unknown-linux-gnu -p fae-daemon --all-features
+        run: cargo zigbuild --target x86_64-unknown-linux-gnu -p fae-daemon --no-default-features
 
       - name: Verify zigbuilt binary runtime deps (ldd)
         working-directory: crates
@@ -166,11 +172,11 @@ jobs:
           test -x "$BIN"
           echo "=== ldd $BIN ==="
           ldd "$BIN" | tee /tmp/ldd.txt
-          # sherpa-onnx is STATIC-linked, so the ONLY new runtime dep it may add
-          # is libstdc++.so.6 (universally present on Linux). Fail if it pulled in
-          # onnxruntime/sherpa shared libs (static mode broke) or anything else.
+          # This build excludes the `parakeet` feature (no sherpa-onnx), so it
+          # must NOT pull in sherpa/onnxruntime shared runtime deps. Fail if any
+          # leaked in (a C++ dep slipped past the feature gate).
           if grep -Ei 'lib(onnxruntime|sherpa|kaldi|openfst)' /tmp/ldd.txt; then
-            echo "ERROR: sherpa-onnx introduced shared runtime deps — expected static linking" >&2
+            echo "ERROR: no-parakeet zigbuild pulled in sherpa/onnxruntime shared deps" >&2
             exit 1
           fi
-          echo "runtime deps OK: libstdc++.so.6 (the only C++ dep) is universally present on Linux"
+          echo "runtime deps OK: no sherpa/onnxruntime deps in the no-parakeet zigbuild"

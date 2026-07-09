@@ -1108,11 +1108,19 @@ const QWEN3_ASR_MMPROJ_ARTIFACT_ID: &str = "ggml-org-qwen3-asr-1-7b-mmproj-q8-0-
 // (encoder/decoder/joiner Int8 ONNX + tokens) live under `models/parakeet` and
 // are fail-closed verified (loader `"sherpa-onnx"`, size + SHA-256) by
 // `locked_parakeet_path`. License CC-BY-4.0 (see THIRD_PARTY_LICENSES.md).
+// All parakeet-only code is gated on the `parakeet` cargo feature (default on);
+// without it these are absent and parakeet requests fall back to Gemma loudly.
+#[cfg(feature = "parakeet")]
 const PARAKEET_ASR_REPO: &str = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+#[cfg(feature = "parakeet")]
 const PARAKEET_ASR_REVISION: &str = "1ab9323565ddb038682214b292f588070a538ce2";
+#[cfg(feature = "parakeet")]
 const PARAKEET_ENCODER_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-encoder";
+#[cfg(feature = "parakeet")]
 const PARAKEET_DECODER_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-decoder";
+#[cfg(feature = "parakeet")]
 const PARAKEET_JOINER_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-joiner";
+#[cfg(feature = "parakeet")]
 const PARAKEET_TOKENS_ID: &str = "csukuangfj-parakeet-tdt-0-6b-v2-int8-tokens";
 const LLAMACPP_RUNTIME_RELEASE: &str = "b9692";
 /// `models.lock` artifact id for the bundled `llama-server` binary, per target.
@@ -1234,6 +1242,7 @@ fn build_asr_fallback_engine() -> Option<Arc<dyn ProviderAdapter>> {
         return None;
     }
     match asr_engine_choice() {
+        #[cfg(feature = "parakeet")]
         AsrEngine::Parakeet => match build_parakeet_asr_engine() {
             Some(adapter) => {
                 eprintln!(
@@ -1321,6 +1330,7 @@ fn build_qwen3_asr_engine() -> Option<Arc<dyn ProviderAdapter>> {
 /// ONNX). All four artifacts are fail-closed verified against `models.lock`
 /// (loader `"sherpa-onnx"`, size + SHA-256) before the recognizer is created.
 /// Returns `None` on any failure so the caller can fall back to Gemma.
+#[cfg(feature = "parakeet")]
 fn build_parakeet_asr_engine() -> Option<Arc<dyn ProviderAdapter>> {
     let models_dir = parakeet_models_dir();
     let lock = match load_installed_models_lock() {
@@ -1375,6 +1385,7 @@ fn build_parakeet_asr_engine() -> Option<Arc<dyn ProviderAdapter>> {
 /// loader `"sherpa-onnx"` and the Parakeet source repo/revision, then checks the
 /// on-disk file's size + SHA-256. A missing/mismatched file is a hard error
 /// (refuse to load) — the caller surfaces it as a loud Gemma fallback.
+#[cfg(feature = "parakeet")]
 fn locked_parakeet_path(
     lock: &ModelsLock,
     id: &str,
@@ -1414,6 +1425,7 @@ fn locked_parakeet_path(
 
 /// The on-disk directory holding the four Parakeet artifacts. Overridable via
 /// `FAE_PARAKEET_MODELS_DIR`; defaults to `<data>/models/parakeet`.
+#[cfg(feature = "parakeet")]
 fn parakeet_models_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("FAE_PARAKEET_MODELS_DIR") {
         return PathBuf::from(dir);
@@ -1428,6 +1440,7 @@ fn parakeet_models_dir() -> PathBuf {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AsrEngine {
     Gemma,
+    #[cfg(feature = "parakeet")]
     Parakeet,
 }
 
@@ -1437,11 +1450,27 @@ fn asr_engine_choice() -> AsrEngine {
         .filter(|value| !value.trim().is_empty())
         .or_else(read_config_asr_engine)
         .unwrap_or_else(|| "gemma".to_owned());
-    if raw.trim().eq_ignore_ascii_case("parakeet") {
-        AsrEngine::Parakeet
-    } else {
-        AsrEngine::Gemma
+    let requested_parakeet = raw.trim().eq_ignore_ascii_case("parakeet");
+    #[cfg(feature = "parakeet")]
+    {
+        if requested_parakeet {
+            return AsrEngine::Parakeet;
+        }
     }
+    #[cfg(not(feature = "parakeet"))]
+    {
+        // Parakeet was requested but this build was compiled WITHOUT the
+        // `parakeet` feature (e.g. the zigbuild packaging lane). Never crash,
+        // never silent: say so loudly and fall through to the Gemma lane below.
+        if requested_parakeet {
+            eprintln!(
+                "fae-daemon: Parakeet ASR not compiled into this build — built without the \
+                 `parakeet` feature; falling back to the Gemma (Qwen3-ASR) lane. Rebuild with \
+                 `--features parakeet` (on by default) to enable it."
+            );
+        }
+    }
+    AsrEngine::Gemma
 }
 
 /// Read `[asr] engine` from the data-dir `config.toml`. `None` when the file is
