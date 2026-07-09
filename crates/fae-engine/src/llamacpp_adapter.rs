@@ -112,11 +112,7 @@ pub fn kill_all_registered_sidecars() {
 /// Is `pid` still alive? `kill(pid, 0)`-equivalent via `/bin/kill -0`. Best-effort:
 /// on any error we assume alive (so we over-kill, never under-kill).
 fn process_alive(pid: u32) -> bool {
-    let kill_bin = std::env::var("FAE_KILL_BIN")
-        .ok()
-        .filter(|b| !b.is_empty())
-        .unwrap_or_else(|| "/bin/kill".to_owned());
-    let status = std::process::Command::new(kill_bin)
+    let status = std::process::Command::new(kill_bin())
         .arg("-0")
         .arg(pid.to_string())
         .stdout(std::process::Stdio::null())
@@ -124,6 +120,200 @@ fn process_alive(pid: u32) -> bool {
         .status();
     // `kill -0` exits 0 if the process exists, non-zero otherwise.
     matches!(status, Ok(s) if s.success())
+}
+
+// ── Facet B: startup port takeover (reclaim a stale sidecar orphan) ───────────
+
+/// Resolve the configured `/bin/kill` binary (`FAE_KILL_BIN` override; default
+/// `/bin/kill`). Shared by the reclaim + reaper paths.
+fn kill_bin() -> String {
+    std::env::var("FAE_KILL_BIN")
+        .ok()
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "/bin/kill".to_owned())
+}
+
+/// Best-effort `-<signal>` to a positive pid. Never panics.
+fn send_signal(pid: u32, signal: &str) {
+    let _ = std::process::Command::new(kill_bin())
+        .arg(format!("-{signal}"))
+        .arg(pid.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// Full command line of `pid` (`ps -o command=`), if available. Confirms a stale
+/// pidfile entry is still OUR `llama-server` — a recycled PID at an unrelated
+/// process must never be killed.
+fn process_command_line(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p"])
+        .arg(pid.to_string())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// Best-effort port → listener PID via `lsof`. `None` when `lsof` is absent or the
+/// port has no listener. Cross-platform best-effort (macOS always; Linux when
+/// `lsof` is installed). Secondary reclaim signal — the primary is the pidfile.
+fn port_listener_pid(port: u16) -> Option<u32> {
+    let out = std::process::Command::new("lsof")
+        .args(["-nP", "-sTCP:LISTEN", "-t"])
+        .arg(format!("-iTCP:{port}"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok())
+}
+
+/// `true` while `127.0.0.1:port` accepts TCP connections (something is listening).
+/// Async, no subprocess. Drives the wait-for-port-free step of reclaim.
+async fn port_accepts_connection(port: u16) -> bool {
+    let addr = format!("127.0.0.1:{port}");
+    tokio::net::TcpStream::connect(addr).await.is_ok()
+}
+
+/// Does `cmd` (a process command line) belong to OUR sidecar? Requires the FULL
+/// path of the binary we are about to spawn — as-configured or its canonicalized
+/// (symlink-resolved) form — to appear in the command line. A bare `llama-server`
+/// basename is NEVER sufficient: a user's own llama-server instance would
+/// otherwise be matched and killed. When the path can't be confirmed as ours
+/// (unresolvable / symlink-ambiguous), this returns `false` and the caller fails
+/// loud rather than risk killing a stranger.
+fn cmdline_is_our_sidecar(cmd: &str, our_binary: &str) -> bool {
+    if !our_binary.is_empty() && cmd.contains(our_binary) {
+        return true;
+    }
+    if let Ok(canonical) = std::fs::canonicalize(our_binary) {
+        if let Some(resolved) = canonical.to_str() {
+            if cmd.contains(resolved) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Read a pidfile's PID, if present + parseable.
+fn read_pidfile(path: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+}
+
+/// Write a pidfile at mode `0600` (best-effort; its parent is created if needed).
+/// `0600` owner bits are immune to umask, so the sidecar PID is never
+/// world-readable — matching the private run dir's secret-file discipline. A
+/// missing pidfile only weakens reclaim to the `lsof` fallback.
+fn write_pidfile(path: &std::path::Path, pid: u32) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+        {
+            let _ = writeln!(file, "{pid}");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(path, pid.to_string());
+    }
+}
+
+/// Resolve the pidfile path for a sidecar on `port` under the Fae run dir.
+fn sidecar_pidfile(
+    pidfile_root: Option<&std::path::Path>,
+    port: u16,
+) -> Option<std::path::PathBuf> {
+    pidfile_root.map(|root| root.join(format!("llama-server.{port}.pid")))
+}
+
+/// Reclaim `port` if it is squatted by a stale `llama-server` from a prior
+/// unclean daemon death (SIGKILL / crash / jetsam). Called by
+/// [`LlamaServerHandle::spawn`] BEFORE launching a fresh sidecar, so the new
+/// child never collides with an orphan.
+///
+/// Identification — positively OUR orphan, never a stranger: the primary signal
+/// is the Fae-owned pidfile written at the previous spawn; `lsof` is a secondary
+/// fallback when no pidfile exists. Either way the candidate PID must be alive
+/// AND its command line must contain the FULL path of OUR configured binary
+/// ([`cmdline_is_our_sidecar`]: as-configured or canonicalized — a bare
+/// `llama-server` basename is never sufficient, so a user's own llama-server is
+/// never killed). If the path can't be confirmed as ours, nothing is killed and
+/// the port-free gate below fails loud.
+///
+/// Kill sequence (meta-orchestrator gate condition): `SIGTERM` → ~2 s grace →
+/// `SIGKILL`, then wait for the port to go free WITH a timeout. On timeout — or
+/// when the port is held by a process we refuse to kill — this returns `Err` and
+/// the caller MUST fail loud; it NEVER spawns anyway (a silent two-server
+/// collision would be worse than a loud launch failure).
+async fn reclaim_port_if_held(
+    port: u16,
+    pidfile: Option<&std::path::Path>,
+    our_binary: &str,
+) -> Result<(), EngineError> {
+    let candidate = pidfile
+        .and_then(read_pidfile)
+        .or_else(|| port_listener_pid(port));
+    if let Some(pid) = candidate {
+        if process_alive(pid) {
+            let cmd = process_command_line(pid).unwrap_or_default();
+            if cmdline_is_our_sidecar(&cmd, our_binary) {
+                // Confirmed stale sidecar: SIGTERM → ~2 s grace → SIGKILL.
+                send_signal(pid, "TERM");
+                let term_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while std::time::Instant::now() < term_deadline {
+                    if !process_alive(pid) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                if process_alive(pid) {
+                    send_signal(pid, "KILL");
+                }
+            }
+            // cmdline mismatch ⇒ recycled PID (not ours): do NOT kill a stranger.
+            // Fall through to the port-free gate, which fails loud if still held.
+        }
+    }
+    // Wait for the port to go free WITH a timeout. Never bind on a held port.
+    let free_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if !port_accepts_connection(port).await {
+            if let Some(path) = pidfile {
+                let _ = std::fs::remove_file(path);
+            }
+            return Ok(());
+        }
+        if std::time::Instant::now() >= free_deadline {
+            return Err(EngineError::Load(format!(
+                "port {port} is still held after reclaim; refusing to spawn a sidecar \
+                 that would collide — free the port (or kill the holder) and relaunch"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 /// A pinned remote artifact. Downloaded on request into Fae-owned storage and
@@ -181,6 +371,12 @@ pub struct LlamaServerConfig {
     pub ctx_size: u32,
     /// GPU layers to offload (`999` = all on Metal/CUDA/Vulkan).
     pub ngl: u32,
+    /// Root directory for the sidecar pidfile (`<root>/llama-server.<port>.pid`),
+    /// used by [`LlamaServerHandle::spawn`] to reclaim a stale sidecar left by a
+    /// prior unclean daemon death (Facet B — the crash-loop gate-closer). `None`
+    /// disables pidfile-based reclaim (the `lsof` fallback still runs); the daemon
+    /// sets this to its private run dir.
+    pub pidfile_root: Option<std::path::PathBuf>,
 }
 
 impl LlamaServerConfig {
@@ -506,6 +702,9 @@ fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
 pub struct LlamaServerHandle {
     child: std::process::Child,
     base_url: String,
+    /// Pidfile recording this sidecar's PID; removed on clean shutdown (Drop) so a
+    /// surviving pidfile unambiguously means an orphan from an unclean death.
+    pidfile: Option<std::path::PathBuf>,
 }
 
 impl LlamaServerHandle {
@@ -515,9 +714,24 @@ impl LlamaServerHandle {
         timeout: std::time::Duration,
     ) -> Result<LlamaServerHandle, EngineError> {
         let materialized = config.materialized()?;
-        let base_url = format!("http://127.0.0.1:{}", materialized.port);
+        let port = materialized.port;
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let pidfile = sidecar_pidfile(config.pidfile_root.as_deref(), port);
+        // Facet B (mandatory — the crash-loop gate-closer): reclaim any stale
+        // sidecar squatting our port BEFORE we bind, so an unclean daemon death
+        // (SIGKILL/crash/jetsam) cannot crash-loop the next launch. Returns Err
+        // (→ no spawn) when the port stays held — we NEVER bind on a squatted port.
+        reclaim_port_if_held(port, pidfile.as_deref(), &materialized.binary).await?;
         let mut command = std::process::Command::new(&materialized.binary);
         command.args(materialized.args());
+        // Facet A (recommended hardening): isolate the sidecar in its own process
+        // group so it is not a member of the daemon's group. Group-kill of any
+        // grandchildren is intentionally NOT performed here — see the Drop note.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         // Inherit stdout/stderr so daemon/app logs show llama.cpp download,
         // load, and token/runtime diagnostics. This evidence is required for
         // live validation and makes first-run HF downloads debuggable.
@@ -531,21 +745,30 @@ impl LlamaServerHandle {
         })?;
         let pid = child.id();
         register_sidecar(pid);
-        let mut handle = LlamaServerHandle { child, base_url };
-        handle.await_ready(timeout).await?;
+        if let Some(ref pf) = pidfile {
+            write_pidfile(pf, pid);
+        }
+        let mut handle = LlamaServerHandle {
+            child,
+            base_url,
+            pidfile,
+        };
+        handle.await_ready(timeout, &materialized.alias).await?;
         Ok(handle)
     }
 
-    async fn await_ready(&mut self, timeout: std::time::Duration) -> Result<(), EngineError> {
+    async fn await_ready(
+        &mut self,
+        timeout: std::time::Duration,
+        expected_alias: &str,
+    ) -> Result<(), EngineError> {
         let client = reqwest::Client::new();
         let health = format!("{}/health", self.base_url);
+        let models = format!("{}/v1/models", self.base_url);
         let deadline = std::time::Instant::now() + timeout;
         loop {
             // Fail loud if the child exited during startup (bad GGUF, OOM, bind
             // failure) instead of polling a dead server for the full timeout.
-            // Orphan-identity gap: a stale llama-server already bound to the
-            // port could answer /health as "ready" — verifying server identity
-            // (e.g. GET /props alias match) is a follow-up left unaddressed here.
             match self.child.try_wait() {
                 Ok(Some(status)) => {
                     return Err(EngineError::Load(format!(
@@ -561,7 +784,34 @@ impl LlamaServerHandle {
             }
             if let Ok(response) = client.get(&health).send().await {
                 if response.status().is_success() {
-                    return Ok(());
+                    // Identity check (gap fix): confirm this is OUR fresh server —
+                    // not a stale orphan still answering /health on the reclaimed
+                    // port. A healthy fresh llama-server exposes /v1/models with
+                    // data[0].id == the configured --alias. A non-empty mismatch is
+                    // a stale sidecar (fail loud); an empty id means the model list
+                    // is not populated yet (keep polling).
+                    if let Ok(models_resp) = client.get(&models).send().await {
+                        if models_resp.status().is_success() {
+                            if let Ok(json) = models_resp.json::<serde_json::Value>().await {
+                                let id = json
+                                    .get("data")
+                                    .and_then(|d| d.get(0))
+                                    .and_then(|m| m.get("id"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                if !id.is_empty() && id != expected_alias {
+                                    return Err(EngineError::Load(format!(
+                                        "port answered /health but serves model id {id:?} \
+                                         (expected {expected_alias:?}); a stale llama-server may \
+                                         be squatting the port"
+                                    )));
+                                }
+                                if id == expected_alias {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if std::time::Instant::now() >= deadline {
@@ -576,11 +826,35 @@ impl LlamaServerHandle {
 
 impl Drop for LlamaServerHandle {
     fn drop(&mut self) {
-        // Best-effort: never panic in Drop. Kill then reap so we don't leave a
-        // zombie or an orphaned model holding GPU memory.
-        unregister_sidecar(self.child.id());
-        let _ = self.child.kill();
+        // Best-effort; never panic. Graceful: SIGTERM → brief grace → SIGKILL the
+        // direct child, then reap so we leave neither a zombie nor an orphaned
+        // model holding GPU memory. Then remove the pidfile: a surviving pidfile
+        // must unambiguously mean an orphan from an UNCLEAN death (SIGKILL skips
+        // Drop), which is what reclaim keys off on the next launch.
+        //
+        // The sidecar runs in its own process group via spawn's `process_group(0)`;
+        // killing the direct child removes the single-process llama-server. Killing
+        // the whole GROUP for grandchildren would need `libc::kill(-pgid)` — blocked
+        // by `#![forbid(unsafe_code)]` and the macOS `/bin/kill -PGID` quirk; the
+        // sidecar is single-process so there are none, and Facet B reclaims any
+        // survivor on the next launch regardless.
+        let pid = self.child.id();
+        unregister_sidecar(pid);
+        send_signal(pid, "TERM");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1000);
+        while std::time::Instant::now() < deadline {
+            if !process_alive(pid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if process_alive(pid) {
+            let _ = self.child.kill();
+        }
         let _ = self.child.wait();
+        if let Some(ref pidfile) = self.pidfile {
+            let _ = std::fs::remove_file(pidfile);
+        }
     }
 }
 
@@ -1297,6 +1571,7 @@ mod tests {
             port: 18080,
             ctx_size: 8192,
             ngl: 999,
+            pidfile_root: None,
         };
         let args = config.args();
         assert!(!args.iter().any(|arg| arg == "-hf"));
@@ -1333,6 +1608,7 @@ mod tests {
             port: 18080,
             ctx_size: 8192,
             ngl: 999,
+            pidfile_root: None,
         };
         let args = config.args();
         assert!(args.windows(2).any(|w| w == ["-m", "/tmp/model.gguf"]));
@@ -1377,6 +1653,7 @@ mod tests {
             port: 18080,
             ctx_size: 8192,
             ngl: 999,
+            pidfile_root: None,
         }
     }
 
@@ -1481,6 +1758,7 @@ mod tests {
             port: 1,
             ctx_size: 8192,
             ngl: 999,
+            pidfile_root: None,
         };
         let adapter =
             LazyLlamaServerAdapter::new(config, "gemma-4", std::time::Duration::from_millis(1));
@@ -1602,6 +1880,7 @@ mod tests {
             port: 1,
             ctx_size: 8192,
             ngl: 999,
+            pidfile_root: None,
         }
     }
 
