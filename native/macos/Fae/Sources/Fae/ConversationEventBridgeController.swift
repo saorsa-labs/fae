@@ -557,9 +557,24 @@ final class ConversationEventBridgeController: ObservableObject {
         switch event {
         case "peer.message":
             let text = userInfo["text"] as? String ?? ""
+            let flagged = userInfo["flagged"] as? Bool ?? false
             let attributed = "[\(senderShort)\u{2026} via x0x] \(text)"
             subtitleState?.showToolMessage(attributed)
             activeConversationRuntimeController?.appendMessage(role: .tool, content: attributed)
+            // #4: a flagged envelope is quarantined — the message still surfaces
+            // to the owner, but the security event is logged for the Developer-tab
+            // security dashboard (daemon-side auto-reply is already suppressed).
+            if flagged {
+                Task {
+                    await SecurityEventLogger.shared.log(
+                        event: "peer_envelope_flagged_quarantined",
+                        toolName: "x0x_peer",
+                        decision: "flag",
+                        reasonCode: "accept_with_flag",
+                        approved: false,
+                        arguments: ["sender": senderShort])
+                }
+            }
         case "peer.consent":
             let kind = userInfo["kind"] as? String ?? "unknown"
             let label: String

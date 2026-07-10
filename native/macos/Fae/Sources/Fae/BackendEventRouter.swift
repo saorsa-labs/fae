@@ -239,9 +239,10 @@ final class BackendEventRouter: Sendable {
         case "peer.message":
             let sender = payload["sender"] as? String ?? "<unknown>"
             let text = payload["text"] as? String ?? ""
+            let flagged = payload["flagged"] as? Bool ?? false
             NotificationCenter.default.post(
                 name: .faePeerEvent, object: nil,
-                userInfo: ["event": "peer.message", "sender": sender, "text": text])
+                userInfo: ["event": "peer.message", "sender": sender, "text": text, "flagged": flagged])
 
         case "peer.presence":
             let sender = payload["sender"] as? String ?? "<unknown>"
@@ -549,6 +550,7 @@ extension Notification.Name {
     /// - `event`          — "peer.message" | "peer.consent" | "peer.handoff_offer"
     /// - `sender`         — remote agent ID
     /// - `text`           — message body (peer.message only)
+    /// - `flagged`        — Bool, true when x0xd flagged the envelope (peer.message only)
     /// - `kind`           — "consent_receipt" | "consent_revocation" (peer.consent only)
     /// - `source_machine` — origin host name (peer.handoff_offer only)
     /// - `tail_len`       — Int, prior-turn count (peer.handoff_offer only)

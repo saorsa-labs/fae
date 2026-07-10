@@ -238,9 +238,13 @@ impl PeerEventSink for EventBusPeerSink {
 /// mapping is unit-testable without a live bus.
 fn peer_event_to_wire(event: &PeerEvent) -> (&'static str, serde_json::Value) {
     match event {
-        PeerEvent::Message { sender, text } => (
+        PeerEvent::Message {
+            sender,
+            text,
+            flagged,
+        } => (
             "peer.message",
-            serde_json::json!({ "sender": sender, "text": text }),
+            serde_json::json!({ "sender": sender, "text": text, "flagged": flagged }),
         ),
         PeerEvent::Presence { sender, status } => (
             "peer.presence",
@@ -420,13 +424,31 @@ async fn handle_frame(
         return;
     }
 
-    // (d) Dispatch onto the event bus.
+    // (d) Dispatch onto the event bus. The flag travels with the event so the
+    // owner surface (Swift) can mark the message.
     let kind = accepted.kind().clone();
-    let outcome = handler::dispatch(&accepted, verifier.policy(), sink);
+    let flagged = is_flagged(frame);
+    let outcome = handler::dispatch(&accepted, verifier.policy(), flagged, sink);
 
-    // Auto-reply: only for an accepted, dispatched direct message, only when the
-    // owner opted in. Routed as a tool-less GUEST turn through inject_text_core.
+    // INVARIANT: flagged ⇒ zero automated downstream (no LLM, no tools, no
+    // capabilities). Any future peer capability path MUST check `is_flagged`
+    // and deny. Today this suppresses auto-reply; the quarantine audit row
+    // records the decision for the owner.
+    if flagged {
+        append_quarantined(&deps.audit_path, accepted.envelope_id(), &frame.sender);
+        tracing::info!(
+            sender = %frame.sender,
+            "peer envelope flagged by transport (accept_with_flag): quarantined, auto-reply suppressed"
+        );
+    }
+
+    // Auto-reply: only for an accepted, dispatched, UNFLAGGED direct message,
+    // only when the owner opted in. Routed as a tool-less GUEST turn through
+    // inject_text_core. A flagged envelope is quarantined — no LLM turn over
+    // content the trust layer just flagged (prompt-injection / resource-burn
+    // / reply-mediated social-engineering surface for zero owner benefit).
     if cfg.auto_reply
+        && !flagged
         && kind == EnvelopeKind::DirectMessage
         && matches!(outcome, DispatchOutcome::Published)
     {
@@ -446,6 +468,32 @@ fn frame_passes_transport_precheck(frame: &DirectEventFrame) -> bool {
 /// x0x agent ids are hex, compared without case sensitivity throughout.
 fn sender_cross_check_ok(envelope_sender: &str, transport_sender: &str) -> bool {
     envelope_sender.eq_ignore_ascii_case(transport_sender)
+}
+
+/// True when x0xd's transport trust verdict flagged the envelope
+/// (`trust_decision == "accept_with_flag"`). A flagged envelope is
+/// quarantined: it surfaces to the owner but gets NO automated downstream
+/// (no LLM turn, no tools, no capabilities).
+fn is_flagged(frame: &DirectEventFrame) -> bool {
+    frame.trust_decision == "accept_with_flag"
+}
+
+/// Append an Accepted row with the quarantine reason when a flagged envelope
+/// is quarantined (auto-reply suppressed). Mirrors [`append_rejected`]'s shape
+/// but records that the envelope was accepted-but-quarantined for the audit
+/// trail. Best-effort: a failed write is logged, never fatal.
+fn append_quarantined(audit_path: &Path, envelope_id: &str, sender_id: &str) {
+    let record = AuditRecord {
+        event_type: "peer_envelope_ingress".to_owned(),
+        envelope_id: envelope_id.to_owned(),
+        sender_id: sender_id.to_owned(),
+        kind: None,
+        decision: GateDecision::Accepted,
+        reason: "flagged_envelope_quarantined_no_auto_reply".to_owned(),
+    };
+    if let Err(error) = append_audit_jsonl(audit_path, &record) {
+        tracing::warn!("peer audit append failed (quarantined): {error}");
+    }
 }
 
 /// Append a clearly-marked rejected row to the peer audit log for a drop that
@@ -726,6 +774,7 @@ mod tests {
         let (name, payload) = peer_event_to_wire(&PeerEvent::Message {
             sender: OWN.to_owned(),
             text: "hi".to_owned(),
+            flagged: false,
         });
         assert_eq!(name, "peer.message");
         assert_eq!(payload["text"], "hi");
@@ -846,6 +895,71 @@ mod tests {
         let content = std::fs::read_to_string(&audit).unwrap();
         assert!(content.contains("transport_unverified"));
         assert!(content.contains("rejected"));
+    }
+
+    // ── trust_decision quarantine (#4) ──
+
+    #[test]
+    fn is_flagged_detects_accept_with_flag() {
+        let flagged = DirectEventFrame {
+            sender: OWN.to_owned(),
+            verified: true,
+            trust_decision: "accept_with_flag".to_owned(),
+            payload_raw: "{}".to_owned(),
+        };
+        assert!(is_flagged(&flagged));
+
+        let clean = DirectEventFrame {
+            trust_decision: "accept".to_owned(),
+            ..flagged.clone()
+        };
+        assert!(!is_flagged(&clean));
+
+        let rejected = DirectEventFrame {
+            trust_decision: "rejected".to_owned(),
+            ..flagged
+        };
+        assert!(!is_flagged(&rejected));
+    }
+
+    #[test]
+    fn append_quarantined_writes_an_accepted_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = dir.path().join("audit.jsonl");
+        append_quarantined(&audit, "env-flag-1", OWN);
+        let content = std::fs::read_to_string(&audit).unwrap();
+        assert!(content.contains("flagged_envelope_quarantined_no_auto_reply"));
+        assert!(
+            content.contains("accepted"),
+            "quarantine is an Accepted decision"
+        );
+        assert!(content.contains("env-flag-1"));
+    }
+
+    #[test]
+    fn flagged_message_carries_flag_on_wire() {
+        let (name, payload) = peer_event_to_wire(&PeerEvent::Message {
+            sender: OWN.to_owned(),
+            text: "flagged content".to_owned(),
+            flagged: true,
+        });
+        assert_eq!(name, "peer.message");
+        assert_eq!(payload["text"], "flagged content");
+        assert_eq!(
+            payload["flagged"].as_bool(),
+            Some(true),
+            "flagged messages must carry flagged=true on the wire"
+        );
+    }
+
+    #[test]
+    fn unflagged_message_has_flag_false_on_wire() {
+        let (_name, payload) = peer_event_to_wire(&PeerEvent::Message {
+            sender: OWN.to_owned(),
+            text: "clean".to_owned(),
+            flagged: false,
+        });
+        assert_eq!(payload["flagged"].as_bool(), Some(false));
     }
 
     /// Minimal single-future block-on for the two sync-looking async unit tests
