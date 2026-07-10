@@ -70,6 +70,12 @@ pub enum ShellCommand {
         role: String,
         text: String,
     },
+    /// Accumulated assistant text while a response is still streaming. Kept
+    /// separate from finalized conversation history so the pill can follow
+    /// live output without duplicating the final transcript entry.
+    ConversationStream {
+        text: String,
+    },
     SchedulerSnapshot {
         tasks: Vec<SchedulerTask>,
     },
@@ -259,6 +265,23 @@ mod tests {
             _ => false,
         };
         assert!(has_message);
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_conversation_stream_with_multiline_accumulated_text() -> Result<(), serde_json::Error>
+    {
+        let command: ShellCommand = serde_json::from_str(
+            r#"{"type":"conversation_stream","text":"First line\nSecond line\nThird line"}"#,
+        )?;
+
+        let has_multiline_text = match command {
+            ShellCommand::ConversationStream { text } => {
+                text == "First line\nSecond line\nThird line"
+            }
+            _ => false,
+        };
+        assert!(has_multiline_text);
         Ok(())
     }
 

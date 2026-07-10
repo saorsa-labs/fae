@@ -389,11 +389,22 @@ final class RustUiShellController: PillInputRouting {
             .store(in: &cancellables)
 
         conversation?.$messages
-            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .sink { [weak self] messages in
                 self?.sendConversationSnapshot(messages)
             }
             .store(in: &cancellables)
+
+        // The finalized transcript arrives through `$messages`, but the pill
+        // must follow the response while it is still streaming. Send the
+        // accumulated text independently so the Rust host can render one
+        // transient assistant entry without rebuilding conversation history.
+        conversation?.$streamingText
+            .removeDuplicates()
+            .sink { [weak self] text in
+                self?.sendConversationStream(text)
+            }
+            .store(in: &cancellables)
+
 
         // Voice spine V4 RETIRED (orb-host-owns-state, 2026-06-17): the orb
         // host now subscribes to the daemon's `audio.level` / `audio.playback_
@@ -569,6 +580,10 @@ final class RustUiShellController: PillInputRouting {
             }
             send(["type": "conversation", "role": role, "text": message.content])
         }
+    }
+
+    private func sendConversationStream(_ text: String) {
+        send(["type": "conversation_stream", "text": text])
     }
 
     private func send(_ object: [String: Any]) {

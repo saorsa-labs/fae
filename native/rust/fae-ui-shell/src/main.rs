@@ -134,6 +134,10 @@ struct OrbUiModel {
     /// status line (Listening / Thinking… / Speaking).
     ui_mode: FaeUiState,
     messages: Vec<TranscriptMessage>,
+    /// Accumulated assistant response that has not yet been committed to the
+    /// finalized transcript. Rendered as one transient trailing message.
+    streaming_text: String,
+
     scheduler_tasks: Vec<SchedulerTask>,
     skills: Vec<SkillSummary>,
     settings_sections: Vec<SettingsSection>,
@@ -154,6 +158,7 @@ impl OrbUiModel {
             status_progress: None,
             ui_mode: FaeUiState::Quiescent,
             messages: Vec::new(),
+            streaming_text: String::new(),
             scheduler_tasks: Vec::new(),
             skills: Vec::new(),
             settings_sections: Vec::new(),
@@ -189,6 +194,22 @@ impl OrbUiModel {
 
     fn clear_messages(&mut self) {
         self.messages.clear();
+    }
+
+    fn set_streaming_text(&mut self, text: String) {
+        self.streaming_text = text;
+    }
+
+    fn has_distinct_streaming_text(&self) -> bool {
+        let stream = self.streaming_text.trim();
+        if stream.is_empty() {
+            return false;
+        }
+        !self.messages.last().is_some_and(|message| {
+            (message.role.eq_ignore_ascii_case("fae")
+                || message.role.eq_ignore_ascii_case("assistant"))
+                && message.text.trim() == stream
+        })
     }
 
     fn set_voice_muted(&mut self, muted: bool) {
@@ -638,9 +659,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut pill = open_pill_panel(&event_loop, &panel_proxy)?;
     position_pill(window, &pill);
     let mut last_pill: Option<(String, String)> = None;
-    // Last applied collapsed-pill height — skip redundant resizes so the pill
-    // doesn't flicker as a streamed reply re-measures on every sentence.
-    let mut last_pill_height: u32 = COLLAPSED_PILL.height;
     // When Fae entered thinking mode — drives the pill's elapsed counter so
     // long turns (NaN retries can take 30s+) read as progress, not a hang.
     let mut thinking_since: Option<Instant> = None;
@@ -797,8 +815,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 // in the collapsed caption; beyond the cap the
                                 // caption text scrolls internally (see PILL_HTML).
                                 let height = (height as u32).clamp(52, 320);
-                                if height != last_pill_height {
-                                    last_pill_height = height;
+                                if height != pill.last_collapsed_height {
+                                    pill.last_collapsed_height = height;
                                     pill.window.set_inner_size(LogicalSize::new(
                                         COLLAPSED_PILL.width,
                                         height,
@@ -1516,6 +1534,9 @@ fn apply_bridge_command(
             // loop after this command via push_pill_messages.
             orb_ui.push_message(role, text);
         }
+        ShellCommand::ConversationStream { text } => {
+            orb_ui.set_streaming_text(text);
+        }
         ShellCommand::ClearConversation => {
             orb_ui.clear_messages();
         }
@@ -1611,6 +1632,10 @@ struct PillPanel {
     /// Collapsed = one-line caption; expanded = scrollable history + composer.
     /// Drives the two window sizes and the JS `__faeExpand` toggle.
     expanded: bool,
+    /// Last applied collapsed-caption height. Reset whenever an explicit
+    /// collapse forces the window to its base size so the next content
+    /// measurement cannot be discarded as a stale duplicate.
+    last_collapsed_height: u32,
     /// Set to a `request_id` while the pill hosts a Swift `request_input` (UX
     /// W1): the composer is in prompted/masked mode. Cleared when the pill posts
     /// `input_response`/`input_cancel`. Focus-loss consults it so a click-away
@@ -1717,6 +1742,7 @@ fn open_pill_panel(
         window,
         webview,
         expanded: false,
+        last_collapsed_height: COLLAPSED_PILL.height,
         pending_input: None,
     })
 }
@@ -1726,6 +1752,9 @@ fn open_pill_panel(
 /// expand pull keyboard focus so the composer is ready to type.
 fn set_pill_expanded(pill: &mut PillPanel, orb_window: &Window, expanded: bool) {
     pill.expanded = expanded;
+    if !expanded {
+        pill.last_collapsed_height = COLLAPSED_PILL.height;
+    }
     pill.window.set_inner_size(if expanded {
         EXPANDED_PILL
     } else {
@@ -1783,7 +1812,7 @@ fn pill_request_input(
 /// when collapsed and the full scrollable log when expanded. Roles map to the
 /// JS palette: `user`→"you" (heather), `fae`/`assistant`→"fae" (gold).
 fn push_pill_messages(pill: &PillPanel, orb_ui: &OrbUiModel) {
-    let payload = orb_ui
+    let mut payload = orb_ui
         .messages
         .iter()
         .map(|message| {
@@ -1795,6 +1824,13 @@ fn push_pill_messages(pill: &PillPanel, orb_ui: &OrbUiModel) {
             serde_json::json!({ "role": role, "text": message.text })
         })
         .collect::<Vec<_>>();
+    if orb_ui.has_distinct_streaming_text() {
+        payload.push(serde_json::json!({
+            "role": "fae",
+            "text": orb_ui.streaming_text,
+            "streaming": true,
+        }));
+    }
     let json = serde_json::to_string(&payload).unwrap_or_else(|_| "[]".to_string());
     if let Err(error) = pill
         .webview
@@ -1898,8 +1934,6 @@ html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
 #shell.req #reqx{display:flex}
 /* Masked-mode caption in fae-gold-text (DESIGN.md, 9.4:1 on dark). */
 #hl.secure{color:#E6C05A}
-#line{transition:opacity .35s ease}
-#line.fading{opacity:0}
 /* Multi-line caption: the line fills the shell so a long reply SCROLLS inside
  * the pill (readable, not truncated) once it exceeds the grow-to-fit cap. */
 #line.multi{height:auto;align-items:flex-start;padding:11px 16px;white-space:normal;
@@ -1961,11 +1995,32 @@ var messages=[],status=null,infoItems=[],muted=false;
 var pendingInput=null,secureMode=false,pastedFull=null;
 var post=function(o){if(window.ipc&&window.ipc.postMessage)window.ipc.postMessage(JSON.stringify(o));};
 function rc(r){return r==='fae'?'fae':((r==='you'||r==='user')?'you':'');}
-var fadeTimer=null,fadeOut=null;
-function clearFade(){if(fadeTimer){clearTimeout(fadeTimer);fadeTimer=null;}
- if(fadeOut){clearTimeout(fadeOut);fadeOut=null;}line.classList.remove('fading');}
+var captionFollowing=true,logFollowing=true;
+var programmaticCaptionScroll=false,programmaticLogScroll=false;
+function atBottom(el){return el.scrollHeight-el.scrollTop-el.clientHeight<=12;}
+function beginScrollMutation(el,isCaption){
+ var follow=isCaption?captionFollowing:logFollowing;
+ if(isCaption)programmaticCaptionScroll=true;else programmaticLogScroll=true;
+ return {follow:follow,top:el.scrollTop};}
+function finishScrollMutation(el,s,isCaption){requestAnimationFrame(function(){
+ el.scrollTop=s.follow?el.scrollHeight:s.top;
+ requestAnimationFrame(function(){
+  if(isCaption){programmaticCaptionScroll=false;captionFollowing=s.follow||atBottom(el);}
+  else{programmaticLogScroll=false;logFollowing=s.follow||atBottom(el);}});});}
+function scrollToBottom(el,isCaption){
+ if(isCaption)programmaticCaptionScroll=true;else programmaticLogScroll=true;
+ el.scrollTop=el.scrollHeight;requestAnimationFrame(function(){
+  if(isCaption)programmaticCaptionScroll=false;else programmaticLogScroll=false;});}
+txt.addEventListener('scroll',function(){
+ if(!programmaticCaptionScroll)captionFollowing=atBottom(txt);});
+log.addEventListener('scroll',function(){
+ if(!programmaticLogScroll)logFollowing=atBottom(log);});
+if(window.ResizeObserver){new ResizeObserver(function(){
+ if(captionFollowing)scrollToBottom(txt,true);}).observe(txt);}
+function setCaptionText(text){var s=beginScrollMutation(txt,true);
+ txt.textContent=text;finishScrollMutation(txt,s,true);}
 // Collapsed pill height: taller when the info indicator (second line) is shown
-// so the green-dot line isn't clipped. Matches the Rust clamp (52..240).
+// so the green-dot line isn't clipped. Matches the Rust clamp (52..320).
 function baseHeight(){return infoItems.length?78:52;}
 function sizePill(isMsg){
  if(shell.classList.contains('expanded'))return;
@@ -1981,15 +2036,8 @@ function sizePill(isMsg){
   line.classList.toggle('multi',multi);shell.classList.toggle('multi',multi);
   // Grow to fit, capped generously; beyond the cap the caption text scrolls.
   var h=multi?Math.min(320,Math.max(60,sh+30)):baseHeight();
-  post({type:'pill_resize',height:h});});}
-// Dwell: keep a reply visible long enough to READ before fading to the hint.
-// Scaled to length (base + ~50ms/char, capped 30s); longer while muted, since a
-// text-first reply is only read, never heard.
-function fadeDelay(text){var len=(text||'').length;var base=muted?9000:6000;
- return Math.min(30000,base+50*len);}
-function armFade(ms){fadeTimer=setTimeout(function(){line.classList.add('fading');
- fadeOut=setTimeout(function(){line.className='muted';dot.className='';
-  txt.textContent='Hold right ⌥ to talk · click to see conversation';line.classList.remove('fading');sizePill(false);},360);},ms);}
+  post({type:'pill_resize',height:h});
+  if(captionFollowing)scrollToBottom(txt,true);});}
 // Make a spoken reply readable: keep any real structure (newlines), else break
 // a run-on paragraph into one line per sentence (caption style) so it doesn't
 // read as a single dense block.
@@ -1997,19 +2045,18 @@ function formatBody(t){t=(t||'').trim();
  if(t.indexOf('\n')>=0)return t;
  return t.replace(/([.!?])\s+(?=[A-Z0-9"'(‘“])/g,'$1\n');}
 function renderLine(){
- clearFade();
- if(status){line.className=(status.kind||'');dot.className=status.live?'live':'';
-  txt.textContent=status.text;line.classList.toggle('muted',status.muted===true);sizePill(false);return;}
  var m=messages[messages.length-1];
- if(m){line.className='';dot.className=rc(m.role);txt.textContent=formatBody(m.text);
-  if(!shell.classList.contains('expanded')){sizePill(true);armFade(fadeDelay(m.text));}}
- else{line.className='muted';dot.className='';txt.textContent='Hold right ⌥ to talk · click to see conversation';sizePill(false);}
+ if(status&&!(m&&m.streaming===true)){captionFollowing=true;line.className=(status.kind||'');dot.className=status.live?'live':'';
+  setCaptionText(status.text);line.classList.toggle('muted',status.muted===true);sizePill(false);return;}
+ if(m){line.className='';dot.className=rc(m.role);setCaptionText(formatBody(m.text));
+  if(!shell.classList.contains('expanded'))sizePill(true);}
+ else{captionFollowing=true;line.className='muted';dot.className='';setCaptionText('Hold right ⌥ to talk · click to see conversation');sizePill(false);}
 }
-function renderLog(){log.innerHTML='';messages.forEach(function(m){
+function renderLog(){var s=beginScrollMutation(log,false);log.innerHTML='';messages.forEach(function(m){
  var e=document.createElement('div');e.className='msg '+rc(m.role);
  var d=document.createElement('span');d.className='d';
  var b=document.createElement('span');b.className='b';b.textContent=formatBody(m.text);
- e.appendChild(d);e.appendChild(b);log.appendChild(e);});log.scrollTop=log.scrollHeight;}
+ e.appendChild(d);e.appendChild(b);log.appendChild(e);});finishScrollMutation(log,s,false);}
 window.__faeSetMessages=function(a){messages=a||[];shell.classList.add('show');renderLine();
  if(shell.classList.contains('expanded'))renderLog();};
 window.__faeSetStatus=function(kind,text,opts){opts=opts||{};
@@ -2672,7 +2719,7 @@ fn install_edit_menubar() -> Result<(), muda::Error> {
 
 #[cfg(test)]
 mod v4_tests {
-    use super::{apply_audio_patch, rms_to_level};
+    use super::{apply_audio_patch, rms_to_level, OrbUiModel};
     use crate::protocol::AudioPatch;
 
     fn approx(level: Option<f32>, expected: f32) -> bool {
@@ -2730,5 +2777,51 @@ mod v4_tests {
         let mut level = Some(0.6);
         apply_audio_patch(AudioPatch::Unchanged, &mut level);
         assert_eq!(level, Some(0.6));
+    }
+
+    #[test]
+    fn distinct_nonempty_streaming_text_is_active() {
+        let mut model = OrbUiModel::new();
+        model.set_streaming_text("A response in progress".to_string());
+
+        assert!(model.has_distinct_streaming_text());
+    }
+
+    #[test]
+    fn finalized_fae_or_assistant_message_suppresses_identical_streaming_text() {
+        for role in ["fae", "assistant"] {
+            let mut model = OrbUiModel::new();
+            model.set_streaming_text("The completed response".to_string());
+            model.push_message(role.to_string(), "The completed response".to_string());
+
+            assert!(
+                !model.has_distinct_streaming_text(),
+                "finalized {role} message should suppress the identical transient"
+            );
+        }
+    }
+
+    #[test]
+    fn user_or_different_trailing_message_does_not_suppress_streaming_text() {
+        let mut user_trailing = OrbUiModel::new();
+        user_trailing.set_streaming_text("Shared text".to_string());
+        user_trailing.push_message("user".to_string(), "Shared text".to_string());
+        assert!(user_trailing.has_distinct_streaming_text());
+
+        let mut different_assistant = OrbUiModel::new();
+        different_assistant.set_streaming_text("Current response".to_string());
+        different_assistant.push_message("assistant".to_string(), "Earlier response".to_string());
+        assert!(different_assistant.has_distinct_streaming_text());
+    }
+
+    #[test]
+    fn clearing_streaming_text_removes_transient() {
+        let mut model = OrbUiModel::new();
+        model.set_streaming_text("A response in progress".to_string());
+        assert!(model.has_distinct_streaming_text());
+
+        model.set_streaming_text(String::new());
+
+        assert!(!model.has_distinct_streaming_text());
     }
 }
