@@ -654,6 +654,12 @@ actor PipelineCoordinator {
     /// reply is never silent even if the daemon TTS lane is unhealthy. Loaded
     /// with the "fae" (Lauren) voice — see `inProcessFallbackTTSEngine()`.
     private var fallbackTTSEngine: FaeTTSAdapter?
+    /// Single-flight guard for `inProcessFallbackTTSEngine`: true while a
+    /// fallback load `Task` is in flight, so repeated timeouts never stack
+    /// concurrent detached loads. Cleared on EVERY exit (success + error) by
+    /// `clearFallbackLoadInFlight` so a failed/transient load can retry.
+    private var fallbackLoadInFlight = false
+
 
     /// True once the "voice muted" skip has been logged for the current muted
     /// stretch; reset when voice output is re-enabled so the log fires once per
@@ -5617,62 +5623,97 @@ actor PipelineCoordinator {
     /// diagnosable. Loading may download the Kokoro model on first use — that is
     /// the price of never going silent, and only paid when the daemon lane fails.
     private func inProcessFallbackTTSEngine() async -> FaeTTSAdapter {
-        if let existing = fallbackTTSEngine { return existing }
-        let engine = FaeTTSAdapter()
-        // Match ModelManager.effectiveTTSModelID: voice-identity-lock forces the
-        // bundled "fae" (Lauren) voice; otherwise the configured voice.
-        let voice: String
-        if config.tts.voiceIdentityLock {
-            voice = "fae"
+        // Reuse the single cached engine once created (concurrent calls share it).
+        let engine: FaeTTSAdapter
+        if let existing = fallbackTTSEngine {
+            engine = existing
         } else {
-            let configured = config.tts.voice.trimmingCharacters(in: .whitespacesAndNewlines)
-            voice = configured.isEmpty ? "af_heart" : configured
+            engine = FaeTTSAdapter()
+            fallbackTTSEngine = engine
         }
-        let modelID = "kokoro:\(voice):\(config.tts.speed)"
-        // B-plus (#4): seed the mlx-audio HF cache from the bundled Kokoro
-        // (task #35) so TTS.loadModel resolves locally — no first-use download
-        // on the live reply path. Idempotent + APFS-clone; a seed failure
-        // degrades to the existing download path inside TTS.loadModel.
-        KokoroFallbackCacheSeeder.seedIfNeeded()
-        // Fold C: bound the load (mirror synthesizeLocally's watchdog) so a
-        // stuck local load — or, on seed failure, a slow download — can't strand
-        // the reply. On timeout/error the fallback is skipped this turn.
-        let loaded = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
+        // Fast path: already loaded.
+        if await engine.isLoaded { return engine }
+
+        // Single-flight: detach ONE load at a time so repeated timeouts never
+        // stack concurrent detached loads. The guard is cleared on EVERY exit
+        // (success + error) so a failed/transient load can be retried later.
+        if !fallbackLoadInFlight {
+            fallbackLoadInFlight = true
+            // Match ModelManager.effectiveTTSModelID: voice-identity-lock forces
+            // the bundled "fae" (Lauren) voice; otherwise the configured voice.
+            let voice: String
+            if config.tts.voiceIdentityLock {
+                voice = "fae"
+            } else {
+                let configured = config.tts.voice.trimmingCharacters(in: .whitespacesAndNewlines)
+                voice = configured.isEmpty ? "af_heart" : configured
+            }
+            let modelID = "kokoro:\(voice):\(config.tts.speed)"
+            // B-plus (#4): seed the mlx-audio HF cache from the bundled Kokoro
+            // (task #35) so TTS.loadModel resolves locally — no first-use
+            // download on the reply path. Idempotent + APFS-clone; a seed
+            // failure degrades to the existing download path inside TTS.loadModel.
+            KokoroFallbackCacheSeeder.seedIfNeeded()
+            // Detached: engine.load → TTS.loadModel has NO cooperative
+            // cancellation points, so the actor must NOT await it (a grouped
+            // load can't be time-bounded). It runs to completion in the
+            // background and sets engine.isLoaded for a later turn.
+            Task { [weak self] in
                 do {
                     try await engine.load(modelID: modelID)
-                    return true
+                    NSLog(
+                        "PipelineCoordinator: in-process Kokoro TTS fallback LOADED (background, voice=%@, modelID=%@)",
+                        voice, modelID)
                 } catch {
                     NSLog(
-                        "PipelineCoordinator: in-process Kokoro fallback load error: %@",
-                        error.localizedDescription)
-                    return false
+                        "PipelineCoordinator: in-process Kokoro fallback load FAILED (%@): %@",
+                        modelID, error.localizedDescription)
                 }
+                // Clear on ALL exits so the guard never wedges.
+                await self?.clearFallbackLoadInFlight()
             }
-            group.addTask {
-                do {
-                    try await Task.sleep(
-                        nanoseconds: TTSState.fallbackLoadTimeoutSeconds * 1_000_000_000)
-                } catch {}
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
         }
-        if loaded {
+        // Fold C — bounded wait: poll engine.isLoaded (never await the load
+        // itself). Bounds the reply so a stuck/uncancellable load can't strand
+        // it; on timeout the fallback is skipped this turn and the detached
+        // load self-heals (isLoaded becomes true for a later turn).
+        let loaded = await Self.boundedPoll(
+            predicate: { await engine.isLoaded },
+            timeoutMs: TTSState.fallbackLoadTimeoutSeconds * 1_000,
+            pollIntervalMs: 100)
+        if !loaded {
             NSLog(
-                "PipelineCoordinator: in-process Kokoro TTS fallback LOADED (voice=%@, modelID=%@) — " +
-                    "replies stay audible even when the daemon TTS lane fails",
-                voice, modelID)
-        } else {
-            NSLog(
-                "PipelineCoordinator: in-process Kokoro TTS fallback unavailable (load timeout/error, modelID=%@) — the next " +
-                    "reply may be silent until the daemon TTS lane recovers",
-                modelID)
+                "PipelineCoordinator: in-process Kokoro TTS fallback not ready within %llu s — skipping this turn (load continues in background)",
+                TTSState.fallbackLoadTimeoutSeconds)
         }
-        fallbackTTSEngine = engine
         return engine
+    }
+
+    /// Clear the single-flight fallback-load guard. Called from the detached
+    /// load task on every exit (success + error) so the guard can't wedge.
+    private func clearFallbackLoadInFlight() {
+        fallbackLoadInFlight = false
+    }
+
+    /// Poll `predicate` until it returns true or `timeoutMs` elapses (polling
+    /// every `pollIntervalMs`). Used to bound a wait on an uncancellable
+    /// operation (`engine.load` → `TTS.loadModel` has no cancellation points, so
+    /// a grouped/awaited load cannot be time-bounded). Internal for unit testing.
+    static func boundedPoll(
+        predicate: @Sendable @escaping () async -> Bool,
+        timeoutMs: UInt64,
+        pollIntervalMs: UInt64 = 100
+    ) async -> Bool {
+        let deadlineNs = timeoutMs * 1_000_000
+        let pollNs = pollIntervalMs * 1_000_000
+        var elapsed: UInt64 = 0
+        var done = await predicate()
+        while !done, !Task.isCancelled, elapsed < deadlineNs {
+            try? await Task.sleep(nanoseconds: pollNs)
+            elapsed += pollNs
+            done = await predicate()
+        }
+        return done
     }
 
     /// Consume `engine`'s synthesis stream and play it on the local

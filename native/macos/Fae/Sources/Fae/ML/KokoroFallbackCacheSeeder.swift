@@ -5,23 +5,39 @@ import Foundation
 /// `TTS.loadModel` → `ModelUtils.resolveOrDownloadModel` resolves LOCALLY — no
 /// first-use download on the live reply path when the daemon TTS lane fails.
 ///
-/// `resolveOrDownloadModel` checks `<hf-cache>/mlx-audio/prince-canuma_Kokoro-82M/`
-/// FIRST; if a non-zero `.safetensors` + a valid `config.json` are present it
-/// returns immediately and never downloads. This seeder materialises exactly
-/// those two files from the app bundle (`Contents/Resources/Kokoro/`).
+/// `resolveOrDownloadModel` (vendored `mlx-audio-swift`, file
+/// `Sources/MLXAudioCore/ModelUtils.swift:73-104`) checks
+/// `<hf-cache>/mlx-audio/prince-canuma_Kokoro-82M/` FIRST; if a non-zero
+/// `.safetensors` + a valid `config.json` are present it returns immediately
+/// (line 94) and never reaches `downloadSnapshot` (line 119). This seeder
+/// materialises exactly those two files from the app bundle
+/// (`Contents/Resources/Kokoro/`).
 ///
 /// Idempotent (skips when both dest files exist) and APFS-clone-friendly
 /// (`FileManager.copyItem` reflinks on the same volume → ~ms, ~0 extra disk).
 /// A failure (disk full / permissions / missing bundle) is non-fatal: the dest
 /// stays incomplete and `resolveOrDownloadModel` falls through to its existing
-/// `downloadSnapshot` — the never-silent guarantee degrades to today's behaviour.
+/// `downloadSnapshot` — the never-silent guarantee degrades to today's
+/// behaviour (graceful download, not silence).
+///
+/// - Note (sandbox): `hubCacheRoot` resolves to `~/.cache/huggingface/hub`,
+///   correct for NON-sandboxed macOS (Fae reads contacts/mail/calendar, so it is
+///   not sandboxed). A hypothetical sandboxed build would need parity with
+///   `~/Library/Caches/huggingface/hub` (`APP_SANDBOX_CONTAINER_ID` set) —
+///   benign today; flagged here so a future sandbox attempt doesn't silently
+///   re-enable the download.
+/// - Note (VENDOR BUMP): when bumping `mlx-audio-swift`, re-verify that
+///   `repoSubdir` + `resolveOrDownloadModel`'s cache-layout (`ModelUtils.swift`
+///   73-104) still agree. Drift fails gracefully (download-degrade), never
+///   silence — but it would quietly undo the no-network guarantee.
 ///
 /// `hubCacheRoot(env:homeDirectory:)` and `seed(from:to:)` are internal (not
 /// private) so the `IntegrationTests` target can unit-test them in isolation
 /// (`@testable import Fae`).
 enum KokoroFallbackCacheSeeder {
     /// Flat layout mlx-audio-swift writes under the HF cache root
-    /// (`ModelUtils.resolveOrDownloadModel`, lines 73-76).
+    /// (`ModelUtils.resolveOrDownloadModel`, lines 73-76). Pinned by
+    /// `KokoroFallbackCacheSeederTests.testRepoSubdirIsTheMlxLayoutResolveChecksFirst`.
     static let repoSubdir = "mlx-audio/prince-canuma_Kokoro-82M"
     static let weightsFile = "kokoro-v1_0.safetensors"
     static let configFile = "config.json"
@@ -29,10 +45,9 @@ enum KokoroFallbackCacheSeeder {
     /// HF hub cache root, replicating `HubCache.default.cacheDirectory`
     /// (swift-huggingface `CacheLocationProvider.resolveFromEnvironment`):
     /// `HF_HUB_CACHE` → `HF_HOME/hub` → `~/.cache/huggingface/hub`
-    /// (non-sandboxed macOS — Fae reads contacts/mail/calendar, so it is not
-    /// sandboxed). Replicated rather than `import HuggingFace` to avoid a
-    /// Package.swift dependency change; the logic is stable (mirrors Python
-    /// `huggingface_hub`). Parametrised for unit testing.
+    /// (non-sandboxed macOS). Replicated rather than `import HuggingFace` to
+    /// avoid a Package.swift dependency change; the logic is stable (mirrors
+    /// Python `huggingface_hub`). Parametrised for unit testing.
     static func hubCacheRoot(
         env: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: String = NSHomeDirectory()
