@@ -575,6 +575,10 @@ actor PipelineCoordinator {
 
     private var assistantSpeaking: Bool = false
     private var assistantGenerating: Bool = false
+    /// Fix D-3: watchdog task that periodically reconciles assistantGenerating.
+    /// BACKSTOP only — fixes D-1 and D-2 resolve stranding on their own. When
+    /// this fires, it logs LOUDLY (it means D-1/D-2 missed a case).
+    private var generatingWatchdogTask: Task<Void, Never>?
     /// UX W3: the cloud route hint for the current turn, computed from the trigger
     /// prefix on the fresh user text and preserved across tool follow-ups within
     /// the same turn (a fresh non-tool turn recomputes + overwrites it).
@@ -931,6 +935,17 @@ actor PipelineCoordinator {
         NSLog("PipelineCoordinator: pipeline started in %@ mode", mode.rawValue)
 
         // Main pipeline loop.
+
+        // Fix D-3: generating-state watchdog. Backstop only — fixes D-1/D-2
+        // handle stranding on their own. When this fires and actually changes
+        // state, it means D-1/D-2 missed a case (future regression).
+        generatingWatchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000) // 15s
+                guard let self else { return }
+                await self.generatingWatchdogTick()
+            }
+        }
         pipelineTask = Task { [weak self] in
             guard let self else { return }
             await self.runPipelineLoop(stream: stream)
@@ -941,6 +956,8 @@ actor PipelineCoordinator {
     func stop() async {
         debugLog(debugConsole, .qa, "Pipeline stop requested")
         markGenerationInterrupted()
+        generatingWatchdogTask?.cancel()
+        generatingWatchdogTask = nil
         pendingGovernanceAction = nil
         setApprovalState(awaiting: false, manualOnly: false)
         computerUseStepCount = 0
@@ -2449,9 +2466,14 @@ actor PipelineCoordinator {
             // Silent/background generation in progress. It intentionally does
             // not drive assistantGenerating, but deliberate user input still
             // supersedes it and becomes the active token stream owner.
+            // Fix D-2: end orphaned tracker entries even for proactive turns
+            // that are being superseded. Previously, proactive turns returned
+            // early without ending the background generation, leaving orphaned
+            // entries that blocked deferredProactiveDrain and idle rearming.
+            markGenerationInterrupted()
+            endAssistantGeneration()
             guard proactiveContext == nil else { return }
             debugLog(debugConsole, .pipeline, "User turn takeover — interrupting silent background generation")
-            markGenerationInterrupted()
         }
 
         let forceFastCommandPath = shouldForceThinkingSuppression(for: queryText)
@@ -5358,6 +5380,28 @@ actor PipelineCoordinator {
         eventBus.send(.assistantGenerating(shouldShow))
     }
 
+    /// Fix D-3: watchdog tick — periodically reconciles assistantGenerating.
+    /// BACKSTOP ONLY: fixes D-1/D-2 resolve stranding on their own. When this
+    /// fires and actually changes state, it means D-1/D-2 missed a case — log
+    /// LOUDLY so the regression is visible, not silently masked.
+    private func generatingWatchdogTick() {
+        let shouldShow = assistantGenerationTracker.shouldShowAssistantGenerating(
+            awaitingApproval: awaitingApproval
+        )
+        if assistantGenerating != shouldShow {
+            NSLog(
+                "PipelineCoordinator: ⚠️ GENERATING WATCHDOG fired — assistantGenerating=%@ but shouldShow=%@ " +
+                "(hasVisible=%@ awaitingApproval=%@ hasActive=%@). " +
+                "This means fix D-1/D-2 missed a case. Reconciling.",
+                String(assistantGenerating), String(shouldShow),
+                String(assistantGenerationTracker.hasVisibleGeneration),
+                String(awaitingApproval),
+                String(assistantGenerationTracker.hasActiveGeneration)
+            )
+            reconcileAssistantGenerating()
+        }
+    }
+
     static func shouldShowToolModeUpgradePopup(reasonCode: String) -> Bool {
         switch reasonCode {
         case "owner_enrollment_required", "non-owner", "tool_not_called", "toolMode=assistant":
@@ -5910,6 +5954,13 @@ actor PipelineCoordinator {
     private func markGenerationInterrupted(file: String = #file, line: Int = #line) {
         interrupted = true
         interruptedGenerationID = activeGenerationID
+        // Fix D-1: clear any stranded approval state. If a proactive turn
+        // triggered tool approval and was then superseded, awaitingApproval
+        // would strand true → assistantGenerating stays true → orb stuck
+        // Thinking. This is the root cause of the stranding bug.
+        if awaitingApproval {
+            setApprovalState(awaiting: false, manualOnly: false)
+        }
         let caller = URL(fileURLWithPath: file).lastPathComponent
         NSLog("PipelineCoordinator: markGenerationInterrupted() called from %@:%d", caller, line)
     }
