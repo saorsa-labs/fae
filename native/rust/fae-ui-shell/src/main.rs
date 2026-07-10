@@ -194,6 +194,7 @@ impl OrbUiModel {
 
     fn clear_messages(&mut self) {
         self.messages.clear();
+        self.streaming_text.clear();
     }
 
     fn set_streaming_text(&mut self, text: String) {
@@ -2004,9 +2005,8 @@ function beginScrollMutation(el,isCaption){
  return {follow:follow,top:el.scrollTop};}
 function finishScrollMutation(el,s,isCaption){requestAnimationFrame(function(){
  el.scrollTop=s.follow?el.scrollHeight:s.top;
- requestAnimationFrame(function(){
-  if(isCaption){programmaticCaptionScroll=false;captionFollowing=s.follow||atBottom(el);}
-  else{programmaticLogScroll=false;logFollowing=s.follow||atBottom(el);}});});}
+ if(isCaption){programmaticCaptionScroll=false;captionFollowing=s.follow;}
+ else{programmaticLogScroll=false;logFollowing=s.follow;}});}
 function scrollToBottom(el,isCaption){
  if(isCaption)programmaticCaptionScroll=true;else programmaticLogScroll=true;
  el.scrollTop=el.scrollHeight;requestAnimationFrame(function(){
@@ -2812,6 +2812,19 @@ mod v4_tests {
         different_assistant.set_streaming_text("Current response".to_string());
         different_assistant.push_message("assistant".to_string(), "Earlier response".to_string());
         assert!(different_assistant.has_distinct_streaming_text());
+    }
+
+    #[test]
+    fn clear_messages_removes_finalized_and_streaming_text() {
+        let mut model = OrbUiModel::new();
+        model.push_message("assistant".to_string(), "A finalized response".to_string());
+        model.set_streaming_text("A new response in progress".to_string());
+        assert!(model.has_distinct_streaming_text());
+
+        model.clear_messages();
+
+        assert!(model.messages.is_empty());
+        assert!(!model.has_distinct_streaming_text());
     }
 
     #[test]
