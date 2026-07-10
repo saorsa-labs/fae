@@ -2436,12 +2436,15 @@ async fn inject_text(
     // pass-through — zero behavior change.
     match backends.conductor {
         Some(runtime) => {
-            // Build the content-blind turn context (request_id + metadata;
-            // no prompt text) and route through the conductor. The static
-            // policy emits direct + local-model + ApprovalClass::None, so the
-            // executor's direct arm runs inject_text_core verbatim — byte-
-            // identical to the legacy path. Telemetry is fire-and-forget.
-            let ctx = build_turn_context(cmd);
+            // Build the turn context, then W3-wire the runtime's mode cap and
+            // registered remote workers into it. build_turn_context hardcodes
+            // LocalOnly + empty workers (the fail-safe default); the runtime
+            // holds the owner's opt-in mode (AllAvailable → RemoteAllowed) and
+            // the startup-vetted worker registry. Without this injection the
+            // policy's cloud-hint path is unreachable — the gap this fix closes.
+            let mut ctx = build_turn_context(cmd);
+            ctx.privacy_lane = crate::conductor::policy::model_mode_to_lane(runtime.model_mode());
+            ctx.available_workers = runtime.workers().remote_provider_selectors();
             crate::conductor::route_turn(runtime, backends, cmd, &ctx).await
         }
         None => {

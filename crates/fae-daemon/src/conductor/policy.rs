@@ -83,6 +83,18 @@ pub fn mode_permits_lane(mode: ModelMode, lane: PrivacyLane) -> bool {
     }
 }
 
+/// W3: the widest [`PrivacyLane`] the mode permits — the inverse of
+/// [`mode_permits_lane`]. Used by `inject_text` to set the turn context's
+/// `privacy_lane` from the startup `ModelMode`, so the policy's cloud-hint
+/// path can actually reach `RemoteAllowed` when the owner opted in.
+pub fn model_mode_to_lane(mode: ModelMode) -> PrivacyLane {
+    match mode {
+        ModelMode::PureLocal => PrivacyLane::LocalOnly,
+        ModelMode::LocalSymphony => PrivacyLane::OwnerFleet,
+        ModelMode::AllAvailable => PrivacyLane::RemoteAllowed,
+    }
+}
+
 /// The single M1 recipe id (direct topology, local-model worker).
 pub const STATIC_DIRECT_RECIPE_ID: &str = "fae.static-direct.v1";
 
@@ -111,9 +123,9 @@ impl ConductorRoutingPolicy for StaticDirectPolicy {
         // vetted `RemoteProvider` worker is registered for the turn. Any missing
         // precondition (no hint, narrower lane, no remote worker) falls through
         // to today's `LocalOnly` decision — the default stays local-always
-        // (fail-closed). The live inject_text path builds a `LocalOnly` context
-        // with no remote workers, so production turns are byte-identical until a
-        // later phase widens the lane + registers the cloud worker.
+        // (fail-closed). W3 wiring: inject_text now sets the lane from the
+        // runtime's ModelMode and populates available_workers from the registry,
+        // so this path is reachable when the owner opts in (FAE_PRIVACY_LANE=all).
         if ctx.route_hint == Some(RouteHint::Cloud)
             && ctx.privacy_lane == PrivacyLane::RemoteAllowed
         {
@@ -129,7 +141,9 @@ impl ConductorRoutingPolicy for StaticDirectPolicy {
                     worker_id: worker.id.clone(),
                     task_class: Self::classify(ctx),
                     lane: PrivacyLane::RemoteAllowed,
-                    approval: ApprovalClass::None,
+                    approval: ApprovalClass::StandingGrant(
+                        "remote_provider_provisioned".to_string(),
+                    ),
                     reason: "route-hint-cloud".to_string(),
                 };
             }
@@ -330,6 +344,42 @@ mod tests {
         assert_eq!(
             ModelMode::from_privacy_lane(Some("remote")),
             ModelMode::PureLocal
+        );
+    }
+
+    #[test]
+    fn model_mode_to_lane_maps_each_mode_to_widest_permitted_lane() {
+        assert_eq!(
+            model_mode_to_lane(ModelMode::PureLocal),
+            PrivacyLane::LocalOnly
+        );
+        assert_eq!(
+            model_mode_to_lane(ModelMode::LocalSymphony),
+            PrivacyLane::OwnerFleet
+        );
+        assert_eq!(
+            model_mode_to_lane(ModelMode::AllAvailable),
+            PrivacyLane::RemoteAllowed
+        );
+    }
+
+    /// SECURITY CONDITION 1: default/unset mode resolves to LocalOnly — no
+    /// config means never-remote, provably. If someone changes the ModelMode
+    /// default or the mapping, this test fails.
+    #[test]
+    fn default_mode_maps_to_local_only_never_remote() {
+        assert_eq!(
+            model_mode_to_lane(ModelMode::default()),
+            PrivacyLane::LocalOnly
+        );
+        // Also verify via the env path: absent env → default → PureLocal → LocalOnly
+        assert_eq!(
+            model_mode_to_lane(ModelMode::from_env_value(None)),
+            PrivacyLane::LocalOnly
+        );
+        assert_eq!(
+            model_mode_to_lane(ModelMode::from_env_value(Some("garbage"))),
+            PrivacyLane::LocalOnly
         );
     }
 }

@@ -1590,8 +1590,8 @@ mod tests {
     use crate::conductor::budget::{BudgetLimits, DEFAULT_DAILY_WINDOW_MS};
     use crate::conductor::policy::{StaticDirectPolicy, STATIC_DIRECT_RECIPE_ID};
     use crate::conductor::recipe::{
-        AggregationMode, AggregationPolicy, BudgetPolicy, ConductorTaskClass, EscalationPolicy,
-        FaeConductorRecipe, RoleSlot, StopPolicy, WorkerSelector,
+        AggregationMode, AggregationPolicy, BudgetPolicy, ConductorTaskClass, ConductorTurnContext,
+        EscalationPolicy, FaeConductorRecipe, RoleSlot, RouteHint, StopPolicy, WorkerSelector,
     };
     use crate::conductor::workers::{CODEX_CLOUD_WORKER_ID, LOCAL_MODEL_WORKER_ID};
     use crate::events::{EventBus, PlaybackRegistry};
@@ -2165,6 +2165,135 @@ mod tests {
             .fallback_reason
             .as_deref()
             .is_some_and(|reason| reason.contains("RemoteAllowed")));
+        Ok(())
+    }
+
+    /// W3 SECURITY CONDITION 2: prove the membrane gate fires on the remote
+    /// path reached through the full POLICY chain (not a manually-constructed
+    /// decision). The decision carries StandingGrant (from the policy), yet the
+    /// membrane STILL blocks egress — proving the gate ordering is
+    /// membrane → budget → approval (execute_cloud_role_call §5.3→§5.4→§5.5):
+    /// the standing grant governs consent, not egress-allowed.
+    #[tokio::test]
+    async fn w3_remote_path_through_policy_invokes_membrane_gate() -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let (membrane, membrane_calls) = CountingMembrane::new(true); // blocks
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(REMOTE_WORKER_ID),
+            membrane,
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+
+        // Build the context as the W3 wiring would: RemoteAllowed lane + the
+        // remote worker + an explicit cloud route hint.
+        let ctx = ConductorTurnContext {
+            request_id: "req-w3-membrane".to_string(),
+            task_class: ConductorTaskClass::Unknown,
+            feature_predicates: Vec::new(),
+            privacy_lane: PrivacyLane::RemoteAllowed,
+            available_workers: vec![WorkerSelector {
+                id: REMOTE_WORKER_ID.to_string(),
+                kind: "remote".to_string(),
+                locality: WorkerLocality::RemoteProvider,
+                capabilities: Vec::new(),
+                provider: Some("openrouter".to_string()),
+                model: Some("openai/gpt-4.1-mini".to_string()),
+                trust_scope: None,
+            }],
+            working_directory: None,
+            deadline_ms: None,
+            route_hint: Some(RouteHint::Cloud),
+        };
+
+        // Policy decides RemoteAllowed (all W3 preconditions met).
+        let decision = runtime.runtime.policy().decide(&ctx);
+        assert_eq!(
+            decision.lane,
+            PrivacyLane::RemoteAllowed,
+            "W3 wiring must make RemoteAllowed reachable through the policy"
+        );
+
+        // Execute through the gate chain.
+        let cmd = command("req-w3-membrane", "summarise this");
+        let backends = runtime.backends();
+        let (_wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+
+        // SECURITY: the membrane gate WAS invoked on the remote path.
+        assert!(
+            membrane_calls.load(Ordering::SeqCst) > 0,
+            "membrane must be invoked on the remote path (gate chain exercised)"
+        );
+        // The provider was NOT called (membrane blocked egress).
+        assert_eq!(
+            provider_calls.load(Ordering::SeqCst),
+            0,
+            "provider must not be called when membrane blocks"
+        );
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
+        assert!(
+            outcome.fallback,
+            "blocked remote turn must fall back to local"
+        );
+        Ok(())
+    }
+
+    /// W3 happy path: the full policy → executor chain reaches the cloud
+    /// provider when all gates pass (membrane clean, pricing present, budget
+    /// under cap, provisioned). Proves the lane opening produces real egress.
+    #[tokio::test]
+    async fn w3_remote_path_through_policy_reaches_provider_when_clean(
+    ) -> Result<(), Box<dyn Error>> {
+        let (builder, _builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(vec!["cloud answer".to_string()]);
+        let (membrane, _membrane_calls) = CountingMembrane::new(false); // clean
+        let runtime = remote_test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(REMOTE_WORKER_ID),
+            membrane,
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+
+        let ctx = ConductorTurnContext {
+            request_id: "req-w3-clean".to_string(),
+            task_class: ConductorTaskClass::Unknown,
+            feature_predicates: Vec::new(),
+            privacy_lane: PrivacyLane::RemoteAllowed,
+            available_workers: vec![WorkerSelector {
+                id: REMOTE_WORKER_ID.to_string(),
+                kind: "remote".to_string(),
+                locality: WorkerLocality::RemoteProvider,
+                capabilities: Vec::new(),
+                provider: Some("openrouter".to_string()),
+                model: Some("openai/gpt-4.1-mini".to_string()),
+                trust_scope: None,
+            }],
+            working_directory: None,
+            deadline_ms: None,
+            route_hint: Some(RouteHint::Cloud),
+        };
+
+        let decision = runtime.runtime.policy().decide(&ctx);
+        assert_eq!(decision.lane, PrivacyLane::RemoteAllowed);
+
+        let cmd = command("req-w3-clean", "summarise this");
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(!outcome.fallback, "clean remote turn must not fall back");
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            wire.expect("cloud ok").get("text").and_then(Value::as_str),
+            Some("cloud answer")
+        );
         Ok(())
     }
 

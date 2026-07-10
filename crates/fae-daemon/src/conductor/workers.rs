@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::conductor::recipe::WorkerLocality;
+use crate::conductor::recipe::{WorkerLocality, WorkerSelector};
 
 /// The canonical local worker id. Resolves to the daemon's loaded engine.
 pub const LOCAL_MODEL_WORKER_ID: &str = "local-model";
@@ -154,6 +154,28 @@ impl WorkerRegistry {
         ids
     }
 
+    /// W3: all registered `RemoteProvider` workers as [`WorkerSelector`]s, for
+    /// the turn context's `available_workers` field. The policy's cloud-hint
+    /// path reads `locality` and `id` only; other fields are derived from the
+    /// id shape (`cloud:openrouter/<model>`).
+    pub fn remote_provider_selectors(&self) -> Vec<WorkerSelector> {
+        self.workers
+            .iter()
+            .filter(|(_, reg)| reg.locality == WorkerLocality::RemoteProvider)
+            .map(|(id, _)| WorkerSelector {
+                id: id.clone(),
+                kind: "remote".to_string(),
+                locality: WorkerLocality::RemoteProvider,
+                capabilities: Vec::new(),
+                provider: Some("openrouter".to_string()),
+                model: id
+                    .strip_prefix(OPENROUTER_CLOUD_WORKER_PREFIX)
+                    .map(ToOwned::to_owned),
+                trust_scope: None,
+            })
+            .collect()
+    }
+
     /// Number of registered workers.
     #[allow(dead_code)] // exercised in unit tests; M2 worker introspection surfaces it
     pub fn len(&self) -> usize {
@@ -225,5 +247,32 @@ mod tests {
         assert!(registry.is_provisioned(&id));
         // The local model stays present and unaffected.
         assert!(registry.contains(LOCAL_MODEL_WORKER_ID));
+    }
+
+    /// SECURITY CONDITION 1 (no-credential path): the default registry has
+    /// zero RemoteProvider workers — no provisioned OpenRouter credential
+    /// means remote_provider_selectors() is empty, so the policy can never
+    /// route to RemoteAllowed. Combined with the policy test
+    /// `cloud_route_hint_without_remote_worker_stays_local`, this proves:
+    /// no credential → no workers → LocalOnly, never remote.
+    #[test]
+    fn default_registry_has_no_remote_provider_selectors() {
+        let registry = WorkerRegistry::m1();
+        assert!(
+            registry.remote_provider_selectors().is_empty(),
+            "default registry (no credential) must have zero RemoteProvider workers"
+        );
+    }
+
+    #[test]
+    fn remote_provider_selectors_returns_registered_remote_workers() {
+        let mut registry = WorkerRegistry::m1();
+        let id = openrouter_worker_id("openai/gpt-4.1-mini");
+        registry.register_remote_provider(&id, true);
+        let selectors = registry.remote_provider_selectors();
+        assert_eq!(selectors.len(), 1);
+        assert_eq!(selectors[0].id, id);
+        assert_eq!(selectors[0].locality, WorkerLocality::RemoteProvider);
+        assert_eq!(selectors[0].model.as_deref(), Some("openai/gpt-4.1-mini"));
     }
 }
