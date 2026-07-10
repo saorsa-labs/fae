@@ -51,6 +51,10 @@ clean:
 test:
     swift test --skip EvalTests
 
+
+# Run fast tests only (skips EndToEnd via FAE_SKIP_HEAVY_TESTS=1; no dev-app quit needed)
+test-quick:
+    FAE_SKIP_HEAVY_TESTS=1 swift test --skip EvalTests
 # Run specific test target
 test-target target:
     swift test --filter {{target}}
