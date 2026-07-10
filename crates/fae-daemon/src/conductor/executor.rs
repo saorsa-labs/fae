@@ -2170,8 +2170,10 @@ mod tests {
 
     /// W3 SECURITY CONDITION 2: prove the membrane gate fires on the remote
     /// path reached through the full POLICY chain (not a manually-constructed
-    /// decision). The W3 wiring makes RemoteAllowed reachable; this test proves
-    /// the gate chain (mode-cap → PII membrane) actually exercises on that path.
+    /// decision). The decision carries StandingGrant (from the policy), yet the
+    /// membrane STILL blocks egress — proving the gate ordering is
+    /// membrane → budget → approval (execute_cloud_role_call §5.3→§5.4→§5.5):
+    /// the standing grant governs consent, not egress-allowed.
     #[tokio::test]
     async fn w3_remote_path_through_policy_invokes_membrane_gate() -> Result<(), Box<dyn Error>> {
         let (builder, builder_calls) = CountingBuilder::new();

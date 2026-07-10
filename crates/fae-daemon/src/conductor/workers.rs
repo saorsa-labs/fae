@@ -248,4 +248,31 @@ mod tests {
         // The local model stays present and unaffected.
         assert!(registry.contains(LOCAL_MODEL_WORKER_ID));
     }
+
+    /// SECURITY CONDITION 1 (no-credential path): the default registry has
+    /// zero RemoteProvider workers — no provisioned OpenRouter credential
+    /// means remote_provider_selectors() is empty, so the policy can never
+    /// route to RemoteAllowed. Combined with the policy test
+    /// `cloud_route_hint_without_remote_worker_stays_local`, this proves:
+    /// no credential → no workers → LocalOnly, never remote.
+    #[test]
+    fn default_registry_has_no_remote_provider_selectors() {
+        let registry = WorkerRegistry::m1();
+        assert!(
+            registry.remote_provider_selectors().is_empty(),
+            "default registry (no credential) must have zero RemoteProvider workers"
+        );
+    }
+
+    #[test]
+    fn remote_provider_selectors_returns_registered_remote_workers() {
+        let mut registry = WorkerRegistry::m1();
+        let id = openrouter_worker_id("openai/gpt-4.1-mini");
+        registry.register_remote_provider(&id, true);
+        let selectors = registry.remote_provider_selectors();
+        assert_eq!(selectors.len(), 1);
+        assert_eq!(selectors[0].id, id);
+        assert_eq!(selectors[0].locality, WorkerLocality::RemoteProvider);
+        assert_eq!(selectors[0].model.as_deref(), Some("openai/gpt-4.1-mini"));
+    }
 }
