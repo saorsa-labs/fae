@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::conductor::recipe::WorkerLocality;
+use crate::conductor::recipe::{WorkerLocality, WorkerSelector};
 
 /// The canonical local worker id. Resolves to the daemon's loaded engine.
 pub const LOCAL_MODEL_WORKER_ID: &str = "local-model";
@@ -152,6 +152,28 @@ impl WorkerRegistry {
         let mut ids = self.workers.keys().cloned().collect::<Vec<_>>();
         ids.sort();
         ids
+    }
+
+    /// W3: all registered `RemoteProvider` workers as [`WorkerSelector`]s, for
+    /// the turn context's `available_workers` field. The policy's cloud-hint
+    /// path reads `locality` and `id` only; other fields are derived from the
+    /// id shape (`cloud:openrouter/<model>`).
+    pub fn remote_provider_selectors(&self) -> Vec<WorkerSelector> {
+        self.workers
+            .iter()
+            .filter(|(_, reg)| reg.locality == WorkerLocality::RemoteProvider)
+            .map(|(id, _)| WorkerSelector {
+                id: id.clone(),
+                kind: "remote".to_string(),
+                locality: WorkerLocality::RemoteProvider,
+                capabilities: Vec::new(),
+                provider: Some("openrouter".to_string()),
+                model: id
+                    .strip_prefix(OPENROUTER_CLOUD_WORKER_PREFIX)
+                    .map(ToOwned::to_owned),
+                trust_scope: None,
+            })
+            .collect()
     }
 
     /// Number of registered workers.
