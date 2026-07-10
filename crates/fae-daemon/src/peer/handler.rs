@@ -23,6 +23,7 @@ pub enum PeerEvent {
     Message {
         sender: String,
         text: String,
+        envelope_id: String,
         flagged: bool,
     },
     /// An allowlisted peer updated its presence.
@@ -33,6 +34,7 @@ pub enum PeerEvent {
     HandoffOffer {
         sender: String,
         payload: SessionHandoffPayload,
+        flagged: bool,
     },
     /// Informational only — logged, never acted on (v1: `memory_share_offer`,
     /// `conductor_gate_receipt_prior`).
@@ -95,6 +97,7 @@ pub fn dispatch(
                 sink.publish(PeerEvent::Message {
                     sender,
                     text: text.to_owned(),
+                    envelope_id: accepted.envelope_id().to_owned(),
                     flagged,
                 });
                 DispatchOutcome::Published
@@ -117,7 +120,11 @@ pub fn dispatch(
         }
         EnvelopeKind::SessionHandoff => match handoff::decode(accepted) {
             Ok(payload) => {
-                sink.publish(PeerEvent::HandoffOffer { sender, payload });
+                sink.publish(PeerEvent::HandoffOffer {
+                    sender,
+                    payload,
+                    flagged,
+                });
                 DispatchOutcome::Published
             }
             Err(reason) => DispatchOutcome::Rejected(format!("session_handoff_invalid:{reason}")),
@@ -228,6 +235,7 @@ mod tests {
             vec![PeerEvent::Message {
                 sender: CHAT_SENDER.to_owned(),
                 text: "hello fae".to_owned(),
+                envelope_id: "env-1".to_owned(),
                 flagged: false,
             }]
         );
@@ -326,7 +334,9 @@ mod tests {
         );
         let events = sink.events.borrow();
         match events.as_slice() {
-            [PeerEvent::HandoffOffer { sender, payload }] => {
+            [PeerEvent::HandoffOffer {
+                sender, payload, ..
+            }] => {
                 assert_eq!(sender, FLEET_SENDER);
                 assert_eq!(payload.source_machine, "study-mac");
                 assert_eq!(payload.pending_turn.as_deref(), Some("and then?"));

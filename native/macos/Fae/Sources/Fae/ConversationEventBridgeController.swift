@@ -38,6 +38,11 @@ final class ConversationEventBridgeController: ObservableObject {
     /// Closure for sending peer commands to the daemon. Wired by FaeApp (Phase E).
     var peerCommandSender: ((String, [String: Any]) -> Void)?
 
+    /// #4: session-scoped dedup for flagged-envelope security events. x0xd SSE
+    /// reconnects replay the stream, so without dedup the SecurityEventLogger
+    /// would fire once per reconnect. Keyed by envelope_id.
+    private var loggedFlaggedEnvelopes: Set<String> = []
+
     init() {
         subscribe()
     }
@@ -558,13 +563,16 @@ final class ConversationEventBridgeController: ObservableObject {
         case "peer.message":
             let text = userInfo["text"] as? String ?? ""
             let flagged = userInfo["flagged"] as? Bool ?? false
+            let envelopeId = userInfo["envelope_id"] as? String ?? ""
             let attributed = "[\(senderShort)\u{2026} via x0x] \(text)"
             subtitleState?.showToolMessage(attributed)
             activeConversationRuntimeController?.appendMessage(role: .tool, content: attributed)
             // #4: a flagged envelope is quarantined — the message still surfaces
             // to the owner, but the security event is logged for the Developer-tab
             // security dashboard (daemon-side auto-reply is already suppressed).
-            if flagged {
+            // Dedup by envelope_id: SSE reconnects replay the stream.
+            if flagged && !envelopeId.isEmpty && !loggedFlaggedEnvelopes.contains(envelopeId) {
+                loggedFlaggedEnvelopes.insert(envelopeId)
                 Task {
                     await SecurityEventLogger.shared.log(
                         event: "peer_envelope_flagged_quarantined",
@@ -590,10 +598,11 @@ final class ConversationEventBridgeController: ObservableObject {
             let tailLen = userInfo["tail_len"] as? Int ?? 0
             let pendingTurn = userInfo["pending_turn"] as? String
             let tail = (userInfo["conversation_tail"] as? [[String: String]]) ?? []
+            let flagged = userInfo["flagged"] as? Bool ?? false
             showHandoffOfferAlert(
                 sender: sender, senderShort: senderShort,
                 sourceMachine: sourceMachine, tailLen: tailLen,
-                pendingTurn: pendingTurn, conversationTail: tail)
+                pendingTurn: pendingTurn, conversationTail: tail, flagged: flagged)
         default:
             NSLog("ConversationEventBridgeController: unhandled peer event: %@", event)
         }
@@ -605,13 +614,17 @@ final class ConversationEventBridgeController: ObservableObject {
         sourceMachine: String,
         tailLen: Int,
         pendingTurn: String?,
-        conversationTail: [[String: String]]
+        conversationTail: [[String: String]],
+        flagged: Bool
     ) {
         let alert = NSAlert()
         alert.messageText = "Continue conversation from \(sourceMachine)?"
-        let detail = tailLen > 0
+        var detail = tailLen > 0
             ? "\(senderShort)\u{2026} is offering to hand off a conversation (\(tailLen) previous turn\(tailLen == 1 ? "" : "s"))."
             : "\(senderShort)\u{2026} is offering to hand off a new conversation."
+        if flagged {
+            detail += "\n\n⚠️ Trust flag: x0xd flagged this envelope. Review content carefully before accepting."
+        }
         alert.informativeText = {
             if let pt = pendingTurn, !pt.isEmpty {
                 return "\(detail)\n\nPending message: \u{201C}\(pt)\u{201D}"

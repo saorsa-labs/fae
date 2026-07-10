@@ -241,10 +241,11 @@ fn peer_event_to_wire(event: &PeerEvent) -> (&'static str, serde_json::Value) {
         PeerEvent::Message {
             sender,
             text,
+            envelope_id,
             flagged,
         } => (
             "peer.message",
-            serde_json::json!({ "sender": sender, "text": text, "flagged": flagged }),
+            serde_json::json!({ "sender": sender, "text": text, "envelope_id": envelope_id, "flagged": flagged }),
         ),
         PeerEvent::Presence { sender, status } => (
             "peer.presence",
@@ -254,21 +255,17 @@ fn peer_event_to_wire(event: &PeerEvent) -> (&'static str, serde_json::Value) {
             "peer.consent",
             serde_json::json!({ "sender": sender, "kind": kind }),
         ),
-        PeerEvent::HandoffOffer { sender, payload } => (
+        PeerEvent::HandoffOffer {
+            sender,
+            payload,
+            flagged,
+        } => (
             "peer.handoff_offer",
             serde_json::json!({
                 "sender": sender,
+                "flagged": flagged,
                 "source_machine": payload.source_machine,
                 "pending_turn": payload.pending_turn,
-                // The full conversation tail, so the Swift client hydrates the
-                // restored context — not just `pending_turn`. This `payload` was
-                // decoded from an `AcceptedEnvelope`, i.e. one that already
-                // passed `gate_and_audit` (trust-tier acceptance + the
-                // `MAX_ENVELOPE_BYTES` cap, which rejects the raw frame *before*
-                // parsing — see fae-envelope-gate lib.rs:234). So this tail can
-                // only ever be gated peer content and is inherently ≤ 64 KiB on
-                // the wire; no new un-gated retrieval path is introduced.
-                // `tail_len` stays for back-compat / cheap display.
                 "conversation_tail": payload.conversation_tail,
                 "tail_len": payload.conversation_tail.len(),
             }),
@@ -425,20 +422,21 @@ async fn handle_frame(
     }
 
     // (d) Dispatch onto the event bus. The flag travels with the event so the
-    // owner surface (Swift) can mark the message.
+    // owner surface (Swift) can mark the message and the handoff alert.
     let kind = accepted.kind().clone();
     let flagged = is_flagged(frame);
     let outcome = handler::dispatch(&accepted, verifier.policy(), flagged, sink);
 
     // INVARIANT: flagged ⇒ zero automated downstream (no LLM, no tools, no
     // capabilities). Any future peer capability path MUST check `is_flagged`
-    // and deny. Today this suppresses auto-reply; the quarantine audit row
-    // records the decision for the owner.
+    // and deny. Today this suppresses auto-reply for flagged DirectMessages
+    // and propagates the flag on HandoffOffers (the owner sees the flag in the
+    // accept alert); the quarantine audit row records the decision.
     if flagged {
         append_quarantined(&deps.audit_path, accepted.envelope_id(), &frame.sender);
         tracing::info!(
             sender = %frame.sender,
-            "peer envelope flagged by transport (accept_with_flag): quarantined, auto-reply suppressed"
+            "peer envelope flagged by transport: quarantined, auto-reply suppressed"
         );
     }
 
@@ -447,11 +445,7 @@ async fn handle_frame(
     // inject_text_core. A flagged envelope is quarantined — no LLM turn over
     // content the trust layer just flagged (prompt-injection / resource-burn
     // / reply-mediated social-engineering surface for zero owner benefit).
-    if cfg.auto_reply
-        && !flagged
-        && kind == EnvelopeKind::DirectMessage
-        && matches!(outcome, DispatchOutcome::Published)
-    {
+    if should_auto_reply(cfg.auto_reply, flagged, kind, &outcome) {
         if let Some(text) = accepted.peer_text_for_policy_review() {
             let text = text.to_owned();
             auto_reply(deps, outbound, &frame.sender, &text).await;
@@ -470,12 +464,41 @@ fn sender_cross_check_ok(envelope_sender: &str, transport_sender: &str) -> bool 
     envelope_sender.eq_ignore_ascii_case(transport_sender)
 }
 
-/// True when x0xd's transport trust verdict flagged the envelope
-/// (`trust_decision == "accept_with_flag"`). A flagged envelope is
-/// quarantined: it surfaces to the owner but gets NO automated downstream
-/// (no LLM turn, no tools, no capabilities).
+/// True when x0xd's transport trust verdict is anything other than a clean
+/// accept. FAIL-CLOSED: unknown/missing verdicts quarantine, never pass.
+///
+/// Empirical finding (x0xd v0.27): the `trust_decision` field CAN be absent
+/// from the SSE JSON (`#[serde(default)]` on `RawDirectData` +
+/// `.unwrap_or("")` in the live integration test confirm this). Absent ⇒
+/// empty string ⇒ treated as clean WITH a tracing warn (documented residual:
+/// if x0xd starts omitting the field for a different reason, the warn surfaces
+/// it). Any non-`"accept"` value (case-insensitive) ⇒ flagged. This subsumes
+/// `"accept_with_flag"` AND any unknown future verdict string — unknown
+/// verdicts must quarantine, never pass.
 fn is_flagged(frame: &DirectEventFrame) -> bool {
-    frame.trust_decision == "accept_with_flag"
+    if frame.trust_decision.is_empty() {
+        tracing::warn!(
+            "peer frame has no trust_decision field — treating as clean \
+             (x0xd v0.27 omits on normal accept; documented residual)"
+        );
+        return false;
+    }
+    !frame.trust_decision.eq_ignore_ascii_case("accept")
+}
+
+/// The auto-reply guard, extracted for testability. INVARIANT: flagged ⇒ no
+/// auto-reply. If someone removes `!flagged` from this predicate, the
+/// `flagged_suppresses_auto_reply` test fails.
+fn should_auto_reply(
+    auto_reply_enabled: bool,
+    flagged: bool,
+    kind: EnvelopeKind,
+    outcome: &DispatchOutcome,
+) -> bool {
+    auto_reply_enabled
+        && !flagged
+        && kind == EnvelopeKind::DirectMessage
+        && matches!(outcome, DispatchOutcome::Published)
 }
 
 /// Append an Accepted row with the quarantine reason when a flagged envelope
@@ -774,6 +797,7 @@ mod tests {
         let (name, payload) = peer_event_to_wire(&PeerEvent::Message {
             sender: OWN.to_owned(),
             text: "hi".to_owned(),
+            envelope_id: "env-1".to_owned(),
             flagged: false,
         });
         assert_eq!(name, "peer.message");
@@ -796,6 +820,7 @@ mod tests {
                 pending_turn: Some("and then?".to_owned()),
                 created_at_ms: 0,
             },
+            flagged: false,
         });
         assert_eq!(name, "peer.handoff_offer");
         // #17: the wire event must carry the full tail, not just tail_len — the
@@ -850,6 +875,7 @@ mod tests {
         let (name, wire) = peer_event_to_wire(&PeerEvent::HandoffOffer {
             sender: accepted.sender_id().to_owned(),
             payload: payload.clone(),
+            flagged: false,
         });
         assert_eq!(name, "peer.handoff_offer");
         let tail = wire["conversation_tail"].as_array().expect("tail present");
@@ -900,26 +926,85 @@ mod tests {
     // ── trust_decision quarantine (#4) ──
 
     #[test]
-    fn is_flagged_detects_accept_with_flag() {
-        let flagged = DirectEventFrame {
+    fn is_flagged_fail_closed_unknown_and_non_accept_verdicts_quarantine() {
+        let base = DirectEventFrame {
             sender: OWN.to_owned(),
             verified: true,
-            trust_decision: "accept_with_flag".to_owned(),
+            trust_decision: String::new(),
             payload_raw: "{}".to_owned(),
         };
-        assert!(is_flagged(&flagged));
 
+        // Case (b): empty/absent ⇒ clean (documented residual, warns).
+        // x0xd v0.27 can omit trust_decision; the #[serde(default)] +
+        // live-test unwrap_or("") confirm this empirically.
+        assert!(!is_flagged(&base));
+
+        // Explicit "accept" ⇒ clean.
         let clean = DirectEventFrame {
             trust_decision: "accept".to_owned(),
-            ..flagged.clone()
+            ..base.clone()
         };
         assert!(!is_flagged(&clean));
 
+        // Case-insensitive "ACCEPT" ⇒ clean (no case-bypass).
+        let upper = DirectEventFrame {
+            trust_decision: "ACCEPT".to_owned(),
+            ..base.clone()
+        };
+        assert!(!is_flagged(&upper));
+
+        // "accept_with_flag" ⇒ flagged.
+        let flagged = DirectEventFrame {
+            trust_decision: "accept_with_flag".to_owned(),
+            ..base.clone()
+        };
+        assert!(is_flagged(&flagged));
+
+        // FAIL-CLOSED: "rejected" ⇒ flagged (was NOT flagged in the
+        // fail-open version — this is the key behavioral change).
         let rejected = DirectEventFrame {
             trust_decision: "rejected".to_owned(),
-            ..flagged
+            ..base.clone()
         };
-        assert!(!is_flagged(&rejected));
+        assert!(is_flagged(&rejected));
+
+        // FAIL-CLOSED: any unknown future verdict ⇒ flagged.
+        let unknown = DirectEventFrame {
+            trust_decision: "probation".to_owned(),
+            ..base
+        };
+        assert!(is_flagged(&unknown));
+    }
+
+    /// I1: the behavioral test. If someone deletes `!flagged` from
+    /// `should_auto_reply`, this test fails.
+    #[test]
+    fn flagged_suppresses_auto_reply_even_when_all_other_conditions_met() {
+        use handler::DispatchOutcome;
+
+        // Flagged ⇒ NO auto-reply, even with auto_reply enabled + Published DM.
+        assert!(!should_auto_reply(
+            true,
+            true,
+            EnvelopeKind::DirectMessage,
+            &DispatchOutcome::Published
+        ));
+
+        // Unflagged + all conditions ⇒ auto-reply fires (baseline).
+        assert!(should_auto_reply(
+            true,
+            false,
+            EnvelopeKind::DirectMessage,
+            &DispatchOutcome::Published
+        ));
+
+        // Auto-reply disabled ⇒ never fires regardless of flag.
+        assert!(!should_auto_reply(
+            false,
+            false,
+            EnvelopeKind::DirectMessage,
+            &DispatchOutcome::Published
+        ));
     }
 
     #[test]
@@ -937,14 +1022,16 @@ mod tests {
     }
 
     #[test]
-    fn flagged_message_carries_flag_on_wire() {
+    fn flagged_message_carries_flag_and_envelope_id_on_wire() {
         let (name, payload) = peer_event_to_wire(&PeerEvent::Message {
             sender: OWN.to_owned(),
             text: "flagged content".to_owned(),
+            envelope_id: "env-42".to_owned(),
             flagged: true,
         });
         assert_eq!(name, "peer.message");
         assert_eq!(payload["text"], "flagged content");
+        assert_eq!(payload["envelope_id"], "env-42");
         assert_eq!(
             payload["flagged"].as_bool(),
             Some(true),
@@ -957,9 +1044,29 @@ mod tests {
         let (_name, payload) = peer_event_to_wire(&PeerEvent::Message {
             sender: OWN.to_owned(),
             text: "clean".to_owned(),
+            envelope_id: "env-43".to_owned(),
             flagged: false,
         });
         assert_eq!(payload["flagged"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn flagged_handoff_carries_flag_on_wire() {
+        let (_name, payload) = peer_event_to_wire(&PeerEvent::HandoffOffer {
+            sender: FLEET.to_owned(),
+            payload: SessionHandoffPayload {
+                source_machine: "study-mac".to_owned(),
+                conversation_tail: Vec::new(),
+                pending_turn: None,
+                created_at_ms: 0,
+            },
+            flagged: true,
+        });
+        assert_eq!(
+            payload["flagged"].as_bool(),
+            Some(true),
+            "flagged handoffs must carry flagged=true on the wire"
+        );
     }
 
     /// Minimal single-future block-on for the two sync-looking async unit tests
