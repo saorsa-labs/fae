@@ -239,9 +239,12 @@ final class BackendEventRouter: Sendable {
         case "peer.message":
             let sender = payload["sender"] as? String ?? "<unknown>"
             let text = payload["text"] as? String ?? ""
+            let flagged = payload["flagged"] as? Bool ?? false
+            let envelopeId = payload["envelope_id"] as? String ?? ""
             NotificationCenter.default.post(
                 name: .faePeerEvent, object: nil,
-                userInfo: ["event": "peer.message", "sender": sender, "text": text])
+                userInfo: ["event": "peer.message", "sender": sender, "text": text,
+                           "flagged": flagged, "envelope_id": envelopeId])
 
         case "peer.presence":
             let sender = payload["sender"] as? String ?? "<unknown>"
@@ -259,9 +262,11 @@ final class BackendEventRouter: Sendable {
             let sender = payload["sender"] as? String ?? "<unknown>"
             let sourceMachine = payload["source_machine"] as? String ?? "<unknown>"
             let tailLen = payload["tail_len"] as? Int ?? 0
+            let flagged = payload["flagged"] as? Bool ?? false
             var peerUserInfo: [String: Any] = [
                 "event": "peer.handoff_offer",
                 "sender": sender,
+                "flagged": flagged,
                 "source_machine": sourceMachine,
                 "tail_len": tailLen,
             ]
@@ -549,6 +554,8 @@ extension Notification.Name {
     /// - `event`          — "peer.message" | "peer.consent" | "peer.handoff_offer"
     /// - `sender`         — remote agent ID
     /// - `text`           — message body (peer.message only)
+    /// - `envelope_id`    — envelope correlation id for dedup (peer.message only)
+    /// - `flagged`        — Bool, true when x0xd flagged the envelope (peer.message + peer.handoff_offer)
     /// - `kind`           — "consent_receipt" | "consent_revocation" (peer.consent only)
     /// - `source_machine` — origin host name (peer.handoff_offer only)
     /// - `tail_len`       — Int, prior-turn count (peer.handoff_offer only)

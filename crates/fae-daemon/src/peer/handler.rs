@@ -20,7 +20,12 @@ use super::verifier::TierPolicy;
 #[derive(Debug, Clone, PartialEq)]
 pub enum PeerEvent {
     /// An allowlisted peer sent us a chat message.
-    Message { sender: String, text: String },
+    Message {
+        sender: String,
+        text: String,
+        envelope_id: String,
+        flagged: bool,
+    },
     /// An allowlisted peer updated its presence.
     Presence { sender: String, status: String },
     /// A consent receipt/revocation arrived (kind = the snake_case kind name).
@@ -29,6 +34,7 @@ pub enum PeerEvent {
     HandoffOffer {
         sender: String,
         payload: SessionHandoffPayload,
+        flagged: bool,
     },
     /// Informational only — logged, never acted on (v1: `memory_share_offer`,
     /// `conductor_gate_receipt_prior`).
@@ -57,6 +63,7 @@ pub enum DispatchOutcome {
 pub fn dispatch(
     accepted: &AcceptedEnvelope,
     policy: &TierPolicy,
+    flagged: bool,
     sink: &dyn PeerEventSink,
 ) -> DispatchOutcome {
     let kind = accepted.kind();
@@ -90,6 +97,8 @@ pub fn dispatch(
                 sink.publish(PeerEvent::Message {
                     sender,
                     text: text.to_owned(),
+                    envelope_id: accepted.envelope_id().to_owned(),
+                    flagged,
                 });
                 DispatchOutcome::Published
             }
@@ -111,7 +120,11 @@ pub fn dispatch(
         }
         EnvelopeKind::SessionHandoff => match handoff::decode(accepted) {
             Ok(payload) => {
-                sink.publish(PeerEvent::HandoffOffer { sender, payload });
+                sink.publish(PeerEvent::HandoffOffer {
+                    sender,
+                    payload,
+                    flagged,
+                });
                 DispatchOutcome::Published
             }
             Err(reason) => DispatchOutcome::Rejected(format!("session_handoff_invalid:{reason}")),
@@ -214,7 +227,7 @@ mod tests {
             serde_json::json!({ "text": "hello fae" }),
         );
         assert_eq!(
-            dispatch(&envelope, &policy(), &sink),
+            dispatch(&envelope, &policy(), false, &sink),
             DispatchOutcome::Published
         );
         assert_eq!(
@@ -222,6 +235,8 @@ mod tests {
             vec![PeerEvent::Message {
                 sender: CHAT_SENDER.to_owned(),
                 text: "hello fae".to_owned(),
+                envelope_id: "env-1".to_owned(),
+                flagged: false,
             }]
         );
     }
@@ -235,7 +250,7 @@ mod tests {
             serde_json::json!({ "text": "hello" }),
         );
         assert_eq!(
-            dispatch(&envelope, &policy(), &sink),
+            dispatch(&envelope, &policy(), false, &sink),
             DispatchOutcome::Rejected("sender_not_permitted_for_kind:direct_message".to_owned())
         );
         assert!(sink.events.borrow().is_empty(), "rejects must not publish");
@@ -246,7 +261,7 @@ mod tests {
         let sink = RecordingSink::default();
         let envelope = accepted("direct_message", CHAT_SENDER, serde_json::json!({}));
         assert_eq!(
-            dispatch(&envelope, &policy(), &sink),
+            dispatch(&envelope, &policy(), false, &sink),
             DispatchOutcome::Rejected("direct_message_missing_text".to_owned())
         );
         assert!(sink.events.borrow().is_empty());
@@ -261,7 +276,7 @@ mod tests {
             serde_json::json!({ "status": "online" }),
         );
         assert_eq!(
-            dispatch(&envelope, &policy(), &sink),
+            dispatch(&envelope, &policy(), false, &sink),
             DispatchOutcome::Published
         );
         assert_eq!(
@@ -278,7 +293,7 @@ mod tests {
         let sink = RecordingSink::default();
         let envelope = accepted("presence_update", CHAT_SENDER, serde_json::json!({}));
         assert_eq!(
-            dispatch(&envelope, &policy(), &sink),
+            dispatch(&envelope, &policy(), false, &sink),
             DispatchOutcome::Rejected("presence_update_missing_status".to_owned())
         );
         assert!(sink.events.borrow().is_empty());
@@ -290,7 +305,7 @@ mod tests {
             let sink = RecordingSink::default();
             let envelope = accepted(kind, CHAT_SENDER, serde_json::json!({}));
             assert_eq!(
-                dispatch(&envelope, &policy(), &sink),
+                dispatch(&envelope, &policy(), false, &sink),
                 DispatchOutcome::Published
             );
             assert_eq!(
@@ -314,12 +329,14 @@ mod tests {
         });
         let envelope = accepted("session_handoff", FLEET_SENDER, payload);
         assert_eq!(
-            dispatch(&envelope, &policy(), &sink),
+            dispatch(&envelope, &policy(), false, &sink),
             DispatchOutcome::Published
         );
         let events = sink.events.borrow();
         match events.as_slice() {
-            [PeerEvent::HandoffOffer { sender, payload }] => {
+            [PeerEvent::HandoffOffer {
+                sender, payload, ..
+            }] => {
                 assert_eq!(sender, FLEET_SENDER);
                 assert_eq!(payload.source_machine, "study-mac");
                 assert_eq!(payload.pending_turn.as_deref(), Some("and then?"));
@@ -336,7 +353,7 @@ mod tests {
         let sink = RecordingSink::default();
         let envelope = accepted("session_handoff", CHAT_SENDER, serde_json::json!({}));
         assert_eq!(
-            dispatch(&envelope, &policy(), &sink),
+            dispatch(&envelope, &policy(), false, &sink),
             DispatchOutcome::Rejected("sender_not_permitted_for_kind:session_handoff".to_owned())
         );
         assert!(sink.events.borrow().is_empty());
@@ -350,7 +367,7 @@ mod tests {
             FLEET_SENDER,
             serde_json::json!({ "wrong": "shape" }),
         );
-        match dispatch(&envelope, &policy(), &sink) {
+        match dispatch(&envelope, &policy(), false, &sink) {
             DispatchOutcome::Rejected(reason) => {
                 assert!(reason.starts_with("session_handoff_invalid:"), "{reason}");
             }
@@ -366,7 +383,7 @@ mod tests {
             // Even an UNKNOWN sender: info-only is log-and-drop, never action.
             let envelope = accepted(kind, UNKNOWN_SENDER, serde_json::json!({ "text": "hi" }));
             assert_eq!(
-                dispatch(&envelope, &policy(), &sink),
+                dispatch(&envelope, &policy(), false, &sink),
                 DispatchOutcome::InfoOnly
             );
             assert_eq!(
