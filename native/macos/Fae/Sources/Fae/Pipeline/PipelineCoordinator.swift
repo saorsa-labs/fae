@@ -5629,17 +5629,47 @@ actor PipelineCoordinator {
             voice = configured.isEmpty ? "af_heart" : configured
         }
         let modelID = "kokoro:\(voice):\(config.tts.speed)"
-        do {
-            try await engine.load(modelID: modelID)
+        // B-plus (#4): seed the mlx-audio HF cache from the bundled Kokoro
+        // (task #35) so TTS.loadModel resolves locally — no first-use download
+        // on the live reply path. Idempotent + APFS-clone; a seed failure
+        // degrades to the existing download path inside TTS.loadModel.
+        KokoroFallbackCacheSeeder.seedIfNeeded()
+        // Fold C: bound the load (mirror synthesizeLocally's watchdog) so a
+        // stuck local load — or, on seed failure, a slow download — can't strand
+        // the reply. On timeout/error the fallback is skipped this turn.
+        let loaded = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    try await engine.load(modelID: modelID)
+                    return true
+                } catch {
+                    NSLog(
+                        "PipelineCoordinator: in-process Kokoro fallback load error: %@",
+                        error.localizedDescription)
+                    return false
+                }
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(
+                        nanoseconds: TTSState.fallbackLoadTimeoutSeconds * 1_000_000_000)
+                } catch {}
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        if loaded {
             NSLog(
                 "PipelineCoordinator: in-process Kokoro TTS fallback LOADED (voice=%@, modelID=%@) — " +
                     "replies stay audible even when the daemon TTS lane fails",
                 voice, modelID)
-        } catch {
+        } else {
             NSLog(
-                "PipelineCoordinator: in-process Kokoro TTS fallback FAILED to load (%@) — the next " +
+                "PipelineCoordinator: in-process Kokoro TTS fallback unavailable (load timeout/error, modelID=%@) — the next " +
                     "reply may be silent until the daemon TTS lane recovers",
-                error.localizedDescription)
+                modelID)
         }
         fallbackTTSEngine = engine
         return engine

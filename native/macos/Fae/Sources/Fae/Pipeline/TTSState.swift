@@ -25,6 +25,11 @@ final class TTSState {
     /// Maximum time a single TTS synthesis call can take before force-cancel.
     /// Prevents `assistantSpeaking` from getting stuck if the TTS model hangs.
     static let synthesisTimeoutSeconds: UInt64 = 30
+    /// Maximum time the in-process Kokoro FALLBACK engine load may take before
+    /// the turn gives up on it (B-plus #4). Generous for a local load (~1-2s);
+    /// bounds a stuck load — or, on a cache-seed failure, a slow download — so
+    /// it can never strand a reply. On expiry the fallback is skipped this turn.
+    static let fallbackLoadTimeoutSeconds: UInt64 = 15
 
     /// Cancel any pending TTS work and nil the task reference.
     func cancelPending() {
