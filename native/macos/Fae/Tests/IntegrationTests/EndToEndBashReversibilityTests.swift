@@ -8,6 +8,11 @@ import XCTest
 /// so that changes to the allowlist are immediately visible in CI.
 final class EndToEndBashReversibilityTests: XCTestCase {
 
+    override func setUpWithError() throws {
+        try HeavyTestSkip.skipIfRequested()
+    }
+
+
     // MARK: - Reversible Commands
 
     /// `echo hello > /tmp/test.txt` → `.reversible` (file write, output path captured)

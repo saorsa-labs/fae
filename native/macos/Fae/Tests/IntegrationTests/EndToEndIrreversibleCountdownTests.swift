@@ -12,6 +12,11 @@ import XCTest
 /// active audio pipeline. Tests here cover the static decision layer only.
 final class EndToEndIrreversibleCountdownTests: XCTestCase {
 
+    override func setUpWithError() throws {
+        try HeavyTestSkip.skipIfRequested()
+    }
+
+
     // MARK: - Countdown Decision Tests
 
     /// Mail send action → requiresCountdown returns true.

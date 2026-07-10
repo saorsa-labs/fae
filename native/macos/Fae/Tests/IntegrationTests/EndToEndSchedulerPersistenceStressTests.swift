@@ -2,6 +2,7 @@ import XCTest
 @testable import Fae
 
 final class EndToEndSchedulerPersistenceStressTests: XCTestCase {
+
     private actor DispatchCapture {
         private(set) var taskIDs: [String] = []
 
@@ -19,6 +20,7 @@ final class EndToEndSchedulerPersistenceStressTests: XCTestCase {
     private var originalSchedulerOverride: URL?
 
     override func setUpWithError() throws {
+        try HeavyTestSkip.skipIfRequested()
         tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-scheduler-stress-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)

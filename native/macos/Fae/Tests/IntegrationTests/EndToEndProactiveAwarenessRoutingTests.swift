@@ -2,6 +2,11 @@ import XCTest
 @testable import Fae
 
 final class EndToEndProactiveAwarenessRoutingTests: XCTestCase {
+
+    override func setUpWithError() throws {
+        try HeavyTestSkip.skipIfRequested()
+    }
+
     private actor DispatchCapture {
         private(set) var taskIDs: [String] = []
         private(set) var allowedTools: [Set<String>] = []

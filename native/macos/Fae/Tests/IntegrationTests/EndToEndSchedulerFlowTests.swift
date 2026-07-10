@@ -19,6 +19,7 @@ final class EndToEndSchedulerFlowTests: XCTestCase {
     private var harness: TestRuntimeHarness!
 
     override func setUp() async throws {
+        try HeavyTestSkip.skipIfRequested()
         harness = try TestRuntimeHarness()
         await harness.setUp()
     }
