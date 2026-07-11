@@ -761,6 +761,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             },
             onRelease: {
                 NotificationCenter.default.post(name: .faePTTReleased, object: nil)
+            },
+            onToggleVisibility: { [weak self] in
+                self?.rustUiShell.toggleFaeVisibility()
             }
         )
     }

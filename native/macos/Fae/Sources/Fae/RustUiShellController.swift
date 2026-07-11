@@ -152,6 +152,12 @@ final class RustUiShellController: PillInputRouting {
         send(["type": "cancel_input"])
     }
 
+    /// Toggle the Rust host's persistent owner-hidden latch. The host remains
+    /// authoritative because it also owns transient reveal-on-speech.
+    func toggleFaeVisibility() {
+        send(["type": "toggle_visibility"])
+    }
+
     func startIfAvailable() {
         guard process == nil else { return }
         guard let binaryURL = resolveShellBinary() else {

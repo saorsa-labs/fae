@@ -1,6 +1,83 @@
 import AppKit
 import Carbon
 
+enum RightOptionChordAction: Equatable {
+    case schedulePTT
+    case cancelScheduledPTT
+    case pressPTT
+    case releasePTT
+    case toggleVisibility
+}
+
+struct RightOptionChordState {
+    private let pttEnabled: Bool
+
+    init(pttEnabled: Bool = true) {
+        self.pttEnabled = pttEnabled
+    }
+    private(set) var rightOptionDown = false
+    private(set) var shiftDown = false
+    private(set) var pendingPTT = false
+    private(set) var pttActive = false
+    private(set) var visibilityChordLatched = false
+
+    mutating func rightOptionChanged(isDown: Bool, shiftIsDown: Bool) -> [RightOptionChordAction] {
+        shiftDown = shiftIsDown
+        if isDown {
+            guard !rightOptionDown else { return [] }
+            rightOptionDown = true
+            if shiftDown {
+                visibilityChordLatched = true
+                return [.toggleVisibility]
+            }
+            guard pttEnabled else { return [] }
+            pendingPTT = true
+            return [.schedulePTT]
+        }
+
+        guard rightOptionDown else { return [] }
+        rightOptionDown = false
+        if visibilityChordLatched {
+            visibilityChordLatched = false
+            pendingPTT = false
+            return []
+        }
+        if pendingPTT {
+            pendingPTT = false
+            return [.cancelScheduledPTT, .pressPTT, .releasePTT]
+        }
+        if pttActive {
+            pttActive = false
+            return [.releasePTT]
+        }
+        return []
+    }
+
+    mutating func shiftChanged(isDown: Bool) -> [RightOptionChordAction] {
+        shiftDown = isDown
+        guard isDown, rightOptionDown, !pttActive, !visibilityChordLatched else {
+            return []
+        }
+        visibilityChordLatched = true
+        if pendingPTT {
+            pendingPTT = false
+            return [.cancelScheduledPTT, .toggleVisibility]
+        }
+        return [.toggleVisibility]
+    }
+
+    mutating func pttDelayElapsed() -> [RightOptionChordAction] {
+        guard pendingPTT, rightOptionDown, !shiftDown, !visibilityChordLatched else { return [] }
+        pendingPTT = false
+        pttActive = true
+        return [.pressPTT]
+    }
+
+    mutating func reset() {
+        self = RightOptionChordState(pttEnabled: pttEnabled)
+    }
+}
+
 /// Manages a global hotkey that summons Fae from anywhere on the system.
 ///
 /// Uses `NSEvent.addGlobalMonitorForEvents` to listen for keyboard events
@@ -23,9 +100,15 @@ final class GlobalHotkeyManager {
     private var pttKeyUpMonitor: Any?
     private var pttLocalMonitor: Any?
     private var pttLocalKeyUpMonitor: Any?
+    private var visibilityChordMonitor: Any?
+    private var visibilityChordLocalMonitor: Any?
     private var pttOnPress: (() -> Void)?
     private var pttOnRelease: (() -> Void)?
     private var pttKeyIsDown: Bool = false
+    private var pttOnToggleVisibility: (() -> Void)?
+    private var rightOptionChordState = RightOptionChordState()
+    private var pttDisambiguationTask: Task<Void, Never>?
+    private static let pttChordDisambiguationNanoseconds: UInt64 = 150_000_000
 
     /// Modifier flag for a modifier key code, or nil for regular keys (which
     /// use keyDown/keyUp monitors instead of flagsChanged).
@@ -76,7 +159,8 @@ final class GlobalHotkeyManager {
     func startHoldToTalk(
         keyCode: UInt16 = GlobalHotkeyManager.holdToTalkKeyCode,
         onPress: @escaping () -> Void,
-        onRelease: @escaping () -> Void
+        onRelease: @escaping () -> Void,
+        onToggleVisibility: @escaping () -> Void = {}
     ) {
         // Clean up any existing PTT monitor
         stopHoldToTalk()
@@ -84,6 +168,8 @@ final class GlobalHotkeyManager {
         self.pttOnPress = onPress
         self.pttOnRelease = onRelease
         self.pttKeyIsDown = false
+        self.pttOnToggleVisibility = onToggleVisibility
+        self.rightOptionChordState = RightOptionChordState(pttEnabled: keyCode == Self.holdToTalkKeyCode)
 
         // Only start if Accessibility is trusted (don't re-prompt here)
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary
@@ -96,7 +182,22 @@ final class GlobalHotkeyManager {
         // itself is frontmost (settings open, just launched) the key would
         // be invisible. Register a local monitor alongside so the hold works
         // everywhere.
-        if let flag = Self.modifierFlag(for: keyCode) {
+        if keyCode == Self.holdToTalkKeyCode {
+            let handleFlags: (NSEvent) -> Void = { [weak self] event in
+                guard event.keyCode == Self.holdToTalkKeyCode
+                        || event.keyCode == 56
+                        || event.keyCode == 60
+                else { return }
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleRightOptionChordEvent(event)
+                }
+            }
+            pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: handleFlags)
+            pttLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                handleFlags(event)
+                return event
+            }
+        } else if let flag = Self.modifierFlag(for: keyCode) {
             let handleFlags: (NSEvent) -> Void = { [weak self] event in
                 guard event.keyCode == keyCode else { return }
                 DispatchQueue.main.async { [weak self] in
@@ -148,7 +249,75 @@ final class GlobalHotkeyManager {
                 return event
             }
         }
+        if keyCode != Self.holdToTalkKeyCode {
+            let handleVisibilityChord: (NSEvent) -> Void = { [weak self] event in
+                guard event.keyCode == Self.holdToTalkKeyCode
+                        || event.keyCode == 56
+                        || event.keyCode == 60
+                else { return }
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleRightOptionChordEvent(event)
+                }
+            }
+            visibilityChordMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: .flagsChanged,
+                handler: handleVisibilityChord
+            )
+            visibilityChordLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                handleVisibilityChord(event)
+                return event
+            }
+        }
         NSLog("GlobalHotkeyManager: hold-to-talk monitor started (keyCode %d)", keyCode)
+    }
+
+    private func handleRightOptionChordEvent(_ event: NSEvent) {
+        let shiftIsDown = event.modifierFlags.contains(.shift)
+        let actions: [RightOptionChordAction]
+        if event.keyCode == Self.holdToTalkKeyCode {
+            actions = rightOptionChordState.rightOptionChanged(
+                isDown: event.modifierFlags.contains(.option),
+                shiftIsDown: shiftIsDown
+            )
+        } else {
+            actions = rightOptionChordState.shiftChanged(isDown: shiftIsDown)
+        }
+        applyRightOptionChordActions(actions)
+    }
+
+    private func applyRightOptionChordActions(_ actions: [RightOptionChordAction]) {
+        for action in actions {
+            switch action {
+            case .schedulePTT:
+                pttDisambiguationTask?.cancel()
+                pttDisambiguationTask = Task { [weak self] in
+                    do {
+                        try await Task.sleep(nanoseconds: Self.pttChordDisambiguationNanoseconds)
+                    } catch {
+                        return
+                    }
+                    guard let self else { return }
+                    self.pttDisambiguationTask = nil
+                    self.applyRightOptionChordActions(self.rightOptionChordState.pttDelayElapsed())
+                }
+            case .cancelScheduledPTT:
+                pttDisambiguationTask?.cancel()
+                pttDisambiguationTask = nil
+            case .pressPTT:
+                guard !pttKeyIsDown else { continue }
+                pttKeyIsDown = true
+                NSLog("GlobalHotkeyManager: PTT press (Right Option)")
+                pttOnPress?()
+            case .releasePTT:
+                guard pttKeyIsDown else { continue }
+                pttKeyIsDown = false
+                NSLog("GlobalHotkeyManager: PTT release (Right Option)")
+                pttOnRelease?()
+            case .toggleVisibility:
+                NSLog("GlobalHotkeyManager: toggle Fae visibility (Right Option+Shift)")
+                pttOnToggleVisibility?()
+            }
+        }
     }
 
     /// Stop hold-to-talk monitoring only (leaves summon hotkey intact).
@@ -171,9 +340,24 @@ final class GlobalHotkeyManager {
             NSEvent.removeMonitor(m)
             pttLocalKeyUpMonitor = nil
         }
+        if let m = visibilityChordMonitor {
+            NSEvent.removeMonitor(m)
+            visibilityChordMonitor = nil
+        }
+        if let m = visibilityChordLocalMonitor {
+            NSEvent.removeMonitor(m)
+            visibilityChordLocalMonitor = nil
+        }
+        pttDisambiguationTask?.cancel()
+        pttDisambiguationTask = nil
+        if pttKeyIsDown {
+            pttOnRelease?()
+        }
         pttKeyIsDown = false
+        rightOptionChordState.reset()
         pttOnPress = nil
         pttOnRelease = nil
+        pttOnToggleVisibility = nil
     }
 
     private func startMonitor() {

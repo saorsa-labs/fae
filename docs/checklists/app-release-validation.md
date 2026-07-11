@@ -112,6 +112,9 @@ These scenarios are mandatory for the new canonical UI shell once it is included
 - [ ] Default menu (9 items): Talk to Fae · Settings… · [Hand off submenu if fleet non-empty] · Reset Conversation · Hide Fae · Stop · Ask Fae for Help · Rescue Mode… · Quit Fae. Engineering items (Scheduler, Skills, Edit Soul, Edit Custom Instructions, permissions ×6, Memory Inbox) are NOT present unless `ui.advancedMenus = true` in config (applies at next launch).
 - [ ] Rust shell menu does not include Cowork or Open Work with Fae.
 - [ ] Stop, Hide, and Quit perform their expected action.
+- [ ] Right Option alone still performs hold-to-talk; Right Option+Shift toggles Fae visibility exactly once without starting or submitting a PTT capture, in either modifier order.
+- [ ] After Hide Fae, routine startup/status/Listening/Thinking traffic does not resurrect the orb; the next real Speaking transition reveals orb and pill, and the final Quiescent transition re-hides both.
+- [ ] Hiding during active speech takes effect immediately and same-state playback updates do not bounce either window visible; an explicit Show during speech remains visible after the turn.
 - [ ] Open Browser/Data Panel opens an orb-launched browser/webview surface for charts, data, documents, and video.
 - [ ] Scheduler and Skills open orb-owned temporary panels rather than Cowork.
 - [ ] Rich output does not require a permanent canvas or Cowork surface.

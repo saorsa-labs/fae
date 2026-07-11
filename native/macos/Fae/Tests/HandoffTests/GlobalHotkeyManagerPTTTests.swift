@@ -50,4 +50,93 @@ struct GlobalHotkeyManagerPTTTests {
         // PTT should still be active after stop() — only summon is stopped
         manager.stopHoldToTalk()
     }
+
+    @Test("Shift then Right Option toggles once without PTT")
+    func shiftThenRightOptionTogglesOnceWithoutPTT() {
+        var state = RightOptionChordState()
+
+        #expect(state.shiftChanged(isDown: true) == [])
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: true) == [.toggleVisibility])
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: true) == [])
+        #expect(state.pttDelayElapsed() == [])
+        #expect(state.rightOptionChanged(isDown: false, shiftIsDown: true) == [])
+        #expect(state.shiftChanged(isDown: false) == [])
+    }
+
+    @Test("Right Option then Shift cancels pending PTT and toggles once")
+    func shiftDuringPendingPTTCancelsAndTogglesOnce() {
+        var state = RightOptionChordState()
+
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: false) == [.schedulePTT])
+        #expect(state.shiftChanged(isDown: true) == [.cancelScheduledPTT, .toggleVisibility])
+        #expect(state.shiftChanged(isDown: true) == [])
+        #expect(state.pttDelayElapsed() == [])
+        #expect(state.rightOptionChanged(isDown: false, shiftIsDown: true) == [])
+    }
+
+    @Test("Right Option alone schedules presses after delay and releases")
+    func rightOptionAloneRunsDelayedPTTLifecycle() {
+        var state = RightOptionChordState()
+
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: false) == [.schedulePTT])
+        #expect(state.pttDelayElapsed() == [.pressPTT])
+        #expect(state.rightOptionChanged(isDown: false, shiftIsDown: false) == [.releasePTT])
+    }
+
+    @Test("Right Option released before delay retains PTT semantics")
+    func rightOptionReleasedBeforeDelayRetainsPTTSemantics() {
+        var state = RightOptionChordState()
+
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: false) == [.schedulePTT])
+        #expect(
+            state.rightOptionChanged(isDown: false, shiftIsDown: false)
+                == [.cancelScheduledPTT, .pressPTT, .releasePTT]
+        )
+        #expect(state.pttDelayElapsed() == [])
+    }
+
+    @Test("Shift after active PTT does not toggle and release still fires")
+    func shiftAfterActivePTTDoesNotToggle() {
+        var state = RightOptionChordState()
+
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: false) == [.schedulePTT])
+        #expect(state.pttDelayElapsed() == [.pressPTT])
+        #expect(state.shiftChanged(isDown: true) == [])
+        #expect(state.rightOptionChanged(isDown: false, shiftIsDown: true) == [.releasePTT])
+    }
+
+    @Test("Repeated held events do not duplicate actions")
+    func repeatedHeldEventsDoNotDuplicateActions() {
+        var chordState = RightOptionChordState()
+
+        #expect(chordState.shiftChanged(isDown: true) == [])
+        #expect(chordState.rightOptionChanged(isDown: true, shiftIsDown: true) == [.toggleVisibility])
+        #expect(chordState.shiftChanged(isDown: true) == [])
+        #expect(chordState.rightOptionChanged(isDown: true, shiftIsDown: true) == [])
+        #expect(chordState.rightOptionChanged(isDown: false, shiftIsDown: true) == [])
+        #expect(chordState.rightOptionChanged(isDown: false, shiftIsDown: true) == [])
+
+        var pttState = RightOptionChordState()
+        #expect(pttState.rightOptionChanged(isDown: true, shiftIsDown: false) == [.schedulePTT])
+        #expect(pttState.rightOptionChanged(isDown: true, shiftIsDown: false) == [])
+        #expect(pttState.pttDelayElapsed() == [.pressPTT])
+        #expect(pttState.pttDelayElapsed() == [])
+        #expect(pttState.rightOptionChanged(isDown: false, shiftIsDown: false) == [.releasePTT])
+        #expect(pttState.rightOptionChanged(isDown: false, shiftIsDown: false) == [])
+    }
+
+    @Test("Right Option visibility chord remains available when PTT is disabled")
+    func rightOptionVisibilityChordRemainsAvailableWhenPTTIsDisabled() {
+        var state = RightOptionChordState(pttEnabled: false)
+
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: false) == [])
+        #expect(state.shiftChanged(isDown: true) == [.toggleVisibility])
+        #expect(state.shiftChanged(isDown: true) == [])
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: true) == [])
+        #expect(state.rightOptionChanged(isDown: false, shiftIsDown: true) == [])
+        #expect(state.shiftChanged(isDown: false) == [])
+
+        #expect(state.shiftChanged(isDown: true) == [])
+        #expect(state.rightOptionChanged(isDown: true, shiftIsDown: true) == [.toggleVisibility])
+    }
 }
