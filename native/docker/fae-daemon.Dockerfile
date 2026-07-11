@@ -20,6 +20,12 @@ RUN apt-get update \
 
 COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
 COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
+COPY --chmod=0755 \
+    native/docker/verify-fae-daemon-runtime-deps.sh \
+    native/docker/test-verify-fae-daemon-runtime-deps.sh \
+    /usr/local/bin/
+RUN /usr/local/bin/test-verify-fae-daemon-runtime-deps.sh \
+    /usr/local/bin/verify-fae-daemon-runtime-deps.sh
 
 WORKDIR /workspace
 COPY vendor/ vendor/
@@ -45,11 +51,4 @@ RUN set -eu; \
     ! grep -F 'not found' /tmp/fae-daemon.ldd; \
     grep -F 'libstdc++.so.6' /tmp/fae-daemon.ldd; \
     ! grep -Ei 'lib(onnxruntime|sherpa|kaldi|openfst)' /tmp/fae-daemon.ldd; \
-    awk '{ print $1 }' /tmp/fae-daemon.ldd \
-        | sed 's#^.*/##' \
-        | sort -u \
-        | grep -Ev '^(linux-vdso\.so\.1|ld-linux-x86-64\.so\.2|libasound\.so\.2|libc\.so\.6|libdl\.so\.2|libgcc_s\.so\.1|libm\.so\.6|libpthread\.so\.0|librt\.so\.1|libstdc\+\+\.so\.6)$' \
-        > /tmp/fae-daemon-unexpected-libs.txt \
-        || true; \
-    test ! -s /tmp/fae-daemon-unexpected-libs.txt \
-        || { echo 'ERROR: unexpected fae-daemon runtime dependencies:' >&2; cat /tmp/fae-daemon-unexpected-libs.txt >&2; exit 1; }
+    /usr/local/bin/verify-fae-daemon-runtime-deps.sh /tmp/fae-daemon.ldd
