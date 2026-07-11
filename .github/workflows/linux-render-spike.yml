@@ -7,6 +7,7 @@ on:
       - ".github/workflows/linux-render-spike.yml"
       - "crates/**"
       - "native/rust/fae-ui-shell/**"
+      - "native/docker/**"
       - "docs/architecture/linux-render-spike-2026-06.md"
   push:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - ".github/workflows/linux-render-spike.yml"
       - "crates/**"
       - "native/rust/fae-ui-shell/**"
+      - "native/docker/**"
       - "docs/architecture/linux-render-spike-2026-06.md"
 
 concurrency:
@@ -62,13 +64,6 @@ jobs:
           components: clippy, rustfmt
           targets: x86_64-unknown-linux-gnu
 
-      - name: Install Zig and cargo-zigbuild
-        run: |
-          set -euo pipefail
-          curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o /tmp/zig.tar.xz
-          tar -xf /tmp/zig.tar.xz -C /tmp
-          echo "/tmp/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
-          cargo install cargo-zigbuild --locked
 
       - name: Check Rust orb shell formatting
         working-directory: native/rust/fae-ui-shell
@@ -154,29 +149,16 @@ jobs:
         working-directory: crates
         run: cargo build -p fae-daemon --all-features
 
-      # zigbuild packaging-proof: build WITHOUT the `parakeet` feature. zig's
-      # hermetic cross-sysroot lacks GNU libstdc++ (and targets older glibc), so
-      # it cannot link sherpa-onnx's prebuilt C++ static lib; `parakeet` is a
-      # default-on cargo feature, excluded here via --no-default-features. Native
-      # ci-linux (both arches) + macOS build WITH it. The packaged/zigbuilt Linux
-      # daemon temporarily ships without Parakeet (gap; see PR description).
-      - name: P1 deferred proof — zigbuild fae-daemon for Linux x86_64 (no parakeet feature)
-        working-directory: crates
-        run: cargo zigbuild --target x86_64-unknown-linux-gnu -p fae-daemon --no-default-features
-
-      - name: Verify zigbuilt binary runtime deps (ldd)
-        working-directory: crates
+      # Native Docker packaging proof: unlike the former Zig cross-build, this
+      # builds the shipping feature set, including sherpa-onnx/Parakeet. The
+      # digest-pinned Ubuntu image keeps GNU libstdc++ and glibc in one native
+      # sysroot; the Dockerfile fails on missing or unexpected runtime deps.
+      - name: Build all-feature fae-daemon in pinned Ubuntu 24.04 image
         run: |
-          set -euo pipefail
-          BIN="target/x86_64-unknown-linux-gnu/debug/fae-daemon"
-          test -x "$BIN"
-          echo "=== ldd $BIN ==="
-          ldd "$BIN" | tee /tmp/ldd.txt
-          # This build excludes the `parakeet` feature (no sherpa-onnx), so it
-          # must NOT pull in sherpa/onnxruntime shared runtime deps. Fail if any
-          # leaked in (a C++ dep slipped past the feature gate).
-          if grep -Ei 'lib(onnxruntime|sherpa|kaldi|openfst)' /tmp/ldd.txt; then
-            echo "ERROR: no-parakeet zigbuild pulled in sherpa/onnxruntime shared deps" >&2
-            exit 1
-          fi
-          echo "runtime deps OK: no sherpa/onnxruntime deps in the no-parakeet zigbuild"
+          docker build \
+            --pull \
+            --platform linux/amd64 \
+            --progress plain \
+            --file native/docker/fae-daemon.Dockerfile \
+            --tag "fae-daemon-linux-proof:${GITHUB_SHA}" \
+            .

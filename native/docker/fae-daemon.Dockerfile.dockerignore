@@ -1,0 +1,9 @@
+**
+!crates/
+!crates/**
+!vendor/
+!vendor/**
+!native/
+!native/docker/
+!native/docker/fae-daemon.Dockerfile
+!native/docker/fae-daemon.Dockerfile.dockerignore
