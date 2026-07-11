@@ -21,16 +21,18 @@
   "integrity": {
     "algorithm": "sha256",
     "checksums": {
-      "SKILL.md": "0fbf21551ccc88147e9de13d4ba1c72c8cfcf64f6d51fdcc10d0df214aba965d",
+      "SKILL.md": "119e5b868516b0a5a89e297dce2233e7b26fb4f78fd66c704235c1177f16f8e7",
       "scripts/_x0x.py": "3dc2115b95528096cf475b575497b9798f9073ae446863664b908f7ae7fde546",
       "scripts/contacts.py": "32f794ccd5e58ee0a63d49b96755ee0f5727fe89079e1e3573b1bff8abd2c8a2",
       "scripts/ensure.py": "d1e4e00a9abf05fd2843420013fa3a6ff808e5405c9fe8e15721385be1abac2f",
       "scripts/files.py": "90b6f8807512ca2cbb5700f79ba03d24654c4b34235e8d74e463d8d2a105c4f7",
+      "scripts/forwards.py": "64f9bbe4dcb5177b880b5f30b4a5c4f46fb2d71d5e0664424225da1ed67a865f",
       "scripts/groups.py": "ee4bedb4113d8a277ad47a30d716ab8ab96558827ab99cbdf3576df47fd87af2",
       "scripts/gui.py": "cc6c5a38033f6428cd63ce707d587540c7a31fdba2dfae9a1b5f40d3ff613946",
       "scripts/kanban.py": "762ebb66104a7a7d75c8fc7f3853f320ea0b9e27161bf3618cd576e430c39666",
       "scripts/message.py": "c4458d1bb8751a90d071474f18ae17ea1c55fd89cfb48b3bd3973a7116957c87",
       "scripts/presence.py": "a35798fbc987335ce0c0320041ff80094030570f57edaa0e16337c9a7652e951",
+      "scripts/stores.py": "e13500ddc3c736903ca7a228634552c9ce8f4150022578d409d268f01fdf443b",
       "scripts/swarm.py": "927925ccffe5507611cd6e2048fcc8c27b97b1abcf0b9690e7ec00f521502796"
     },
     "signature": null

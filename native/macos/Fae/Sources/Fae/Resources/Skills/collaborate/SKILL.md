@@ -1,6 +1,6 @@
 ---
 name: collaborate
-description: Connect with other Fae, friends, and their agents over x0x — messages, spaces, kanban, files. Use for "share my card", "add this person", or when the user pastes an x0x contact card.
+description: Collaborate over x0x — contacts, messages, spaces, boards, files, presence, trusted-machine port forwards, and replicated stores. Use for sharing cards, connecting people, or cross-device work.
 metadata:
   author: fae
   version: "1.0"
@@ -9,9 +9,10 @@ metadata:
 You are operating Fae's **Collaborate** skill — the bridge that lets the user work
 together with other people and agents over the **x0x** decentralized network. It
 gives the user the same collaboration the communitas app offers (spaces, messages,
-kanban, swarm, files, presence) by driving the local **x0xd** daemon over its
-localhost REST API, and it shows the rich UI in the user's **browser** via x0x's
-own GUI.
+kanban, swarm, files, presence), plus tailnet port-forwarding between the owner's
+trusted machines and replicated key-value stores, by driving the local **x0xd**
+daemon over its localhost REST API. It shows the rich UI in the user's **browser**
+via x0x's own GUI.
 
 ## What this connects
 
@@ -78,6 +79,8 @@ Always run `ensure` first in a session if you are unsure the daemon is up.
 | `presence` | Who is online / discover agents (`action`: `online`/`find`/`foaf`). |
 | `swarm` | Publish a task to a topic or read results (`action`: `publish`/`read`/`subscribe`). |
 | `files` | Send a file to an agent / list / accept / reject transfers (`action`: `send`/`list`/`accept`/`reject`). |
+| `forwards` | Forward a local TCP port to a loopback service on a trusted peer machine (`action`: `list`/`add`/`rm`). Use only for the owner's trusted fleet and numeric loopback endpoints. |
+| `stores` | Share replicated key-value state between agents (`action`: `list`/`create`/`join`/`keys`/`get`/`set`/`rm`). Values are text encoded safely for x0x transport. |
 
 All scripts accept an optional `instance` param to target a named x0x identity
 (`x0x --name alice`); omit it for the default identity.
@@ -92,6 +95,8 @@ All scripts accept an optional `instance` param to target a named x0x identity
 - "Summarise the unread messages in Falcon." → `message read {group_id}` → summarise the result aloud.
 - "Add a card 'ship the daemon' to the board." → `kanban add {list_id, title:"ship the daemon"}`.
 - "Send the design doc to the team." → `files send {agent_id, path}`.
+- "Forward local port 15432 to port 22 on my other machine." → `forwards add {local_addr:"127.0.0.1:15432", peer_agent, target_host:"127.0.0.1", target_port:22}`. Confirm the other machine is trusted and its connect policy allows the target.
+- "Share this setting with my other agents." → `stores create {name, topic}` or `stores join {store_id}`, then `stores set {store_id, key, value}`. Use `stores get` to read it back.
 
 When you open the GUI, tell the user it's in their browser. When you read messages,
 say if history might be partial (some history is browser-local, only signed group

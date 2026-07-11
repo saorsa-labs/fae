@@ -204,6 +204,8 @@ server-side dangerous scope. Validate the live boundary:
 - [ ] Recall output shows trustworthy provenance labels for imported artifacts or derived digests.
 - [ ] Scheduler list/create/update/delete/trigger flows work.
 - [ ] Skills list/add/edit/remove/execute flows work.
+- [ ] With a second trusted x0x machine online and connect forwarding enabled, the `collaborate` skill can add a numeric-loopback tailnet forward, carry bytes through it, list the exact mapping, and remove the listener.
+- [ ] Two trusted x0x agents can create/join a replicated store, set/get the same text value across agents, list its key, and replicate its removal.
 - [ ] Staged skill drafts can be listed, inspected, and only applied or dismissed after explicit user confirmation.
 - [ ] Any generated or edited artifacts appear where the UI says they will.
 
