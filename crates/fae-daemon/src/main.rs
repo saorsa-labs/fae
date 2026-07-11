@@ -690,13 +690,39 @@ struct ConductorCloudLane {
 /// keeps the local-only default (fail closed). The API key is moved into the
 /// adapter and never logged, never printed, never placed on the NDJSON socket,
 /// and never in a `CloudRequest`.
+fn missing_openrouter_contract_fields(
+    base_url: &Option<String>,
+    model_id: &Option<String>,
+    api_key: &Option<String>,
+) -> Option<&'static str> {
+    api_key.as_ref()?;
+    match (base_url.is_none(), model_id.is_none()) {
+        (true, true) => Some("FAE_REMOTE_BASE_URL, FAE_REMOTE_MODEL"),
+        (true, false) => Some("FAE_REMOTE_BASE_URL"),
+        (false, true) => Some("FAE_REMOTE_MODEL"),
+        (false, false) => None,
+    }
+}
+
 fn conductor_cloud_lane_from_env(mode: conductor::ModelMode) -> Option<ConductorCloudLane> {
     if mode != conductor::ModelMode::AllAvailable {
         return None;
     }
-    let base_url = first_non_empty_env(["FAE_REMOTE_BASE_URL"])?;
-    let model_id = first_non_empty_env(["FAE_REMOTE_MODEL"])?;
-    let api_key = first_non_empty_env(["FAE_OPENROUTER_API_KEY"])?;
+    let base_url = first_non_empty_env(["FAE_REMOTE_BASE_URL"]);
+    let model_id = first_non_empty_env(["FAE_REMOTE_MODEL"]);
+    let api_key = first_non_empty_env(["FAE_OPENROUTER_API_KEY"]);
+    if let Some(missing_fields) = missing_openrouter_contract_fields(&base_url, &model_id, &api_key)
+    {
+        tracing::warn!(
+            missing_fields,
+            "FAE_OPENROUTER_API_KEY is set but the OpenRouter startup contract is incomplete; \
+             cloud routing remains disabled"
+        );
+        return None;
+    }
+    let base_url = base_url?;
+    let model_id = model_id?;
+    let api_key = api_key?;
     let worker_id = conductor::workers::openrouter_worker_id(&model_id);
     let adapter = fae_engine::OpenRouterAdapter::new(fae_engine::OpenRouterConfig {
         base_url,
@@ -2633,6 +2659,34 @@ approved_by = "test"
 created_at = "test"
 "#
         )
+    }
+
+    #[test]
+    fn missing_openrouter_contract_fields_reports_exact_missing_fields() {
+        let base_url = Some("https://openrouter.ai/api/v1".to_owned());
+        let model_id = Some("openai/gpt-4.1".to_owned());
+        let api_key = Some("test-key".to_owned());
+
+        assert_eq!(
+            missing_openrouter_contract_fields(&None, &model_id, &api_key),
+            Some("FAE_REMOTE_BASE_URL")
+        );
+        assert_eq!(
+            missing_openrouter_contract_fields(&base_url, &None, &api_key),
+            Some("FAE_REMOTE_MODEL")
+        );
+        assert_eq!(
+            missing_openrouter_contract_fields(&None, &None, &api_key),
+            Some("FAE_REMOTE_BASE_URL, FAE_REMOTE_MODEL")
+        );
+        assert_eq!(
+            missing_openrouter_contract_fields(&base_url, &model_id, &api_key),
+            None
+        );
+        assert_eq!(
+            missing_openrouter_contract_fields(&None, &None, &None),
+            None
+        );
     }
 
     #[test]

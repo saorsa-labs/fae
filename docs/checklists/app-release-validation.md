@@ -362,6 +362,7 @@ Mandatory when: `llm.privacyLane`, `llm.cloudDailyBudgetUSD`, cloud API key, or
 - [ ] Set lane = "all", store an API key, restart the daemon (`just run-dev`).
 - [ ] Confirm `DaemonLLMEngine` log line "cloud lane active (lane=all, …)" appears.
 - [ ] Confirm `FAE_OPENROUTER_API_KEY` does NOT appear in `~/Library/Logs/` or NSLog output.
+- [ ] With lane = "all" and `FAE_OPENROUTER_API_KEY` set, unset either `FAE_REMOTE_BASE_URL` or `FAE_REMOTE_MODEL`; confirm startup warns that the OpenRouter contract is incomplete, names the missing configuration fields without logging the key, and keeps cloud routing disabled.
 - [ ] Set lane = "local"; confirm the log line does NOT appear (no cloud vars injected).
 
 ### 13.4 Fallback surface
