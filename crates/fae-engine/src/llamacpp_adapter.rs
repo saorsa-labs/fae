@@ -249,6 +249,44 @@ fn sidecar_pidfile(
     pidfile_root.map(|root| root.join(format!("llama-server.{port}.pid")))
 }
 
+fn process_executable(command_line: &str) -> &str {
+    command_line
+        .split_once(" -")
+        .map_or(command_line, |(executable, _)| executable)
+        .trim()
+        .trim_matches(|character| character == '\'' || character == '"')
+}
+
+fn held_port_message(port: u16, our_binary: &str, holder: Option<&(u32, String)>) -> String {
+    let Some((pid, command_line)) = holder else {
+        return format!(
+            "port {port} is still held after reclaim, but the listener process could not be \
+             identified; refusing to spawn a colliding sidecar — inspect the port holder and \
+             relaunch"
+        );
+    };
+    let executable = process_executable(command_line);
+    if std::path::Path::new(executable)
+        .file_name()
+        .is_some_and(|name| name == "llama-server")
+    {
+        return format!(
+            "port {port} is held by llama-server pid {pid} at {executable:?}, from a different \
+             install path than configured {our_binary:?}; the ownership check refused to kill \
+             it. Run `just kill-stale-sidecars` to remove stale Fae llama-servers, then relaunch"
+        );
+    }
+    let executable = if executable.is_empty() {
+        "<unknown executable>"
+    } else {
+        executable
+    };
+    format!(
+        "port {port} is held by non-Fae process pid {pid} ({executable:?}); the ownership check \
+         refused to kill it. Stop that process or free the port, then relaunch"
+    )
+}
+
 /// Reclaim `port` if it is squatted by a stale `llama-server` from a prior
 /// unclean daemon death (SIGKILL / crash / jetsam). Called by
 /// [`LlamaServerHandle::spawn`] BEFORE launching a fresh sidecar, so the new
@@ -293,8 +331,8 @@ async fn reclaim_port_if_held(
                     send_signal(pid, "KILL");
                 }
             }
-            // cmdline mismatch ⇒ recycled PID (not ours): do NOT kill a stranger.
-            // Fall through to the port-free gate, which fails loud if still held.
+            // Full-path mismatch: preserve the fail-closed ownership gate. The
+            // timeout path queries the actual listener PID before reporting it.
         }
     }
     // Wait for the port to go free WITH a timeout. Never bind on a held port.
@@ -307,9 +345,12 @@ async fn reclaim_port_if_held(
             return Ok(());
         }
         if std::time::Instant::now() >= free_deadline {
-            return Err(EngineError::Load(format!(
-                "port {port} is still held after reclaim; refusing to spawn a sidecar \
-                 that would collide — free the port (or kill the holder) and relaunch"
+            let holder = port_listener_pid(port)
+                .map(|pid| (pid, process_command_line(pid).unwrap_or_default()));
+            return Err(EngineError::Load(held_port_message(
+                port,
+                our_binary,
+                holder.as_ref(),
             )));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1553,6 +1594,54 @@ mod tests {
                 "required": ["city"]
             }),
         }
+    }
+
+    #[test]
+    fn held_port_message_identifies_stale_fae_llama_server_from_different_install() {
+        let holder = (
+            4242,
+            "/old/Fae.app/Contents/Resources/LlamaCpp/llama-server -m model.gguf".to_owned(),
+        );
+        let configured_binary = "/new/Fae.app/Contents/Resources/LlamaCpp/llama-server";
+
+        let message = held_port_message(18080, configured_binary, Some(&holder));
+
+        assert!(message.contains("port 18080"));
+        assert!(message.contains("pid 4242"));
+        assert!(message.contains("llama-server"));
+        assert!(message.contains("/old/Fae.app/Contents/Resources/LlamaCpp/llama-server"));
+        assert!(message.contains(configured_binary));
+        assert!(message.contains("different install path"));
+        assert!(message.contains("ownership check refused to kill it"));
+        assert!(message.contains("just kill-stale-sidecars"));
+    }
+
+    #[test]
+    fn held_port_message_identifies_non_fae_holder_without_fae_kill_recipe() {
+        let holder = (25509, "/opt/homebrew/bin/llama serve".to_owned());
+
+        let message = held_port_message(
+            18080,
+            "/new/Fae.app/Contents/Resources/LlamaCpp/llama-server",
+            Some(&holder),
+        );
+
+        assert!(message.contains("pid 25509"));
+        assert!(message.contains("/opt/homebrew/bin/llama serve"));
+        assert!(message.contains("ownership check refused to kill it"));
+        assert!(!message.contains("llama-server"));
+        assert!(!message.contains("just kill-stale-sidecars"));
+    }
+
+    #[test]
+    fn held_port_message_reports_unidentified_listener_without_holder() {
+        let message = held_port_message(
+            18080,
+            "/new/Fae.app/Contents/Resources/LlamaCpp/llama-server",
+            None,
+        );
+
+        assert!(message.contains("listener process could not be identified"));
     }
 
     #[test]

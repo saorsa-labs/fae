@@ -71,6 +71,8 @@ Suggested screenshot root:
 - [ ] `just test-serve` exposes `/health` on `127.0.0.1:7433`.
 - [ ] The active local text model and configured vision model are visible in Settings without truncation.
 - [ ] The runtime reports the expected local text model, context size, tool mode, and llama.cpp source (`FAE_LLAMA_SHARED_SERVER_URL` attached shared server vs Fae-owned sidecar).
+- [ ] With port 18080 held by a `llama-server` from another Fae app-bundle path, daemon startup fails loud with the real listener PID/executable, explains the cross-install mismatch, and recommends `just kill-stale-sidecars`; it never kills the mismatched process automatically.
+- [ ] `just kill-stale-sidecars` defaults to a dry-run, lists only executables ending in `/Fae.app/Contents/Resources/LlamaCpp/llama-server`, leaves `/opt/homebrew/bin/llama serve` and bare/non-Fae llama processes untouched, and requires the explicit `kill` action before TERM → grace → KILL.
 - [ ] The active local text model matches `FaeConfig.recommendedModel()`. Active (Qwen fallback — Gemma 4 pending mlx-swift-lm): `Qwen3.5-9B-Unsloth` (≥16 GB) / `Qwen3.5-4B` (8–15 GB) / `Qwen3.5-2B-OptiQ` (<8 GB). Target (Gemma 4, not yet available): `E4B` (16–31 GB) / `E2B` (<16 GB) / `26B-A4B` (≥32 GB).
 - [ ] On a cache-cleared or clean-install machine, first local text-model load completes without `Worker command timed out: load` while model download is in progress.
 - [ ] Any stale onboarding, memory, scheduler, or approval state needed for the scenario is reset intentionally through the test server.

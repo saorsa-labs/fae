@@ -92,6 +92,87 @@ _kill-fae:
         sleep 1
     fi
 
+# List stale Fae app-bundled llama-servers. Pass `kill` explicitly to terminate
+# the printed processes (TERM → 2s grace → KILL). Bare `llama-server`/`llama`
+# names and non-Fae install paths are never targets.
+kill-stale-sidecars action="dry-run":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACTION="{{action}}"
+    case "$ACTION" in
+        dry-run|kill) ;;
+        *) echo "Usage: just kill-stale-sidecars [dry-run|kill]" >&2; exit 2 ;;
+    esac
+
+    is_fae_llama_server() {
+        local command_line="$1"
+        local executable="${command_line%% -*}"
+        executable="${executable#"${executable%%[![:space:]]*}"}"
+        executable="${executable%"${executable##*[![:space:]]}"}"
+        [[ "$executable" == */Fae.app/Contents/Resources/LlamaCpp/llama-server ]]
+    }
+
+    # Permanent safety fixture for the owner's live Homebrew llama process.
+    if is_fae_llama_server "/opt/homebrew/bin/llama serve"; then
+        echo "Safety assertion failed: non-Fae Homebrew llama matched" >&2
+        exit 1
+    fi
+
+    pids=()
+    commands=()
+    while read -r pid command_line; do
+        if is_fae_llama_server "$command_line"; then
+            pids+=("$pid")
+            commands+=("$command_line")
+            if [[ "$ACTION" == "dry-run" ]]; then
+                echo "DRY RUN: would terminate Fae llama-server pid $pid: $command_line"
+            fi
+        fi
+    done < <(ps -axo pid=,command=)
+
+    if ((${#pids[@]} == 0)); then
+        echo "No stale Fae app-bundled llama-server processes found."
+        exit 0
+    fi
+    if [[ "$ACTION" == "dry-run" ]]; then
+        echo "Review the list, then run: just kill-stale-sidecars kill"
+        exit 0
+    fi
+
+    termed=()
+    for index in "${!pids[@]}"; do
+        pid="${pids[$index]}"
+        expected="${commands[$index]}"
+        current="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        current="${current#"${current%%[![:space:]]*}"}"
+        current="${current%"${current##*[![:space:]]}"}"
+        if [[ "$current" != "$expected" ]] || ! is_fae_llama_server "$current"; then
+            echo "Skipping pid $pid: identity changed before TERM" >&2
+            termed+=("0")
+            continue
+        fi
+        echo "Sending TERM to Fae llama-server pid $pid"
+        kill -TERM "$pid"
+        termed+=("1")
+    done
+
+    sleep 2
+    for index in "${!pids[@]}"; do
+        [[ "${termed[$index]}" == "1" ]] || continue
+        pid="${pids[$index]}"
+        expected="${commands[$index]}"
+        kill -0 "$pid" 2>/dev/null || continue
+        current="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        current="${current#"${current%%[![:space:]]*}"}"
+        current="${current%"${current##*[![:space:]]}"}"
+        if [[ "$current" != "$expected" ]] || ! is_fae_llama_server "$current"; then
+            echo "Skipping pid $pid: identity changed before KILL" >&2
+            continue
+        fi
+        echo "Sending KILL to Fae llama-server pid $pid"
+        kill -KILL "$pid"
+    done
+
 # Build, bundle, sign, and launch the native app (production mode).
 # Orb-first: embeds the Rust orb shell + daemon (the only product UI + brain).
 run-native: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _embed-kokoro-model _sign-bundle _kill-fae
