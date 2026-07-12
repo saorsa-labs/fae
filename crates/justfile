@@ -15,16 +15,21 @@ default: check
 # Full validation — zero warnings, all tests.
 #
 # The clippy invocations MIRROR .github/workflows/ci-linux.yml so a green local
-# `just check` means a green CI: the workspace-wide `-D warnings` pass is the
-# broad safety net, and the per-crate passes add the strict production-safety
-# lints (`-D clippy::panic -D clippy::unwrap_used -D clippy::expect_used`) that
-# CI enforces on the daemon binary, fae-engine, and fae-metaopt.
+# `just check` means a green CI: the workspace-wide `-D warnings` pass (all
+# targets, incl. tests) is the broad safety net, and the per-crate passes add
+# the strict production-safety lints (`-D clippy::panic -D clippy::unwrap_used
+# -D clippy::expect_used`) that CI enforces on the daemon binary, fae-engine,
+# and fae-metaopt. Those forbidden lints are scoped to `--lib --bins`
+# (production code only) — test code (unit + integration) stays under
+# `-D warnings` but may use unwrap/expect/panic. Crate roots also carry
+# `#![cfg_attr(not(test), deny(...))]` + `#![cfg_attr(test, allow(...))]` as the
+# in-source belt for ad-hoc/IDE clippy runs.
 check:
     cargo fmt --all -- --check
     cargo clippy --all-targets --all-features -- -D warnings
-    cargo clippy -p fae-daemon --bin fae-daemon -p fae-engine --all-targets --all-features \
+    cargo clippy -p fae-daemon -p fae-engine --lib --bins --all-features \
         -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
-    cargo clippy -p fae-metaopt --all-targets --all-features \
+    cargo clippy -p fae-metaopt --lib --bins --all-features \
         -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
     cargo test --all-features
 
