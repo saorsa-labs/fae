@@ -602,8 +602,8 @@ final class VoicePipelineRegressionTests: XCTestCase {
     }
 
     func testEchoTailRejectsSegmentContainedInsideSuppressionWindow() {
-        let suppressUntil = Date(timeIntervalSinceReferenceDate: 102)
-        let onset = Date(timeIntervalSinceReferenceDate: 100.4)
+        let suppressUntil: TimeInterval = 102
+        let onset: TimeInterval = 100.4
 
         XCTAssertTrue(
             EchoSuppressor.shouldRejectForEchoTail(
@@ -615,8 +615,8 @@ final class VoicePipelineRegressionTests: XCTestCase {
     }
 
     func testEchoTailAcceptsPromptUserUtteranceThatContinuesPastTail() {
-        let suppressUntil = Date(timeIntervalSinceReferenceDate: 102)
-        let onset = Date(timeIntervalSinceReferenceDate: 100.4)
+        let suppressUntil: TimeInterval = 102
+        let onset: TimeInterval = 100.4
 
         XCTAssertFalse(
             EchoSuppressor.shouldRejectForEchoTail(

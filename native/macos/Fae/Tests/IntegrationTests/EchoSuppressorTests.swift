@@ -119,11 +119,14 @@ final class EchoSuppressorTests: XCTestCase {
     }
 
     func testSecondsSinceLastSpeechAfterEnd() {
-        var s = EchoSuppressor()
+        var now: TimeInterval = 1_000_000
+        var s = EchoSuppressor(monotonicTime: { now })
         s.onAssistantSpeechStart()
         s.onAssistantSpeechEnd()
-        XCTAssertGreaterThan(s.secondsSinceLastSpeech, 0)
-        XCTAssertLessThan(s.secondsSinceLastSpeech, 1)
+        XCTAssertEqual(s.secondsSinceLastSpeech, 0)
+
+        now += 0.25
+        XCTAssertEqual(s.secondsSinceLastSpeech, 0.25, accuracy: 1e-12)
     }
 
     func testReset() {
@@ -143,7 +146,7 @@ final class EchoSuppressorTests: XCTestCase {
             durationSecs: 1.0,
             rms: 0.5,
             awaitingApproval: false,
-            segmentOnset: Date()
+            segmentOnset: ProcessInfo.processInfo.systemUptime
         )
         XCTAssertFalse(accepted)
     }
@@ -154,7 +157,7 @@ final class EchoSuppressorTests: XCTestCase {
             durationSecs: 20.0, // > 15s max
             rms: 0.5,
             awaitingApproval: false,
-            segmentOnset: Date()
+            segmentOnset: ProcessInfo.processInfo.systemUptime
         )
         XCTAssertFalse(accepted)
     }
@@ -168,7 +171,7 @@ final class EchoSuppressorTests: XCTestCase {
             durationSecs: 0.3,
             rms: 0.5,
             awaitingApproval: false,
-            segmentOnset: Date()
+            segmentOnset: ProcessInfo.processInfo.systemUptime
         )
         XCTAssertFalse(accepted)
     }
@@ -184,7 +187,7 @@ final class EchoSuppressorTests: XCTestCase {
             durationSecs: 1.0,
             rms: 0.5,
             awaitingApproval: false,
-            segmentOnset: Date()
+            segmentOnset: ProcessInfo.processInfo.systemUptime
         )
         XCTAssertTrue(accepted)
     }
@@ -198,7 +201,7 @@ final class EchoSuppressorTests: XCTestCase {
             durationSecs: 1.0,
             rms: 0.5, // > 0.12 ceiling
             awaitingApproval: false,
-            segmentOnset: Date()
+            segmentOnset: ProcessInfo.processInfo.systemUptime
         )
         XCTAssertFalse(accepted)
     }
@@ -213,7 +216,7 @@ final class EchoSuppressorTests: XCTestCase {
             durationSecs: 0.2,
             rms: 0.05,
             awaitingApproval: true,
-            segmentOnset: Date()
+            segmentOnset: ProcessInfo.processInfo.systemUptime
         )
         XCTAssertTrue(accepted)
     }
@@ -225,7 +228,7 @@ final class EchoSuppressorTests: XCTestCase {
             durationSecs: 0.1,
             rms: 0.05,
             awaitingApproval: false,
-            segmentOnset: Date()
+            segmentOnset: ProcessInfo.processInfo.systemUptime
         )
         XCTAssertTrue(accepted) // No guard active
     }
@@ -233,8 +236,8 @@ final class EchoSuppressorTests: XCTestCase {
     // MARK: - shouldRejectForEchoTail (static)
 
     func testRejectWhenSegmentFullyInsideTail() {
-        let suppressUntil = Date().addingTimeInterval(1.0)
-        let onset = Date().addingTimeInterval(-0.5)
+        let suppressUntil: TimeInterval = 101.0
+        let onset: TimeInterval = 99.5
         let reject = EchoSuppressor.shouldRejectForEchoTail(
             segmentOnset: onset,
             durationSecs: 0.3,
@@ -244,8 +247,8 @@ final class EchoSuppressorTests: XCTestCase {
     }
 
     func testAcceptWhenSegmentStartsAfterTail() {
-        let suppressUntil = Date().addingTimeInterval(-1.0)
-        let onset = Date()
+        let suppressUntil: TimeInterval = 99.0
+        let onset: TimeInterval = 100.0
         let reject = EchoSuppressor.shouldRejectForEchoTail(
             segmentOnset: onset,
             durationSecs: 1.0,
@@ -255,8 +258,8 @@ final class EchoSuppressorTests: XCTestCase {
     }
 
     func testAcceptWhenSegmentExtendsWellBeyondTail() {
-        let suppressUntil = Date().addingTimeInterval(0.5)
-        let onset = Date().addingTimeInterval(-2.0)
+        let suppressUntil: TimeInterval = 100.5
+        let onset: TimeInterval = 98.0
         // Segment is 5s long, started before tail, ends 2.5s past it —
         // beyond both minSpeechBeyondTailSecs (0.75s) and the 35% fraction.
         let reject = EchoSuppressor.shouldRejectForEchoTail(

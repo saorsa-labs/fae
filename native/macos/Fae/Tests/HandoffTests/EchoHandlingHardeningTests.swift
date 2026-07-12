@@ -698,14 +698,15 @@ final class EchoHandlingHardeningTests: XCTestCase {
     // MARK: - Output Route Scenario Matrix
 
     func testHeadphoneScenarioRelaxedTiming() {
-        var suppressor = EchoSuppressor()
+        let now: TimeInterval = 100
+        var suppressor = EchoSuppressor(monotonicTime: { now })
         suppressor.outputRoute = .headphones
 
         suppressor.onAssistantSpeechStart()
         suppressor.onAssistantSpeechEnd(speechDurationSecs: 2.0)
 
         // Headphones: shorter echo tail means segments are accepted sooner.
-        let earlyOnset = Date().addingTimeInterval(0.2) // 200ms after speech end
+        let earlyOnset = now + 0.2 // 200ms after speech end
         let accepted = suppressor.shouldAccept(
             durationSecs: 1.0, rms: 0.05,
             awaitingApproval: false,
@@ -718,7 +719,8 @@ final class EchoHandlingHardeningTests: XCTestCase {
     }
 
     func testExternalSpeakerScenarioAggressiveTiming() {
-        var suppressor = EchoSuppressor()
+        let now: TimeInterval = 100
+        var suppressor = EchoSuppressor(monotonicTime: { now })
         suppressor.outputRoute = .externalSpeaker
 
         suppressor.onAssistantSpeechStart()
@@ -726,7 +728,7 @@ final class EchoHandlingHardeningTests: XCTestCase {
 
         // External speakers: longer echo tail.
         // At 500ms after speech end with 1.3x multiplier, should still be in tail.
-        let earlyOnset = Date() // Right at speech end
+        let earlyOnset = now // Right at speech end
         let accepted = suppressor.shouldAccept(
             durationSecs: 0.3, rms: 0.05,
             awaitingApproval: false,
@@ -738,20 +740,21 @@ final class EchoHandlingHardeningTests: XCTestCase {
     // MARK: - Existing Behavior Preserved
 
     func testShouldAcceptStillWorksWithNewFeatures() {
-        var suppressor = EchoSuppressor()
+        let now: TimeInterval = 100
+        var suppressor = EchoSuppressor(monotonicTime: { now })
         suppressor.outputRoute = .builtInSpeaker
 
         suppressor.onAssistantSpeechStart()
         let duringResult = suppressor.shouldAccept(
             durationSecs: 1.0, rms: 0.05,
             awaitingApproval: false,
-            segmentOnset: Date())
+            segmentOnset: now)
         XCTAssertFalse(duringResult, "Should reject during active speaking")
 
         suppressor.onAssistantSpeechEnd(speechDurationSecs: 2.0)
 
         // Wait for echo tail to expire.
-        let afterTail = Date().addingTimeInterval(2.0)
+        let afterTail = now + 2.0
         let afterResult = suppressor.shouldAccept(
             durationSecs: 1.0, rms: 0.05,
             awaitingApproval: false,
@@ -761,8 +764,8 @@ final class EchoHandlingHardeningTests: XCTestCase {
 
     func testEchoTailRejectionStillWorks() {
         // Verify the static method still works correctly.
-        let now = Date()
-        let suppressUntil = now.addingTimeInterval(0.5)
+        let now: TimeInterval = 100
+        let suppressUntil = now + 0.5
 
         // Segment starts before suppression end, ends before too.
         let shouldReject = EchoSuppressor.shouldRejectForEchoTail(
@@ -773,7 +776,7 @@ final class EchoHandlingHardeningTests: XCTestCase {
 
         // Segment starts after suppression end.
         let shouldAccept = EchoSuppressor.shouldRejectForEchoTail(
-            segmentOnset: suppressUntil.addingTimeInterval(0.1),
+            segmentOnset: suppressUntil + 0.1,
             durationSecs: 0.3,
             suppressUntil: suppressUntil)
         XCTAssertFalse(shouldAccept, "Segment after echo tail should not be rejected")

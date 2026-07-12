@@ -874,16 +874,23 @@ struct EchoSuppressor {
     }
 
     // MARK: - State
+    /// Monotonic time source for suppression deadlines and elapsed-speech reporting.
+    /// Production uses system uptime; tests inject an advanceable clock.
+    private let monotonicTime: () -> TimeInterval
+
+    init(monotonicTime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.monotonicTime = monotonicTime
+    }
 
     /// Whether the assistant is currently speaking.
     var assistantSpeaking: Bool = false
-    /// Time when assistant stopped speaking.
-    private var suppressUntil: Date?
-    /// Short utterance guard expiry.
-    private var shortUtteranceGuardUntil: Date?
+    /// Monotonic deadline for assistant-speech suppression.
+    private var suppressUntil: TimeInterval?
+    /// Monotonic deadline for the short utterance guard.
+    private var shortUtteranceGuardUntil: TimeInterval?
 
-    /// Time when the assistant's last speech ended (echo tail start).
-    private var lastSpeechEndedAt: Date?
+    /// Monotonic time when the assistant's last speech ended.
+    private var lastSpeechEndedAt: TimeInterval?
 
     // MARK: - Computed Properties
 
@@ -891,14 +898,14 @@ struct EchoSuppressor {
     /// Returns `Double.infinity` if the assistant has never spoken.
     var secondsSinceLastSpeech: Double {
         guard let lastEnd = lastSpeechEndedAt else { return .infinity }
-        return Date().timeIntervalSince(lastEnd)
+        return monotonicTime() - lastEnd
     }
 
     /// Whether the echo suppressor is currently actively suppressing audio.
     /// True when assistant is speaking or within the echo tail window.
     var isInSuppression: Bool {
         if assistantSpeaking { return true }
-        if let until = suppressUntil, Date() < until { return true }
+        if let until = suppressUntil, monotonicTime() < until { return true }
         return false
     }
 
@@ -919,7 +926,7 @@ struct EchoSuppressor {
     ///   to avoid blocking real speech for too long ("goes to sleep" effect).
     mutating func onAssistantSpeechEnd(speechDurationSecs: Double = 0) {
         assistantSpeaking = false
-        let now = Date()
+        let now = monotonicTime()
         lastSpeechEndedAt = now
 
         // Scale echo windows based on speech duration: +50ms per second of speech,
@@ -929,8 +936,8 @@ struct EchoSuppressor {
         let tailMs = effectiveEchoTailMs + durationBonusMs
         let guardMs = shortUtteranceGuardMs + durationBonusMs
 
-        suppressUntil = now.addingTimeInterval(Double(tailMs) / 1000.0)
-        shortUtteranceGuardUntil = now.addingTimeInterval(Double(guardMs) / 1000.0)
+        suppressUntil = now + Double(tailMs) / 1000.0
+        shortUtteranceGuardUntil = now + Double(guardMs) / 1000.0
     }
 
     mutating func reset() {
@@ -950,7 +957,7 @@ struct EchoSuppressor {
     ///   - durationSecs: Duration of the speech segment in seconds.
     ///   - rms: RMS energy of the segment.
     ///   - awaitingApproval: Whether we're waiting for a yes/no approval response.
-    ///   - segmentOnset: Wall-clock time when speech onset was detected by the VAD.
+    ///   - segmentOnset: Monotonic time when speech onset was detected by the VAD.
     ///     The echo tail is checked against this onset time (not current time) to
     ///     catch segments that *started* during the echo window but took seconds
     ///     to complete — e.g. an 8s echo segment that finishes 9s after playback
@@ -960,10 +967,10 @@ struct EchoSuppressor {
         durationSecs: Float,
         rms: Float,
         awaitingApproval: Bool,
-        segmentOnset: Date
+        segmentOnset: TimeInterval
     ) -> Bool {
         let onset = segmentOnset
-        let now = Date()
+        let now = monotonicTime()
 
         // 1. Active suppression — assistant is speaking.
         if assistantSpeaking {
@@ -1020,14 +1027,14 @@ struct EchoSuppressor {
     }
 
     static func shouldRejectForEchoTail(
-        segmentOnset: Date,
+        segmentOnset: TimeInterval,
         durationSecs: Float,
-        suppressUntil: Date
+        suppressUntil: TimeInterval
     ) -> Bool {
         guard segmentOnset < suppressUntil else { return false }
 
-        let segmentEnd = segmentOnset.addingTimeInterval(TimeInterval(durationSecs))
-        let speechBeyondTailSecs = segmentEnd.timeIntervalSince(suppressUntil)
+        let segmentEnd = segmentOnset + TimeInterval(durationSecs)
+        let speechBeyondTailSecs = segmentEnd - suppressUntil
         if speechBeyondTailSecs <= 0 {
             return true
         }
