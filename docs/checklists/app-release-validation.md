@@ -1,6 +1,6 @@
 # Fae App Release Validation Contract
 
-Last updated: June 27, 2026
+Last updated: July 12, 2026
 
 This is the canonical end-to-end validation contract for shipping Fae. It is the
 **single** release-validation artifact: it carries both the release-readiness
@@ -29,6 +29,7 @@ Run this full contract when any of the following changes:
 - **learned-conductor surfaces: routing policy/recipes, reward aggregation, shadow routing, the content-aware task classifier, recipe mutation, or the fae-metaopt boundary**
 - **daemon ToolHost routing (B-Swift Layer 3): the `read`-to-daemon routing slice, workspace-root provisioning/auto-approve, path confinement, or the `DaemonToolHostSession` persistent-connection wiring**
 - **cloud lane (ADR-014): `llm.privacyLane`, `llm.cloudDailyBudgetUSD`, API key Keychain path, daemon spawn env injection (`FAE_REMOTE_*`, `FAE_OPENROUTER_API_KEY`), or fallback surfacing**
+- **x0x peer ingress / handoff / trust-decision quarantine, the MCP tool tier, the delegate (`fae.delegate`) / symphony-runner agentic loop, or conversation-compaction behavior**
 - any release candidate build
 
 ## Required environment
@@ -208,6 +209,57 @@ server-side dangerous scope. Validate the live boundary:
 - [ ] Two trusted x0x agents can create/join a replicated store, set/get the same text value across agents, list its key, and replicate its removal.
 - [ ] Staged skill drafts can be listed, inspected, and only applied or dismissed after explicit user confirmation.
 - [ ] Any generated or edited artifacts appear where the UI says they will.
+
+### x0x peer mesh
+
+Validate the governed peer ingress + handoff path (Phase E + the
+`trust_decision` quarantine). These run only with `FAE_X0X_INGRESS` set and a
+reachable `x0xd`.
+
+- [ ] With ingress misconfigured (missing `FAE_X0X_*` / unreachable `x0xd`), ingress is OFF — `peer.*` commands refuse and no SSE task starts (fail-closed, never an error surface).
+- [ ] Every inbound envelope is run through `gate_and_audit` BEFORE dispatch; a bad signature/shape/algorithm is dropped at the gate and never reaches the event bus.
+- [ ] A transport sender that does not match the signed sender is rejected (cross-check), even if the envelope itself is well-formed.
+- [ ] A `direct_message` from a peer whose `trust_decision` is `accept_with_flag` is QUARANTINED (not surfaced as a normal message) until an owner consent decision is recorded via `peer.consent_respond`.
+- [ ] `peer.send` delivers a plain-text `direct_message`; `peer.handoff_send` round-trips a `session_handoff` payload (decode + 64 KiB cap); an oversized or unknown-field handoff is rejected.
+- [ ] Ingress reconnects with jittered exponential backoff after a dropped SSE connection, without spinning or flooding.
+
+### Delegate (`fae.delegate`) + symphony runner
+
+Validate the daemon's native jailed agentic loop and the symphony runner
+(Phase F1/F2). `fae.delegate` runs generate → execute-tool → feed-back with a
+restricted toolset, OS-jailed `ToolOrigin::Delegated`, and hard budgets.
+
+- [ ] A delegated turn executes only tools in the delegated `toolset` allowlist; a tool outside the allowlist is denied, not silently invoked.
+- [ ] Every delegated tool call is OS-jailed (`ToolOrigin::Delegated`) and audited like a host tool call.
+- [ ] Tripping the iteration ceiling (`MAX_ITERATIONS_CEILING`) or the cumulative token budget yields a `budget_exhausted` status with a PARTIAL receipt — not a hang or a silent truncation.
+- [ ] A delegated agent's mid-turn client callbacks work: `session/request_permission` surfaces an approval and `fs/read_text_file` / `fs/write_text_file` round-trip a file, and the loop resumes correctly from the client's answer.
+- [ ] A parallel leaf batch (Phase F2 orchestrator fan-out) executes under the engine permit without concurrent-engine contention and reassembles in order.
+- [ ] The symphony runner (`fae-symphony-runner`) drives a multi-step delegated composition end to end and terminates cleanly on completion or budget exhaustion.
+
+### MCP tool tier
+
+Validate the external-MCP tool tier (Phase G3). MCP servers are owner-declared
+subprocesses with the daemon's AMBIENT authority — the OS jail does NOT confine
+them — so the entire gate is declaration + allowlist + scope + origin.
+
+- [ ] With no `FAE_MCP_CONFIG`, MCP is silently absent: `mcp.list` returns an empty catalog and any `mcp:` invocation denies `mcp_not_configured` (never spawns a server).
+- [ ] A tool the server offers but the owner did not `allowed_tools`-list is never registered; invoking it denies `mcp_tool_not_declared`.
+- [ ] `Scope::McpInvoke` is re-checked per call; an `mcp:` invoke without the scope denies fail-closed.
+- [ ] Only `OwnerInteractive` and `Delegated` origins may invoke MCP; a proactive / scheduler / auto-skill / script-block origin denies fail-closed (no autonomous loop reaches an unconfined external process).
+- [ ] A server that dies AFTER startup makes its `invoke` return a typed `McpError::Invoke`; the catalog is not re-listed until daemon restart (v1: no reconnect).
+- [ ] `mcp.list` surfaces per-server health and records why a failed server's tools are absent.
+- [ ] The trust model is honest in diagnostics: an MCP invoke is surfaced as an external unconfined tool, not as a jailed host tool.
+
+### Conversation compaction
+
+Validate context-compaction planning (Phase G1/G2). The delegate child loop is
+the only daemon-owned history that can outgrow a model's context window.
+
+- [ ] A long delegated conversation crosses the 80% compaction ceiling and compaction fires (oldest turns folded into a summary); the most-recent `RETAINED_TAIL_MESSAGES` (4) turns are kept verbatim.
+- [ ] Once a summary is pinned, the main lane assembles prompts as `system ++ pinned_summary ++ kept_turns`; between recompactions `system` and `pinned_summary` are byte-identical so the serving prefix cache keeps hitting (the stable-prefix invariant).
+- [ ] Hysteresis holds: compaction does not re-fire on every single turn after the first crossing (waits `RECOMPUTE_EVICTION_THRESHOLD` further turns, or a hard tail-over-budget trip).
+- [ ] Compaction produces a faithful summary (not a silent hard-truncate); if the summarizer is unavailable the behavior is surfaced (logged + retained), not silent data loss.
+- [ ] The pure planner (`plan_compaction`, `estimate_tokens`, `PromptBudget`) unit tests pass — they are the exhaustive correctness boundary.
 
 ## Cowork scenarios (removed)
 
