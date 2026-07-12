@@ -7,6 +7,7 @@
     not(test),
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 // M6-A (2026-06-27): the gate is a dumb, schema-versioned, signature-checked
 // CARRIER. It must stay schema-agnostic — it does not (and must not) depend on

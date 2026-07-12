@@ -86,12 +86,21 @@ jobs:
           # CI is the ONLY place its unit tests (incl. the integrity-rejection
           # test) compile + run. macOS ci.yml never sees them.
           env -u RUSTFLAGS cargo fmt -p fae-daemon -p fae-engine -p fae-metaopt -- --check
-          env -u RUSTFLAGS cargo clippy -p fae-daemon --bin fae-daemon -p fae-engine --all-targets --all-features \
+          # -D warnings across ALL targets (incl. unit + integration tests) — the
+          # broad safety net; tests get warnings-as-errors but may use unwrap/
+          # expect/panic.
+          env -u RUSTFLAGS cargo clippy -p fae-daemon -p fae-engine -p fae-metaopt --all-targets --all-features \
+            -- -D warnings
+          # Production-safety forbidden lints (`-D clippy::panic/unwrap_used/
+          # expect_used`) scoped to `--lib --bins` — PRODUCTION code only, never
+          # test targets (unit or integration). Crate roots also carry
+          # `#![cfg_attr(not(test), deny(...))]` as the in-source belt.
+          env -u RUSTFLAGS cargo clippy -p fae-daemon -p fae-engine --lib --bins --all-features \
             -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
           # fae-metaopt (M3 recipe surface): strict clippy + tests now blocking
           # on CI (M5-D). The boundary guard below covers the daemon↔metaopt
           # structural split; this covers correctness.
-          env -u RUSTFLAGS cargo clippy -p fae-metaopt --all-targets --all-features \
+          env -u RUSTFLAGS cargo clippy -p fae-metaopt --lib --bins --all-features \
             -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
           # Workspace compile gate (M5-D): every crate must at least COMPILE on
           # Linux before merge. nextest stays per-crate (platform-sensitive tests).
