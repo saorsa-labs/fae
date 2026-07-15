@@ -101,6 +101,88 @@ impl PeerEnvelope {
     pub fn signature(&self) -> &SignatureProof {
         &self.signature
     }
+
+    /// The canonical byte string a peer-envelope signature covers — every
+    /// field EXCEPT `signature` itself, via [`envelope_signing_bytes`]. Signer
+    /// and verifier MUST both go through this method (or the free function it
+    /// delegates to); there is no other canonicalization.
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        envelope_signing_bytes(
+            self.schema_version,
+            &self.kind,
+            &self.envelope_id,
+            &self.sender_id,
+            self.created_at_ms,
+            &self.payload,
+        )
+    }
+}
+
+/// Canonical signing bytes for a peer envelope: compact JSON of the signed
+/// fields (everything except `signature`) with **recursively sorted object
+/// keys**, so the result is independent of wire field order and of
+/// serde_json's map implementation (`preserve_order` on or off). Builders call
+/// this BEFORE signing; [`PeerEnvelope::signing_bytes`] reproduces the exact
+/// same bytes from a parsed envelope on the verify side.
+///
+/// Determinism note: numbers render via `serde_json::Value`'s own `Display`.
+/// Integers are exact; a float survives sign→wire→verify unchanged because the
+/// verifier re-parses the very decimal string the signer emitted (peer payloads
+/// are strings/integers in practice).
+pub fn envelope_signing_bytes(
+    schema_version: u16,
+    kind: &EnvelopeKind,
+    envelope_id: &str,
+    sender_id: &str,
+    created_at_ms: u64,
+    payload: &serde_json::Value,
+) -> Vec<u8> {
+    let value = serde_json::json!({
+        "schema_version": schema_version,
+        "kind": kind,
+        "envelope_id": envelope_id,
+        "sender_id": sender_id,
+        "created_at_ms": created_at_ms,
+        "payload": payload,
+    });
+    let mut out = String::new();
+    write_canonical_json(&value, &mut out);
+    out.into_bytes()
+}
+
+/// Compact JSON with object keys emitted in sorted order at every depth.
+/// Strings/numbers/bools/null delegate to `Value`'s (infallible) `Display`,
+/// which is already canonical compact JSON for scalars.
+fn write_canonical_json(value: &serde_json::Value, out: &mut String) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (index, key) in keys.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::Value::String((*key).clone()).to_string());
+                out.push(':');
+                if let Some(entry) = map.get(*key) {
+                    write_canonical_json(entry, out);
+                }
+            }
+            out.push('}');
+        }
+        serde_json::Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_canonical_json(item, out);
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&scalar.to_string()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +292,20 @@ impl AcceptedEnvelope {
     /// [`kind()`]: AcceptedEnvelope::kind
     pub fn prior_payload(&self) -> Option<&serde_json::Value> {
         Some(&self.envelope.payload)
+    }
+
+    /// The envelope's signature proof, post-acceptance. Exposed so the
+    /// daemon's permissive-interop path can recompute the cryptographic
+    /// verdict for FLAGGING (accepted-but-unverified) after the gate ran —
+    /// the accept/reject decision itself stays inside the verifier.
+    pub fn signature(&self) -> &SignatureProof {
+        &self.envelope.signature
+    }
+
+    /// Canonical signing bytes of the accepted envelope — see
+    /// [`PeerEnvelope::signing_bytes`].
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        self.envelope.signing_bytes()
     }
 
     /// Peer text is exposed only for the policy-review layer. Callers must not
@@ -439,6 +535,74 @@ mod tests {
         let raw = valid_envelope_json()?;
         let (accepted, _) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
         assert_eq!(accepted.peer_text_for_policy_review(), Some("hello"));
+        Ok(())
+    }
+
+    // ── Phase E signing canon: envelope_signing_bytes / signing_bytes ──
+
+    #[test]
+    fn signing_bytes_are_independent_of_wire_field_order() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // Same envelope, two different wire field orders (including inside the
+        // payload) → identical canonical signing bytes.
+        let a = r#"{"schema_version":1,"kind":"direct_message","envelope_id":"env-1","sender_id":"peer-1","created_at_ms":7,"payload":{"text":"hi","n":2},"signature":{"algorithm":"ml-dsa-65","public_key_id":"pk","signature_b64":"c2ln"}}"#;
+        let b = r#"{"signature":{"signature_b64":"c2ln","algorithm":"ml-dsa-65","public_key_id":"pk"},"payload":{"n":2,"text":"hi"},"created_at_ms":7,"sender_id":"peer-1","envelope_id":"env-1","kind":"direct_message","schema_version":1}"#;
+        let ea: PeerEnvelope = serde_json::from_str(a)?;
+        let eb: PeerEnvelope = serde_json::from_str(b)?;
+        assert_eq!(ea.signing_bytes(), eb.signing_bytes());
+        // Keys are sorted at every depth in the canonical form.
+        let canon = String::from_utf8(ea.signing_bytes())?;
+        assert_eq!(
+            canon,
+            r#"{"created_at_ms":7,"envelope_id":"env-1","kind":"direct_message","payload":{"n":2,"text":"hi"},"schema_version":1,"sender_id":"peer-1"}"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn signing_bytes_exclude_signature_but_bind_every_signed_field(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let base = valid_envelope_json()?;
+        let e1: PeerEnvelope = serde_json::from_str(&base)?;
+        // Changing ONLY the signature leaves the signing bytes unchanged…
+        let resigned: PeerEnvelope = serde_json::from_str(&base.replace("placeholder", "b3RoZXI"))?;
+        assert_eq!(e1.signing_bytes(), resigned.signing_bytes());
+        // …while changing any signed field changes them.
+        let tampered: PeerEnvelope = serde_json::from_str(&base.replace("hello", "attack"))?;
+        assert_ne!(e1.signing_bytes(), tampered.signing_bytes());
+        let resent: PeerEnvelope = serde_json::from_str(&base.replace("env-1", "env-2"))?;
+        assert_ne!(e1.signing_bytes(), resent.signing_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn builder_side_free_function_matches_parsed_envelope() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // A builder computes signing bytes from raw fields BEFORE the envelope
+        // exists; the verifier recomputes them from the parsed envelope. Both
+        // paths must agree byte-for-byte.
+        let payload = serde_json::json!({ "text": "hello" });
+        let from_fields = envelope_signing_bytes(
+            SUPPORTED_SCHEMA_VERSION,
+            &EnvelopeKind::DirectMessage,
+            "env-1",
+            "peer-1",
+            1,
+            &payload,
+        );
+        let parsed: PeerEnvelope = serde_json::from_str(&valid_envelope_json()?)?;
+        assert_eq!(from_fields, parsed.signing_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn accepted_envelope_exposes_signature_and_signing_bytes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let raw = valid_envelope_json()?;
+        let (accepted, _) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
+        assert_eq!(accepted.signature().algorithm(), "ml-dsa-65");
+        let parsed: PeerEnvelope = serde_json::from_str(&raw)?;
+        assert_eq!(accepted.signing_bytes(), parsed.signing_bytes());
         Ok(())
     }
 

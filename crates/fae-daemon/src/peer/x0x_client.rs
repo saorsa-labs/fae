@@ -107,6 +107,45 @@ impl X0xPeerClient {
             .ok_or(X0xClientError::MissingField("agent_id"))
     }
 
+    /// Sign `payload` under a domain-separation `context` with this node's
+    /// x0xd-held ML-DSA-65 identity key, via `POST /agent/sign`. x0xd
+    /// assembles the external DST server-side (see `super::signing`); the
+    /// response carries the raw public key + detached signature, base64.
+    /// Transport only — response validation (scheme, context echo, identity
+    /// binding) is the caller's job (`signing::validate_sign_response`).
+    pub async fn agent_sign(
+        &self,
+        context: &str,
+        payload: &[u8],
+    ) -> Result<AgentSignResponse, X0xClientError> {
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload);
+        let response = self
+            .http
+            .post(self.url("/agent/sign"))
+            .bearer_auth(&self.token)
+            .timeout(REQUEST_TIMEOUT)
+            .json(&serde_json::json!({ "context": context, "payload_b64": payload_b64 }))
+            .send()
+            .await
+            .map_err(X0xClientError::Request)?;
+        if !response.status().is_success() {
+            return Err(X0xClientError::Status(response.status().as_u16()));
+        }
+        let body: RawAgentSignResponse = response.json().await.map_err(X0xClientError::Request)?;
+        let field_or = |value: Option<String>, name: &'static str| {
+            value
+                .filter(|v| !v.trim().is_empty())
+                .ok_or(X0xClientError::MissingField(name))
+        };
+        Ok(AgentSignResponse {
+            agent_id: field_or(body.agent_id, "agent_id")?,
+            public_key_b64: field_or(body.public_key_b64, "public_key_b64")?,
+            signature_b64: field_or(body.signature_b64, "signature_b64")?,
+            algorithm: field_or(body.algorithm, "algorithm")?,
+            context: field_or(body.context, "context")?,
+        })
+    }
+
     /// Send a raw peer-envelope JSON string to `dest_agent_id` via
     /// `POST /direct/send`. The envelope is base64-encoded into the `payload`
     /// field; x0xd re-emits it (re-base64'd) on the destination's SSE stream.
@@ -195,6 +234,32 @@ impl X0xPeerClient {
 #[derive(Deserialize)]
 struct AgentResponse {
     agent_id: Option<String>,
+}
+
+/// One validated-shape `POST /agent/sign` response (all fields present and
+/// non-empty; cryptographic/identity validation happens in `super::signing`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSignResponse {
+    /// x0xd's agent id (lowercase 64-hex).
+    pub agent_id: String,
+    /// Base64 of the raw ML-DSA-65 public key.
+    pub public_key_b64: String,
+    /// Base64 detached ML-DSA-65 signature.
+    pub signature_b64: String,
+    /// x0xd's signing scheme id (expected `x0x.agent-sign.v2.ml-dsa-65`).
+    pub algorithm: String,
+    /// Echo of the requested domain-separation context.
+    pub context: String,
+}
+
+/// Lenient wire view of `/agent/sign` (x0xd adds e.g. `ok`; ignored).
+#[derive(Deserialize)]
+struct RawAgentSignResponse {
+    agent_id: Option<String>,
+    public_key_b64: Option<String>,
+    signature_b64: Option<String>,
+    algorithm: Option<String>,
+    context: Option<String>,
 }
 
 /// Lenient view of a `direct_message` SSE `data:` JSON. NOT `deny_unknown_fields`

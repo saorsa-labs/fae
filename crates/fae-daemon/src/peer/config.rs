@@ -36,6 +36,14 @@ pub struct PeerConfig {
     pub owner_fleet: HashSet<String>,
     /// `FAE_X0X_AUTO_REPLY` — commit 2's auto-reply toggle. Default false.
     pub auto_reply: bool,
+    /// `FAE_X0X_ALLOW_UNSIGNED` — transition/interop escape hatch for
+    /// pre-signing Fae peers (they emit placeholder envelope signatures).
+    /// Default FALSE (strict): inbound envelopes whose ML-DSA-65 signature
+    /// does not verify are REJECTED at the gate. When true, such envelopes
+    /// are accepted but FLAGGED (auto-reply suppressed, quarantine + explicit
+    /// `signature_unverified` audit rows). Outbound envelopes are always
+    /// really signed regardless of this flag.
+    pub allow_unsigned: bool,
 }
 
 impl PeerConfig {
@@ -64,6 +72,7 @@ impl PeerConfig {
                 "FAE_X0X_OWNER_FLEET",
             ),
             auto_reply: flag_enabled(env("FAE_X0X_AUTO_REPLY").as_deref()),
+            allow_unsigned: flag_enabled(env("FAE_X0X_ALLOW_UNSIGNED").as_deref()),
         })
     }
 }
@@ -239,7 +248,25 @@ mod tests {
             assert!(config.chat_allow.is_empty());
             assert!(config.owner_fleet.is_empty());
             assert!(!config.auto_reply);
+            assert!(
+                !config.allow_unsigned,
+                "allow_unsigned must default to FALSE (strict signature verification)"
+            );
         }
+    }
+
+    #[test]
+    fn allow_unsigned_is_opt_in() {
+        let mut env = base_env();
+        env.insert("FAE_X0X_ALLOW_UNSIGNED", "1");
+        let config = PeerConfig::from_lookup(&lookup(&env)).unwrap();
+        assert!(config.allow_unsigned);
+
+        // Anything other than "1"/"true" stays strict.
+        let mut env = base_env();
+        env.insert("FAE_X0X_ALLOW_UNSIGNED", "0");
+        let config = PeerConfig::from_lookup(&lookup(&env)).unwrap();
+        assert!(!config.allow_unsigned);
     }
 
     #[test]

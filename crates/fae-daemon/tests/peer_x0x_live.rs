@@ -22,9 +22,13 @@
 //! `fae_envelope_gate::gate_and_audit`, and gates it with an inline
 //! `TierVerifier` that MIRRORS the production `FaeSenderVerifier` tier rule
 //! (`session_handoff` = owner-fleet only; chat kinds = chat ∪ fleet; ml-dsa-65 +
-//! base64 shape). The production client's SSE parser, the real verifier, and
-//! dispatch are unit-tested in-crate (`src/peer/x0x_client.rs`, `src/peer/mod.rs`,
-//! `src/peer/{verifier,handler}.rs`).
+//! base64 shape). NOTE (2026-07-15, real signing): the inline mirror matches the
+//! production verifier's PERMISSIVE interop mode (`FAE_X0X_ALLOW_UNSIGNED=1`) —
+//! the envelopes below carry placeholder signatures; strict-mode ML-DSA-65
+//! verification is covered by the real-crypto unit tests in
+//! `src/peer/{signing,verifier,mod}.rs`. The production client's SSE parser, the
+//! real verifier, and dispatch are unit-tested in-crate
+//! (`src/peer/x0x_client.rs`, `src/peer/mod.rs`, `src/peer/{verifier,handler}.rs`).
 
 // Test code is exempt from the production unwrap/expect/panic ban; ci-linux's
 // crate gate passes `-D clippy::{expect_used,unwrap_used,panic}` with

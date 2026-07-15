@@ -21,10 +21,19 @@
 //! - [`PeerOutbound`] — the outbound side used by the `peer.*` control-plane
 //!   commands (send a direct message, hand a session to an owner-fleet node,
 //!   record an owner consent decision).
+//!
+//! Real ML-DSA-65 envelope signing/verification (2026-07-15) replaces the v1
+//! placeholder: outbound envelopes are signed through x0xd's
+//! `POST /agent/sign` (the daemon never holds key material) and inbound
+//! signatures are verified locally in [`verifier`] via [`signing`] — strict by
+//! default, with `FAE_X0X_ALLOW_UNSIGNED` as the flag-and-quarantine interop
+//! path for pre-signing peers. See `signing.rs` for the key model, canonical
+//! bytes, DST, and the pubkey→sender binding.
 
 pub mod config;
 pub mod handler;
 pub mod handoff;
+pub mod signing;
 pub mod verifier;
 pub mod x0x_client;
 
@@ -40,8 +49,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use fae_control_plane::{Command, Scope, PROTOCOL_VERSION};
 use fae_engine::{ProviderAdapter, TtsAdapter};
 use fae_envelope_gate::{
-    append_audit_jsonl, gate_and_audit, AuditRecord, EnvelopeKind, GateDecision,
-    MAX_ENVELOPE_BYTES, SUPPORTED_SCHEMA_VERSION,
+    append_audit_jsonl, envelope_signing_bytes, gate_and_audit, AuditRecord, EnvelopeKind,
+    GateDecision, MAX_ENVELOPE_BYTES, SUPPORTED_SCHEMA_VERSION,
 };
 use futures_util::StreamExt;
 use tokio::task::JoinHandle;
@@ -54,12 +63,6 @@ use crate::session::SessionBackends;
 use handler::{DispatchOutcome, PeerEvent, PeerEventSink};
 use handoff::{HandoffEnvelopeSpec, SessionHandoffPayload};
 use verifier::FaeSenderVerifier;
-
-/// v1 signature placeholder for envelopes WE build (base64 of "placeholder").
-/// Satisfies the verifier's shape check (`ml-dsa-65` + non-empty base64); real
-/// ML-DSA-65 signing slots in here later without changing any builder — the
-/// exact swap point documented in `verifier.rs`.
-const SIGNATURE_PLACEHOLDER: &str = "cGxhY2Vob2xkZXI=";
 
 /// Monotonic nonce so two envelopes minted in the same millisecond get distinct
 /// ids.
@@ -127,11 +130,64 @@ impl PeerOutbound {
             }
             return Err("outbound message blocked by PII egress membrane".to_owned());
         }
-        let raw = build_direct_message_envelope(&self.own_agent_id, text)?;
+        let envelope_id = next_envelope_id("dm");
+        let created_at_ms = now_ms();
+        let payload = serde_json::json!({ "text": text });
+        let signature = self
+            .sign_envelope_fields(
+                &EnvelopeKind::DirectMessage,
+                &envelope_id,
+                created_at_ms,
+                &payload,
+            )
+            .await?;
+        let raw = serialize_signed_envelope(
+            "direct_message",
+            &envelope_id,
+            &self.own_agent_id,
+            created_at_ms,
+            &payload,
+            &signature,
+        )?;
         self.client
             .direct_send(to_agent_id, &raw)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    /// Sign one envelope's canonical bytes with this node's x0xd-held
+    /// ML-DSA-65 identity (`POST /agent/sign`), fail-closed on any response
+    /// that is not a scheme/context/identity-exact signature by US. See
+    /// `signing.rs` for the canonical-bytes + DST construction the receiving
+    /// verifier reproduces.
+    async fn sign_envelope_fields(
+        &self,
+        kind: &EnvelopeKind,
+        envelope_id: &str,
+        created_at_ms: u64,
+        payload: &serde_json::Value,
+    ) -> Result<signing::EnvelopeSignature, String> {
+        let bytes = envelope_signing_bytes(
+            SUPPORTED_SCHEMA_VERSION,
+            kind,
+            envelope_id,
+            &self.own_agent_id,
+            created_at_ms,
+            payload,
+        );
+        if bytes.len() > MAX_ENVELOPE_BYTES {
+            // Also x0xd's own /agent/sign cap — reject before the network.
+            return Err(format!(
+                "envelope signing payload is {} bytes (cap {MAX_ENVELOPE_BYTES})",
+                bytes.len()
+            ));
+        }
+        let response = self
+            .client
+            .agent_sign(signing::PEER_ENVELOPE_SIGN_CONTEXT, &bytes)
+            .await
+            .map_err(|error| format!("x0xd envelope signing failed: {error}"))?;
+        signing::validate_sign_response(&response, &self.own_agent_id)
     }
 
     /// Hand a live session to an owner-fleet node. The target MUST be in the
@@ -149,14 +205,45 @@ impl PeerOutbound {
             ));
         }
         let envelope_id = next_envelope_id("handoff");
-        let spec = HandoffEnvelopeSpec {
+        let created_at_ms = now_ms();
+        // Two-phase build: fit the tail under the gate cap using EXACT-length
+        // placeholders for the (constant-size) key + signature fields, sign
+        // the fitted payload's canonical bytes, then serialize with the real
+        // values — byte-identical length, so the fit still holds.
+        let pk_placeholder = "A".repeat(signing::base64_len(signing::ML_DSA_65_PUBLIC_KEY_LEN));
+        let sig_placeholder = "A".repeat(signing::base64_len(signing::ML_DSA_65_SIGNATURE_LEN));
+        let sizing_spec = HandoffEnvelopeSpec {
             envelope_id: &envelope_id,
             sender_id: &self.own_agent_id,
-            created_at_ms: now_ms(),
-            public_key_id: &self.own_agent_id,
-            signature_b64: SIGNATURE_PLACEHOLDER,
+            created_at_ms,
+            public_key_id: &pk_placeholder,
+            signature_b64: &sig_placeholder,
         };
-        let raw = handoff::build_envelope(&spec, &snapshot)?;
+        let fitted = handoff::fit_payload(&sizing_spec, &snapshot)?;
+        let payload_value = serde_json::to_value(&fitted)
+            .map_err(|error| format!("serialize session_handoff payload: {error}"))?;
+        let signature = self
+            .sign_envelope_fields(
+                &EnvelopeKind::SessionHandoff,
+                &envelope_id,
+                created_at_ms,
+                &payload_value,
+            )
+            .await?;
+        let signed_spec = HandoffEnvelopeSpec {
+            public_key_id: &signature.public_key_b64,
+            signature_b64: &signature.signature_b64,
+            ..sizing_spec
+        };
+        let raw = handoff::serialize_envelope(&signed_spec, &fitted)?;
+        if raw.len() > MAX_ENVELOPE_BYTES {
+            // Structurally unreachable (placeholder lengths are exact) — but
+            // an oversized envelope must fail loud here, never at the peer.
+            return Err(format!(
+                "signed session_handoff envelope is {} bytes (cap {MAX_ENVELOPE_BYTES})",
+                raw.len()
+            ));
+        }
         self.client
             .direct_send(to_agent_id, &raw)
             .await
@@ -190,27 +277,36 @@ impl PeerOutbound {
     }
 }
 
-/// Build a `direct_message` envelope JSON string in the gate's wire shape,
-/// failing if it would exceed the gate cap (a `direct_message` is kilobytes; a
-/// text over the cap is a caller error, never emitted as a gate-rejectable blob).
-fn build_direct_message_envelope(sender_id: &str, text: &str) -> Result<String, String> {
+/// Serialize a fully-signed peer envelope in the gate's wire shape, failing if
+/// it would exceed the gate cap (a `direct_message` is kilobytes; a text over
+/// the cap is a caller error, never emitted as a gate-rejectable blob). The
+/// signature's `public_key_id` carries the base64 raw ML-DSA-65 public key —
+/// the sender-binding carrier the receiving verifier checks (see `signing.rs`).
+fn serialize_signed_envelope(
+    kind: &str,
+    envelope_id: &str,
+    sender_id: &str,
+    created_at_ms: u64,
+    payload: &serde_json::Value,
+    signature: &signing::EnvelopeSignature,
+) -> Result<String, String> {
     let envelope = serde_json::json!({
         "schema_version": SUPPORTED_SCHEMA_VERSION,
-        "kind": "direct_message",
-        "envelope_id": next_envelope_id("dm"),
+        "kind": kind,
+        "envelope_id": envelope_id,
         "sender_id": sender_id,
-        "created_at_ms": now_ms(),
-        "payload": { "text": text },
+        "created_at_ms": created_at_ms,
+        "payload": payload,
         "signature": {
-            "algorithm": "ml-dsa-65",
-            "public_key_id": sender_id,
-            "signature_b64": SIGNATURE_PLACEHOLDER,
+            "algorithm": signing::ENVELOPE_SIGN_ALGORITHM,
+            "public_key_id": signature.public_key_b64,
+            "signature_b64": signature.signature_b64,
         }
     });
     let raw = serde_json::to_string(&envelope).map_err(|error| error.to_string())?;
     if raw.len() > MAX_ENVELOPE_BYTES {
         return Err(format!(
-            "direct_message envelope is {} bytes (cap {MAX_ENVELOPE_BYTES})",
+            "{kind} envelope is {} bytes (cap {MAX_ENVELOPE_BYTES})",
             raw.len()
         ));
     }
@@ -318,7 +414,17 @@ async fn run_ingress(
     outbound: Arc<PeerOutbound>,
     cancel: CancellationToken,
 ) {
-    let verifier = FaeSenderVerifier::new(cfg.chat_allow.clone(), cfg.owner_fleet.clone());
+    let verifier = FaeSenderVerifier::new(
+        cfg.chat_allow.clone(),
+        cfg.owner_fleet.clone(),
+        cfg.allow_unsigned,
+    );
+    if cfg.allow_unsigned {
+        tracing::warn!(
+            "peer ingress running with FAE_X0X_ALLOW_UNSIGNED=1: unsigned/placeholder \
+             envelopes are accepted-but-FLAGGED (interop mode for pre-signing peers)"
+        );
+    }
     let client = match X0xPeerClient::new(cfg.base_url.clone(), cfg.token.clone()) {
         Ok(client) => client,
         Err(error) => {
@@ -421,10 +527,34 @@ async fn handle_frame(
         return;
     }
 
-    // (d) Dispatch onto the event bus. The flag travels with the event so the
+    // (d) Cryptographic verdict for FLAGGING. In strict mode the gate already
+    // rejected anything unverifiable, so this is deterministically true; in
+    // permissive interop mode (`FAE_X0X_ALLOW_UNSIGNED=1`) a placeholder/
+    // unsigned envelope reaches here unverified and is quarantined exactly
+    // like a transport-flagged one — accepted, surfaced with `flagged: true`,
+    // ZERO automated downstream — plus an explicit unverified audit row.
+    let signature_verified = signing::verify_envelope_signature(
+        accepted.signature(),
+        &accepted.signing_bytes(),
+        accepted.sender_id(),
+    );
+    if !signature_verified {
+        append_audit_accepted(
+            &deps.audit_path,
+            accepted.envelope_id(),
+            &frame.sender,
+            "signature_unverified_accepted_permissive",
+        );
+        tracing::warn!(
+            sender = %frame.sender,
+            "peer envelope accepted WITHOUT signature verification (allow_unsigned interop) — flagged"
+        );
+    }
+
+    // (e) Dispatch onto the event bus. The flag travels with the event so the
     // owner surface (Swift) can mark the message and the handoff alert.
     let kind = accepted.kind().clone();
-    let flagged = is_flagged(frame);
+    let flagged = effective_flag(is_flagged(frame), signature_verified);
     let outcome = handler::dispatch(&accepted, verifier.policy(), flagged, sink);
 
     // INVARIANT: flagged ⇒ zero automated downstream (no LLM, no tools, no
@@ -486,6 +616,15 @@ fn is_flagged(frame: &DirectEventFrame) -> bool {
     !frame.trust_decision.eq_ignore_ascii_case("accept")
 }
 
+/// Combine the transport trust verdict with the cryptographic signature
+/// verdict into the single quarantine flag. Extracted for testability:
+/// an envelope is flagged when EITHER x0xd flagged the transport OR the
+/// envelope signature did not verify (permissive interop mode only — strict
+/// mode rejects unverified envelopes at the gate).
+fn effective_flag(transport_flagged: bool, signature_verified: bool) -> bool {
+    transport_flagged || !signature_verified
+}
+
 /// The auto-reply guard, extracted for testability. INVARIANT: flagged ⇒ no
 /// auto-reply. If someone removes `!flagged` from this predicate, the
 /// `flagged_suppresses_auto_reply` test fails.
@@ -506,16 +645,28 @@ fn should_auto_reply(
 /// but records that the envelope was accepted-but-quarantined for the audit
 /// trail. Best-effort: a failed write is logged, never fatal.
 fn append_quarantined(audit_path: &Path, envelope_id: &str, sender_id: &str) {
+    append_audit_accepted(
+        audit_path,
+        envelope_id,
+        sender_id,
+        "flagged_envelope_quarantined_no_auto_reply",
+    );
+}
+
+/// Append an Accepted row with an explicit `reason` for accepted-but-noted
+/// events outside the gate (quarantine, permissive-mode unverified
+/// signatures). Best-effort: a failed write is logged, never fatal.
+fn append_audit_accepted(audit_path: &Path, envelope_id: &str, sender_id: &str, reason: &str) {
     let record = AuditRecord {
         event_type: "peer_envelope_ingress".to_owned(),
         envelope_id: envelope_id.to_owned(),
         sender_id: sender_id.to_owned(),
         kind: None,
         decision: GateDecision::Accepted,
-        reason: "flagged_envelope_quarantined_no_auto_reply".to_owned(),
+        reason: reason.to_owned(),
     };
     if let Err(error) = append_audit_jsonl(audit_path, &record) {
-        tracing::warn!("peer audit append failed (quarantined): {error}");
+        tracing::warn!("peer audit append failed ({reason}): {error}");
     }
 }
 
@@ -686,22 +837,187 @@ mod tests {
 
     // ── outbound envelope builders round-trip through the REAL gate ──
 
-    fn own_verifier() -> FaeSenderVerifier {
-        FaeSenderVerifier::new(
-            HashSet::from([OWN.to_owned()]),
-            HashSet::from([OWN.to_owned()]),
-        )
+    /// Sign envelope fields exactly as `sign_envelope_fields` does, but with a
+    /// local test identity standing in for x0xd (same canonical bytes, same
+    /// DST, same ML-DSA-65 — see `signing::test_support`).
+    fn locally_signed(
+        identity: &signing::test_support::TestIdentity,
+        kind: &EnvelopeKind,
+        envelope_id: &str,
+        created_at_ms: u64,
+        payload: &serde_json::Value,
+    ) -> signing::EnvelopeSignature {
+        let bytes = envelope_signing_bytes(
+            SUPPORTED_SCHEMA_VERSION,
+            kind,
+            envelope_id,
+            &identity.agent_id,
+            created_at_ms,
+            payload,
+        );
+        signing::EnvelopeSignature {
+            public_key_b64: identity.public_key_b64.clone(),
+            signature_b64: identity.sign_signing_bytes(&bytes),
+        }
     }
 
+    /// The critical builder↔verifier symmetry proof: an envelope serialized by
+    /// the outbound path with a REAL ML-DSA-65 signature is accepted by the
+    /// STRICT gate verifier (no allow_unsigned, no mocks).
     #[test]
-    fn built_direct_message_is_accepted_by_the_gate() {
-        let raw = build_direct_message_envelope(OWN, "hello peer").unwrap();
+    fn built_signed_direct_message_is_accepted_by_the_strict_gate() {
+        let identity = signing::test_support::TestIdentity::generate();
+        let payload = serde_json::json!({ "text": "hello peer" });
+        let signature = locally_signed(
+            &identity,
+            &EnvelopeKind::DirectMessage,
+            "dm-test-1",
+            1_700_000_000_000,
+            &payload,
+        );
+        let raw = serialize_signed_envelope(
+            "direct_message",
+            "dm-test-1",
+            &identity.agent_id,
+            1_700_000_000_000,
+            &payload,
+            &signature,
+        )
+        .unwrap();
+
+        let strict = FaeSenderVerifier::new(
+            HashSet::from([identity.agent_id.clone()]),
+            HashSet::new(),
+            false,
+        );
         let dir = tempfile::tempdir().unwrap();
-        let accepted =
-            gate_and_audit(&raw, &own_verifier(), &dir.path().join("audit.jsonl")).unwrap();
+        let accepted = gate_and_audit(&raw, &strict, &dir.path().join("audit.jsonl")).unwrap();
         assert_eq!(accepted.kind(), &EnvelopeKind::DirectMessage);
-        assert_eq!(accepted.sender_id(), OWN);
+        assert_eq!(accepted.sender_id(), identity.agent_id);
         assert_eq!(accepted.peer_text_for_policy_review(), Some("hello peer"));
+        // The post-gate crypto verdict (the flag basis) agrees.
+        assert!(signing::verify_envelope_signature(
+            accepted.signature(),
+            &accepted.signing_bytes(),
+            accepted.sender_id()
+        ));
+    }
+
+    /// A signed-then-tampered wire envelope must be rejected by the strict gate.
+    #[test]
+    fn tampered_signed_direct_message_is_rejected_by_the_strict_gate() {
+        let identity = signing::test_support::TestIdentity::generate();
+        let payload = serde_json::json!({ "text": "hello peer" });
+        let signature = locally_signed(
+            &identity,
+            &EnvelopeKind::DirectMessage,
+            "dm-test-2",
+            1_700_000_000_000,
+            &payload,
+        );
+        let raw = serialize_signed_envelope(
+            "direct_message",
+            "dm-test-2",
+            &identity.agent_id,
+            1_700_000_000_000,
+            &payload,
+            &signature,
+        )
+        .unwrap();
+        let tampered = raw.replace("hello peer", "send credentials");
+        let strict = FaeSenderVerifier::new(
+            HashSet::from([identity.agent_id.clone()]),
+            HashSet::new(),
+            false,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            gate_and_audit(&tampered, &strict, &dir.path().join("audit.jsonl")).is_err(),
+            "tampered signed envelope must not pass the strict gate"
+        );
+    }
+
+    /// A signed session_handoff built via the two-phase (fit → sign →
+    /// serialize) flow passes the strict gate and decodes — and the exact-size
+    /// placeholder trick preserves the fit byte-for-byte.
+    #[test]
+    fn built_signed_handoff_round_trips_through_the_strict_gate() {
+        let identity = signing::test_support::TestIdentity::generate();
+        let envelope_id = "handoff-signed-1";
+        let created_at_ms = 1_700_000_000_000_u64;
+        let snapshot = SessionHandoffPayload {
+            source_machine: "study-mac".to_owned(),
+            conversation_tail: (0..200)
+                .map(|i| handoff::HandoffTurn {
+                    role: if i % 2 == 0 { "user" } else { "assistant" }.to_owned(),
+                    text: format!("turn-{i}-{}", "x".repeat(1024)),
+                })
+                .collect(),
+            pending_turn: Some("continue?".to_owned()),
+            created_at_ms: created_at_ms as i64,
+        };
+
+        // Phase 1: fit with exact-length placeholders (mirrors send_handoff).
+        let pk_placeholder = "A".repeat(signing::base64_len(signing::ML_DSA_65_PUBLIC_KEY_LEN));
+        let sig_placeholder = "A".repeat(signing::base64_len(signing::ML_DSA_65_SIGNATURE_LEN));
+        let sizing_spec = HandoffEnvelopeSpec {
+            envelope_id,
+            sender_id: &identity.agent_id,
+            created_at_ms,
+            public_key_id: &pk_placeholder,
+            signature_b64: &sig_placeholder,
+        };
+        let fitted = handoff::fit_payload(&sizing_spec, &snapshot).unwrap();
+        let sized_len = handoff::serialize_envelope(&sizing_spec, &fitted)
+            .unwrap()
+            .len();
+
+        // Phase 2+3: sign the fitted payload, serialize with the real values.
+        let payload_value = serde_json::to_value(&fitted).unwrap();
+        let signature = locally_signed(
+            &identity,
+            &EnvelopeKind::SessionHandoff,
+            envelope_id,
+            created_at_ms,
+            &payload_value,
+        );
+        let signed_spec = HandoffEnvelopeSpec {
+            public_key_id: &signature.public_key_b64,
+            signature_b64: &signature.signature_b64,
+            ..sizing_spec
+        };
+        let raw = handoff::serialize_envelope(&signed_spec, &fitted).unwrap();
+        assert_eq!(
+            raw.len(),
+            sized_len,
+            "real key/signature must be byte-identical in length to the sizing placeholders"
+        );
+        assert!(raw.len() <= MAX_ENVELOPE_BYTES);
+
+        let strict = FaeSenderVerifier::new(
+            HashSet::new(),
+            HashSet::from([identity.agent_id.clone()]),
+            false,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let accepted = gate_and_audit(&raw, &strict, &dir.path().join("audit.jsonl")).unwrap();
+        assert_eq!(accepted.kind(), &EnvelopeKind::SessionHandoff);
+        let decoded = handoff::decode(&accepted).unwrap();
+        assert_eq!(decoded, fitted);
+    }
+
+    // ── flag combination: transport verdict ∨ unverified signature ──
+
+    #[test]
+    fn effective_flag_ors_transport_and_signature_verdicts() {
+        // Clean transport + verified signature ⇒ unflagged.
+        assert!(!effective_flag(false, true));
+        // Transport flag alone ⇒ flagged.
+        assert!(effective_flag(true, true));
+        // Unverified signature alone (permissive interop) ⇒ flagged.
+        assert!(effective_flag(false, false));
+        // Both ⇒ flagged.
+        assert!(effective_flag(true, false));
     }
 
     #[test]
@@ -862,11 +1178,13 @@ mod tests {
             public_key_id: "pk-1",
             signature_b64: "c2ln",
         };
-        let raw = handoff::build_envelope(&spec, &source).expect("envelope fits the cap");
+        let fitted = handoff::fit_payload(&spec, &source).expect("envelope fits the cap");
+        let raw = handoff::serialize_envelope(&spec, &fitted).expect("serialize fitted envelope");
         assert!(raw.len() <= MAX_ENVELOPE_BYTES);
 
         // ── ACCEPT PATH: only a gated envelope yields the payload we surface.
-        let verifier = FaeSenderVerifier::new(HashSet::new(), HashSet::from([FLEET.to_owned()]));
+        let verifier =
+            FaeSenderVerifier::new(HashSet::new(), HashSet::from([FLEET.to_owned()]), true);
         let dir = tempfile::tempdir().unwrap();
         let accepted = gate_and_audit(&raw, &verifier, &dir.path().join("audit.jsonl")).unwrap();
         assert_eq!(accepted.kind(), &EnvelopeKind::SessionHandoff);
@@ -899,7 +1217,8 @@ mod tests {
     fn rejected_oversized_handoff_never_reaches_the_wire() {
         // A raw envelope one byte over the cap — the gate must refuse it.
         let oversized = "x".repeat(MAX_ENVELOPE_BYTES + 1);
-        let verifier = FaeSenderVerifier::new(HashSet::new(), HashSet::from([FLEET.to_owned()]));
+        let verifier =
+            FaeSenderVerifier::new(HashSet::new(), HashSet::from([FLEET.to_owned()]), true);
         let dir = tempfile::tempdir().unwrap();
         let result = gate_and_audit(&oversized, &verifier, &dir.path().join("audit.jsonl"));
         assert!(
