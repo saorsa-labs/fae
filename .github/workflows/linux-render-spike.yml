@@ -39,6 +39,8 @@ jobs:
 
       - name: Install Linux shell and daemon dependencies
         run: |
+          # arm64 runners intermittently lack IPv6 routes to ports.ubuntu.com; force IPv4 + retries.
+          echo 'Acquire::ForceIPv4 "true"; Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99-fae-ci-ipv4 >/dev/null
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
