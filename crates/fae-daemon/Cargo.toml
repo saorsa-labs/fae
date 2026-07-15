@@ -64,6 +64,13 @@ base64 = { workspace = true }
 unicode-normalization = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Phase E peer signing: local ML-DSA-65 verification of inbound peer-envelope
+# signatures (org PQC crate; the SAME crate x0xd signs with via ant-quic, so a
+# daemon-side verify is bit-compatible with an x0xd-side sign by construction).
+# Signing itself stays in x0xd (`POST /agent/sign`) — the daemon never holds
+# key material; this dependency is verification-only public-key crypto (tests
+# also use its keygen to build real signed fixtures).
+saorsa-pqc = "0.5"
 # A3: per-session ephemeral tool sandbox root (tempfile::TempDir guard).
 tempfile = "3"
 dirs = "2"

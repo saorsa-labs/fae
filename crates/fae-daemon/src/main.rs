@@ -634,10 +634,16 @@ async fn setup_peer_ingress(b: PeerIngressBackends) -> Option<Arc<peer::PeerOutb
     // (the process exit tears it down). The handle mirrors the toolhost cancel
     // pattern so a graceful-shutdown path can cancel it later.
     let cancel = tokio_util::sync::CancellationToken::new();
+    let signing_mode = if cfg.allow_unsigned {
+        "PERMISSIVE (FAE_X0X_ALLOW_UNSIGNED=1: unsigned envelopes flagged)"
+    } else {
+        "strict ML-DSA-65"
+    };
     peer::PeerIngress::spawn(cfg, deps, Arc::clone(&outbound), cancel);
     let short: String = own_agent_id.chars().take(12).collect();
     println!(
-        "peer    : x0x ingress ENABLED (agent {short}…, auto-reply gated by FAE_X0X_AUTO_REPLY)"
+        "peer    : x0x ingress ENABLED (agent {short}…, signatures {signing_mode}, \
+         auto-reply gated by FAE_X0X_AUTO_REPLY)"
     );
     Some(outbound)
 }

@@ -58,9 +58,13 @@ pub fn decode(accepted: &AcceptedEnvelope) -> Result<SessionHandoffPayload, Stri
         .map_err(|error| format!("invalid session_handoff payload: {error}"))
 }
 
-/// Envelope identity + signature fields for [`build_envelope`]. Signature
-/// values are the v1 shape placeholders (see `verifier.rs` module docs) —
-/// real ML-DSA-65 signing slots in here later without changing the builder.
+/// Envelope identity + signature fields for [`build_envelope`] /
+/// [`serialize_envelope`]. `public_key_id` carries the base64 raw ML-DSA-65
+/// public key and `signature_b64` the real detached signature (see
+/// `signing.rs`). The two-phase send flow ([`fit_payload`] with exact-length
+/// placeholders → sign the canonical bytes → serialize with the real values)
+/// works because base64 lengths of the key/signature are constant, so the
+/// placeholder-sized fit is byte-exact for the final envelope.
 #[derive(Debug, Clone, Copy)]
 pub struct HandoffEnvelopeSpec<'a> {
     pub envelope_id: &'a str,
@@ -72,19 +76,19 @@ pub struct HandoffEnvelopeSpec<'a> {
     pub signature_b64: &'a str,
 }
 
-/// Build the full peer-envelope JSON string for a session handoff, dropping
-/// `conversation_tail` turns oldest-first until the serialized envelope fits
-/// under [`MAX_ENVELOPE_BYTES`]. Errs only if the envelope cannot fit even
-/// with an empty tail (e.g. an oversized `pending_turn`).
-pub fn build_envelope(
+/// Truncate `conversation_tail` oldest-first until the envelope serialized
+/// with `spec` fits under [`MAX_ENVELOPE_BYTES`], returning the fitted
+/// payload. Errs only if the envelope cannot fit even with an empty tail
+/// (e.g. an oversized `pending_turn`).
+pub fn fit_payload(
     spec: &HandoffEnvelopeSpec<'_>,
     payload: &SessionHandoffPayload,
-) -> Result<String, String> {
+) -> Result<SessionHandoffPayload, String> {
     let mut payload = payload.clone();
     loop {
         let raw = serialize_envelope(spec, &payload)?;
         if raw.len() <= MAX_ENVELOPE_BYTES {
-            return Ok(raw);
+            return Ok(payload);
         }
         if payload.conversation_tail.is_empty() {
             return Err(format!(
@@ -97,7 +101,7 @@ pub fn build_envelope(
     }
 }
 
-fn serialize_envelope(
+pub(super) fn serialize_envelope(
     spec: &HandoffEnvelopeSpec<'_>,
     payload: &SessionHandoffPayload,
 ) -> Result<String, String> {
@@ -133,6 +137,16 @@ mod tests {
 
     const FLEET_SENDER: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    /// Test-local compose of the production two-phase flow (fit → serialize);
+    /// production signs BETWEEN the phases (`PeerOutbound::send_handoff`).
+    fn build_envelope(
+        spec: &HandoffEnvelopeSpec<'_>,
+        payload: &SessionHandoffPayload,
+    ) -> Result<String, String> {
+        let fitted = fit_payload(spec, payload)?;
+        serialize_envelope(spec, &fitted)
+    }
+
     fn spec() -> HandoffEnvelopeSpec<'static> {
         HandoffEnvelopeSpec {
             envelope_id: "handoff-1",
@@ -159,11 +173,16 @@ mod tests {
         }
     }
 
-    /// Gate raw JSON with the REAL verifier (fleet sender allowlisted) and
+    /// Gate raw JSON with the REAL verifier (fleet sender allowlisted,
+    /// permissive-interop mode — these tests target the payload schema and
+    /// truncation, not signature crypto, and use placeholder signatures) and
     /// return the accepted envelope.
     fn gate(raw: &str) -> AcceptedEnvelope {
-        let verifier =
-            FaeSenderVerifier::new(HashSet::new(), HashSet::from([FLEET_SENDER.to_owned()]));
+        let verifier = FaeSenderVerifier::new(
+            HashSet::new(),
+            HashSet::from([FLEET_SENDER.to_owned()]),
+            true,
+        );
         let dir = tempfile::tempdir().unwrap();
         gate_and_audit(raw, &verifier, &dir.path().join("audit.jsonl")).unwrap()
     }
