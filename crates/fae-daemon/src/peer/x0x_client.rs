@@ -39,10 +39,38 @@ pub enum X0xClientError {
     MissingField(&'static str),
 }
 
+/// x0xd's transport-layer trust level for the sender, parsed fail-closed.
+///
+/// An absent, empty, or unrecognised `trust_level` field maps to
+/// [`Self::Untrusted`] — the lowest tier — rather than silently elevating
+/// access. This implements the #44 hardening: unknown strings MUST NOT grant
+/// more access than an explicit low value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportTrustLevel {
+    /// x0xd considers the sender fully trusted.
+    Full,
+    /// x0xd considers the sender partially or limitedly trusted.
+    Partial,
+    /// Absent, empty, or unrecognised trust level — lowest tier (fail-closed, #44).
+    Untrusted,
+}
+
+impl TransportTrustLevel {
+    /// Parse fail-closed: anything not explicitly recognised maps to `Untrusted`.
+    fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "full" => Self::Full,
+            "partial" | "limited" => Self::Partial,
+            _ => Self::Untrusted,
+        }
+    }
+}
+
 /// One decoded `direct_message` SSE frame. `payload_raw` is the base64-**decoded**
 /// carrier — i.e. the raw peer-envelope JSON string, ready to hand straight to
-/// `fae_envelope_gate::gate_and_audit`. `verified` / `trust_decision` are x0xd's
-/// transport-layer verdict, cross-checked by the supervisor BEFORE the gate.
+/// `fae_envelope_gate::gate_and_audit`. `verified` / `trust_decision` /
+/// `trust_level` are x0xd's transport-layer verdict, cross-checked by the
+/// supervisor BEFORE the gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectEventFrame {
     /// x0x agent id of the sender (transport-attested, lowercase 64-hex).
@@ -51,6 +79,9 @@ pub struct DirectEventFrame {
     pub verified: bool,
     /// x0xd's trust verdict string (e.g. `accept_with_flag`).
     pub trust_decision: String,
+    /// x0xd's trust level for the sender. Absent/empty/unknown → `Untrusted`
+    /// (fail-closed, #44).
+    pub trust_level: TransportTrustLevel,
     /// The base64-decoded carrier payload (the raw peer-envelope JSON).
     pub payload_raw: String,
 }
@@ -271,6 +302,10 @@ struct RawDirectData {
     verified: bool,
     #[serde(default)]
     trust_decision: String,
+    /// x0xd v0.32+ delivers `trust_level`; absent on older versions. Parsed
+    /// fail-closed via [`TransportTrustLevel::parse`]: unknown → `Untrusted`.
+    #[serde(default)]
+    trust_level: String,
     payload: Option<String>,
 }
 
@@ -336,6 +371,7 @@ fn parse_direct_frame(data: &str) -> Option<DirectEventFrame> {
         sender,
         verified: raw.verified,
         trust_decision: raw.trust_decision,
+        trust_level: TransportTrustLevel::parse(&raw.trust_level),
         payload_raw,
     })
 }
@@ -447,5 +483,53 @@ mod tests {
     fn base_url_trailing_slash_is_trimmed() {
         let client = X0xPeerClient::new("http://127.0.0.1:12700/", "tok").unwrap();
         assert_eq!(client.url("/agent"), "http://127.0.0.1:12700/agent");
+    }
+
+    // ── trust_level parsing — fail-closed (#44) ──
+
+    #[test]
+    fn trust_level_absent_or_unknown_maps_to_untrusted() {
+        let payload = b64("{}");
+
+        // Absent trust_level (field missing from JSON) → Untrusted (fail-closed, #44).
+        let blob = format!(
+            "event: direct_message\ndata: {{\"payload\":\"{payload}\",\"sender\":\"aa\",\"verified\":true}}\n\n"
+        );
+        let frames = drain(&blob);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            frames[0].trust_level,
+            TransportTrustLevel::Untrusted,
+            "absent trust_level must map to Untrusted (fail-closed, #44)"
+        );
+
+        // Empty string → Untrusted.
+        let blob2 = format!(
+            "event: direct_message\ndata: {{\"payload\":\"{payload}\",\"sender\":\"aa\",\"trust_level\":\"\",\"verified\":true}}\n\n"
+        );
+        let frames2 = drain(&blob2);
+        assert_eq!(
+            frames2[0].trust_level,
+            TransportTrustLevel::Untrusted,
+            "empty trust_level must map to Untrusted"
+        );
+
+        // Unknown string → Untrusted (catch-all arm).
+        let blob3 = format!(
+            "event: direct_message\ndata: {{\"payload\":\"{payload}\",\"sender\":\"aa\",\"trust_level\":\"probation\",\"verified\":true}}\n\n"
+        );
+        let frames3 = drain(&blob3);
+        assert_eq!(
+            frames3[0].trust_level,
+            TransportTrustLevel::Untrusted,
+            "unknown trust_level must map to Untrusted"
+        );
+
+        // Explicit "full" → Full.
+        let blob4 = format!(
+            "event: direct_message\ndata: {{\"payload\":\"{payload}\",\"sender\":\"aa\",\"trust_level\":\"full\",\"verified\":true}}\n\n"
+        );
+        let frames4 = drain(&blob4);
+        assert_eq!(frames4[0].trust_level, TransportTrustLevel::Full);
     }
 }

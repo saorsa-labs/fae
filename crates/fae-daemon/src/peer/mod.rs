@@ -554,6 +554,11 @@ async fn handle_frame(
     // (e) Dispatch onto the event bus. The flag travels with the event so the
     // owner surface (Swift) can mark the message and the handoff alert.
     let kind = accepted.kind().clone();
+    // FAIL-CLOSED (#44): absent/empty trust_decision is a downgrade, not a
+    // pass — is_flagged() flags it; effective_flag then ORs in the
+    // cryptographic verdict, so the final flag = (transport trust verdict says
+    // flag) OR (signature not verified). trust_verdict() supplies the distinct
+    // audit reason for the quarantine row.
     let flagged = effective_flag(is_flagged(frame), signature_verified);
     let outcome = handler::dispatch(&accepted, verifier.policy(), flagged, sink);
 
@@ -563,9 +568,21 @@ async fn handle_frame(
     // and propagates the flag on HandoffOffers (the owner sees the flag in the
     // accept alert); the quarantine audit row records the decision.
     if flagged {
-        append_quarantined(&deps.audit_path, accepted.envelope_id(), &frame.sender);
+        // Transport reason wins when the transport flagged; a purely
+        // signature-driven flag (transport clean, signature unverified) falls
+        // back to the standard reason — the dedicated
+        // "signature_unverified_accepted_permissive" row was already written
+        // in step (d) above.
+        let reason = trust_verdict(frame).unwrap_or("flagged_envelope_quarantined_no_auto_reply");
+        append_quarantined(
+            &deps.audit_path,
+            accepted.envelope_id(),
+            &frame.sender,
+            reason,
+        );
         tracing::info!(
             sender = %frame.sender,
+            reason = reason,
             "peer envelope flagged by transport: quarantined, auto-reply suppressed"
         );
     }
@@ -594,26 +611,38 @@ fn sender_cross_check_ok(envelope_sender: &str, transport_sender: &str) -> bool 
     envelope_sender.eq_ignore_ascii_case(transport_sender)
 }
 
-/// True when x0xd's transport trust verdict is anything other than a clean
-/// accept. FAIL-CLOSED: unknown/missing verdicts quarantine, never pass.
+/// Classify x0xd's transport trust metadata. Returns the quarantine audit
+/// reason when the envelope should be flagged, or `None` when the verdict is
+/// a clean accept.
 ///
-/// Empirical finding (x0xd v0.27): the `trust_decision` field CAN be absent
-/// from the SSE JSON (`#[serde(default)]` on `RawDirectData` +
-/// `.unwrap_or("")` in the live integration test confirm this). Absent ⇒
-/// empty string ⇒ treated as clean WITH a tracing warn (documented residual:
-/// if x0xd starts omitting the field for a different reason, the warn surfaces
-/// it). Any non-`"accept"` value (case-insensitive) ⇒ flagged. This subsumes
-/// `"accept_with_flag"` AND any unknown future verdict string — unknown
-/// verdicts must quarantine, never pass.
-fn is_flagged(frame: &DirectEventFrame) -> bool {
+/// FAIL-CLOSED (#44): an absent or empty `trust_decision` is a downgrade —
+/// it is quarantined with the distinct reason `trust_metadata_missing_downgraded`
+/// rather than silently passing. Only an explicit, case-insensitive `"accept"`
+/// clears the flag. Any other value (including `"accept_with_flag"`, `"rejected"`,
+/// or any unknown future string) quarantines with the standard reason.
+///
+/// This composes independently with envelope-gate ML-DSA signature
+/// verification: transport trust metadata and cryptographic signature
+/// verification are two separate defence layers. A signature-accepted envelope
+/// with missing transport trust metadata is still quarantined here.
+fn trust_verdict(frame: &DirectEventFrame) -> Option<&'static str> {
     if frame.trust_decision.is_empty() {
         tracing::warn!(
-            "peer frame has no trust_decision field — treating as clean \
-             (x0xd v0.27 omits on normal accept; documented residual)"
+            sender = %frame.sender,
+            "peer frame trust_decision absent — downgrading to flagged (fail-closed, #44)"
         );
-        return false;
+        return Some("trust_metadata_missing_downgraded");
     }
-    !frame.trust_decision.eq_ignore_ascii_case("accept")
+    if frame.trust_decision.eq_ignore_ascii_case("accept") {
+        return None;
+    }
+    Some("flagged_envelope_quarantined_no_auto_reply")
+}
+
+/// True when the envelope should be quarantined. Thin wrapper over
+/// [`trust_verdict`] for call sites that only need a bool.
+fn is_flagged(frame: &DirectEventFrame) -> bool {
+    trust_verdict(frame).is_some()
 }
 
 /// Combine the transport trust verdict with the cryptographic signature
@@ -640,17 +669,16 @@ fn should_auto_reply(
         && matches!(outcome, DispatchOutcome::Published)
 }
 
-/// Append an Accepted row with the quarantine reason when a flagged envelope
-/// is quarantined (auto-reply suppressed). Mirrors [`append_rejected`]'s shape
-/// but records that the envelope was accepted-but-quarantined for the audit
-/// trail. Best-effort: a failed write is logged, never fatal.
-fn append_quarantined(audit_path: &Path, envelope_id: &str, sender_id: &str) {
-    append_audit_accepted(
-        audit_path,
-        envelope_id,
-        sender_id,
-        "flagged_envelope_quarantined_no_auto_reply",
-    );
+/// Append an Accepted row with a caller-supplied quarantine reason when a
+/// flagged envelope is quarantined (auto-reply suppressed). Mirrors
+/// [`append_rejected`]'s shape but records that the envelope was
+/// accepted-but-quarantined for the audit trail. The `reason` is the
+/// [`trust_verdict`] return value — either
+/// `"trust_metadata_missing_downgraded"` (absent/empty field, #44) or
+/// `"flagged_envelope_quarantined_no_auto_reply"` (explicit non-accept /
+/// signature-only flag). Best-effort: a failed write is logged, never fatal.
+fn append_quarantined(audit_path: &Path, envelope_id: &str, sender_id: &str, reason: &str) {
+    append_audit_accepted(audit_path, envelope_id, sender_id, reason);
 }
 
 /// Append an Accepted row with an explicit `reason` for accepted-but-noted
@@ -786,6 +814,7 @@ impl BackoffState {
 mod tests {
     use super::*;
     use fae_envelope_gate::gate_and_audit;
+    use x0x_client::TransportTrustLevel;
 
     const OWN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const FLEET: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -798,6 +827,7 @@ mod tests {
             sender: OWN.to_owned(),
             verified: false,
             trust_decision: "rejected".to_owned(),
+            trust_level: TransportTrustLevel::Untrusted,
             payload_raw: "{}".to_owned(),
         };
         assert!(!frame_passes_transport_precheck(&unverified));
@@ -1250,13 +1280,19 @@ mod tests {
             sender: OWN.to_owned(),
             verified: true,
             trust_decision: String::new(),
+            trust_level: TransportTrustLevel::Untrusted,
             payload_raw: "{}".to_owned(),
         };
 
-        // Case (b): empty/absent ⇒ clean (documented residual, warns).
-        // x0xd v0.27 can omit trust_decision; the #[serde(default)] +
-        // live-test unwrap_or("") confirm this empirically.
-        assert!(!is_flagged(&base));
+        // FAIL-CLOSED (#44): empty/absent trust_decision ⇒ flagged with the
+        // distinct "trust_metadata_missing_downgraded" reason. Previously this
+        // was treated as clean; the hardening closed the permissive gap.
+        assert!(is_flagged(&base));
+        assert_eq!(
+            trust_verdict(&base),
+            Some("trust_metadata_missing_downgraded"),
+            "absent trust_decision must produce the distinct downgrade reason"
+        );
 
         // Explicit "accept" ⇒ clean.
         let clean = DirectEventFrame {
@@ -1279,8 +1315,7 @@ mod tests {
         };
         assert!(is_flagged(&flagged));
 
-        // FAIL-CLOSED: "rejected" ⇒ flagged (was NOT flagged in the
-        // fail-open version — this is the key behavioral change).
+        // FAIL-CLOSED: "rejected" ⇒ flagged.
         let rejected = DirectEventFrame {
             trust_decision: "rejected".to_owned(),
             ..base.clone()
@@ -1330,7 +1365,12 @@ mod tests {
     fn append_quarantined_writes_an_accepted_row() {
         let dir = tempfile::tempdir().unwrap();
         let audit = dir.path().join("audit.jsonl");
-        append_quarantined(&audit, "env-flag-1", OWN);
+        append_quarantined(
+            &audit,
+            "env-flag-1",
+            OWN,
+            "flagged_envelope_quarantined_no_auto_reply",
+        );
         let content = std::fs::read_to_string(&audit).unwrap();
         assert!(content.contains("flagged_envelope_quarantined_no_auto_reply"));
         assert!(
@@ -1338,6 +1378,95 @@ mod tests {
             "quarantine is an Accepted decision"
         );
         assert!(content.contains("env-flag-1"));
+    }
+
+    #[test]
+    fn missing_trust_decision_logs_distinct_downgrade_reason() {
+        // (#44): when trust_decision is absent/empty, the audit row must carry
+        // "trust_metadata_missing_downgraded" so ops can distinguish a metadata
+        // gap from an explicit non-accept verdict.
+        let dir = tempfile::tempdir().unwrap();
+        let audit = dir.path().join("audit.jsonl");
+        append_quarantined(
+            &audit,
+            "env-downgrade-1",
+            OWN,
+            "trust_metadata_missing_downgraded",
+        );
+        let content = std::fs::read_to_string(&audit).unwrap();
+        assert!(
+            content.contains("trust_metadata_missing_downgraded"),
+            "absent trust_decision must log the distinct downgrade reason (#44)"
+        );
+        assert!(
+            content.contains("accepted"),
+            "downgraded quarantine is still an Accepted gate decision"
+        );
+        assert!(content.contains("env-downgrade-1"));
+    }
+
+    #[test]
+    fn sig_verified_with_missing_transport_trust_is_still_flagged() {
+        // Defense in depth (#44): REAL ML-DSA signature verification and
+        // transport trust metadata are independent checks — a
+        // cryptographically verified envelope whose SSE frame is missing
+        // trust_decision must still be quarantined. The two layers are NOT
+        // equivalent or substitutable.
+
+        // A genuinely signed envelope, accepted by the STRICT gate, whose
+        // signature verifies through the real signing::verify path.
+        let identity = signing::test_support::TestIdentity::generate();
+        let payload = serde_json::json!({ "text": "hello peer" });
+        let signature = locally_signed(
+            &identity,
+            &EnvelopeKind::DirectMessage,
+            "dm-44-1",
+            1_700_000_000_000,
+            &payload,
+        );
+        let raw = serialize_signed_envelope(
+            "direct_message",
+            "dm-44-1",
+            &identity.agent_id,
+            1_700_000_000_000,
+            &payload,
+            &signature,
+        )
+        .unwrap();
+        let strict = FaeSenderVerifier::new(
+            HashSet::from([identity.agent_id.clone()]),
+            HashSet::new(),
+            false,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let accepted = gate_and_audit(&raw, &strict, &dir.path().join("audit.jsonl")).unwrap();
+        let signature_verified = signing::verify_envelope_signature(
+            accepted.signature(),
+            &accepted.signing_bytes(),
+            accepted.sender_id(),
+        );
+        assert!(signature_verified, "the real ML-DSA verify path must pass");
+
+        // The SSE frame that carried it: transport-verified but with ABSENT
+        // trust_decision metadata.
+        let frame = DirectEventFrame {
+            sender: identity.agent_id.clone(),
+            verified: true,                // transport signature accepted
+            trust_decision: String::new(), // but trust metadata absent
+            trust_level: TransportTrustLevel::Untrusted,
+            payload_raw: raw,
+        };
+
+        // The exact ingress composition: effective_flag(transport, crypto).
+        assert!(
+            effective_flag(is_flagged(&frame), signature_verified),
+            "a signature-verified envelope with absent trust_decision must still flag (#44)"
+        );
+        assert_eq!(
+            trust_verdict(&frame),
+            Some("trust_metadata_missing_downgraded"),
+            "missing trust_decision must produce the distinct downgrade audit reason"
+        );
     }
 
     #[test]

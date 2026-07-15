@@ -151,7 +151,7 @@ Security: secure-input withholding gate weaker than storage gate (misses PEM/see
 BuiltinTools.swift:874; add `SensitiveContentPolicy.scan`); URL exemption leaks basic-auth/
 `?token=` (SensitiveDataRedactor.swift:82); envelope "signature-checked" is shape-only, no
 real ML-DSA verify (peer/verifier.rs:90); `trust_decision`/`accept_with_flag` captured but
-never gated (peer/mod.rs:412); jail is write-only (reads+network open on both platforms);
+never gated (peer/mod.rs:412) — **FIXED #44** (fail-closed: absent/empty now quarantined with `trust_metadata_missing_downgraded`; `TransportTrustLevel` enum catch-all `Untrusted`); jail is write-only (reads+network open on both platforms);
 models.lock file itself not authenticity-verified (local swap); `FAE_MODELS_LOCK_PATH` not
 dev-gated. Correctness: deny-path audit failures silently swallowed (toolhost/mod.rs:401,
 skillhost/mod.rs:217); unbounded per-connection event queue under a slow reader (events.rs:34);
