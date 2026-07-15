@@ -32,9 +32,9 @@ use fae_control_plane::{
     Scope, TicketStore, PROTOCOL_VERSION,
 };
 use fae_engine::{
-    kill_all_registered_sidecars, ChatEvent, LazyLlamaServerAdapter, LlamaModelSource,
-    LlamaServerAdapter, LlamaServerConfig, Loader, MockAdapter, MockTtsAdapter, ModelsLock,
-    ProviderAdapter, RemoteModelArtifact, TtsAdapter,
+    kill_all_registered_sidecars, select_kv_cache_type, ChatEvent, KvCacheType,
+    LazyLlamaServerAdapter, LlamaModelSource, LlamaServerAdapter, LlamaServerConfig, Loader,
+    MockAdapter, MockTtsAdapter, ModelsLock, ProviderAdapter, RemoteModelArtifact, TtsAdapter,
 };
 
 mod agents;
@@ -1344,6 +1344,9 @@ fn build_qwen3_asr_engine() -> Option<Arc<dyn ProviderAdapter>> {
         port: env_parsed("FAE_ASR_LLAMA_PORT", 18_081_u16),
         ctx_size: env_parsed("FAE_ASR_LLAMA_CTX", 4096_u32),
         ngl: env_parsed("FAE_ASR_LLAMA_NGL", 999_u32),
+        // The ASR sidecar's 4K window makes its KV cache negligible; keep the
+        // transcription pass exact regardless of the main-lane RAM tier.
+        kv_cache_type: KvCacheType::F16,
         pidfile_root: run_directory().ok(),
     };
     Some(Arc::new(LazyLlamaServerAdapter::new(
@@ -2265,6 +2268,12 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
              governed runtime.reload path (validated + hashed)",
         );
     }
+    // RAM-tiered KV-cache type (audit 2026-07-05 MEDIUM: fp16 KV below 32 GB
+    // oversubscribes memory). `FAE_KV_CACHE=fp16|q8` forces either way; an
+    // invalid value is a config error, mirroring `FAE_ENGINE` validation.
+    let kv_cache_env = std::env::var("FAE_KV_CACHE").ok();
+    let kv_cache_type = select_kv_cache_type(kv_cache_env.as_deref(), detect_total_ram_bytes())
+        .unwrap_or_else(|detail| exit_fatal("kv_cache_config", &detail));
     let config = LlamaServerConfig {
         binary: binary.to_string_lossy().to_string(),
         model,
@@ -2282,6 +2291,7 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
         // this raised default only applies to standalone/headless launches.
         ctx_size: env_parsed("FAE_LLAMA_CTX", 32_768),
         ngl: env_parsed("FAE_LLAMA_NGL", 999),
+        kv_cache_type,
         pidfile_root: run_directory().ok(),
     };
     config
@@ -2298,18 +2308,19 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
     } = &config.model
     {
         println!(
-            "engine  : llama.cpp — lazy sidecar ready (repo {repo}@{revision}, base {}, mmproj {}, mtp {}, cache {}, alias {alias}, timeout {timeout_secs}s)",
+            "engine  : llama.cpp — lazy sidecar ready (repo {repo}@{revision}, base {}, mmproj {}, mtp {}, cache {}, kv-cache {}, alias {alias}, timeout {timeout_secs}s)",
             model.filename,
             mmproj.filename,
             mtp_draft
                 .as_ref()
                 .map_or("<off>", |artifact| artifact.filename.as_str()),
-            cache_dir
+            cache_dir,
+            config.kv_cache_type
         );
     } else {
         println!(
-            "engine  : llama.cpp — lazy sidecar ready (model source {:?}, alias {alias}, timeout {timeout_secs}s)",
-            config.model
+            "engine  : llama.cpp — lazy sidecar ready (model source {:?}, kv-cache {}, alias {alias}, timeout {timeout_secs}s)",
+            config.model, config.kv_cache_type
         );
     }
     Arc::new(LazyLlamaServerAdapter::new(
@@ -2317,6 +2328,41 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
         model_id,
         std::time::Duration::from_secs(timeout_secs),
     ))
+}
+
+/// Total physical RAM in bytes, best-effort. macOS: `sysctl -n hw.memsize`
+/// (the same authority the Swift host uses via `physicalMemory`); Linux:
+/// `MemTotal` from `/proc/meminfo`. `None` when detection fails —
+/// [`select_kv_cache_type`] then keeps the exact fp16 default.
+fn detect_total_ram_bytes() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8(output.stdout).ok()?.trim().parse().ok()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let kib: u64 = meminfo
+            .lines()
+            .find_map(|line| line.strip_prefix("MemTotal:"))?
+            .trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse()
+            .ok()?;
+        Some(kib.saturating_mul(1024))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
 }
 
 /// Parse an env var into any `FromStr` numeric, falling back to `default` when
