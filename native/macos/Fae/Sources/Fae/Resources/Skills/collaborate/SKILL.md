@@ -113,3 +113,34 @@ messages are daemon-backed).
 - This skill exposes collaboration metadata (who you talk to, when, group
   membership) to the x0x network by design. The owner has accepted this trade-off
   (see docs/security/x0x-metadata-threat-model.md).
+
+## Operational gotchas (live-tested)
+
+These are behaviours observed in production (x0x v0.32.0, 2026-07-15) that trip up
+naive usage. Apply them regardless of the daemon version in use.
+
+**Subscribe before you publish.** On the x0x gossip layer, a publish from an agent
+that has not joined the topic mesh reaches nobody — the message is silently
+discarded. Always ensure the local agent has subscribed to the relevant topic before
+publishing to it. The `swarm publish` script handles this automatically (it calls
+`POST /subscribe` before `POST /publish`); if you call the API yourself, subscribe
+first and allow a moment for mesh membership to propagate before sending.
+
+**CRDT convergence takes seconds, not milliseconds.** Cross-agent task-list, store,
+and group changes replicate via anti-entropy. Deltas from a peer can take 15–45
+seconds to appear locally. If a freshly created board or store key is not visible
+yet, tell the user *"Give it a moment — that should sync up shortly"* rather than
+reporting it missing or failed.
+
+**Daemon-restart window: 404 does not mean gone.** For approximately 10 seconds
+after the local x0xd daemon (re)starts, reads of task-lists and replicated stores
+can return HTTP 404 while state recovers from disk. The `kanban` and `stores`
+scripts retry automatically (up to 3 attempts over ~12 s total). If you call the
+REST API directly and receive an unexpected 404, retry before concluding the data is
+absent.
+
+**Trust is explicit; importing a card never upgrades trust.** Importing a contact's
+card with `contacts import` adds them at the trust level you specify — it does not
+automatically upgrade an existing contact's trust tier. Raising trust (for example
+from `known` to `trusted`) is a separate, deliberate `contacts trust` call. Never
+infer that an import silently promoted someone.

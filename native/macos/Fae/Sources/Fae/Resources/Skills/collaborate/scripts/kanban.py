@@ -16,9 +16,36 @@ Actions (params.action):
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _x0x import X0x, X0xError, read_params, emit, fail  # noqa: E402
+
+# Delay schedule for retrying 404s during the x0xd startup state-recovery window
+# (~10 s after daemon restart).  Three retries at 4 s each = ~12 s total budget.
+_STARTUP_RETRY_DELAYS = (4.0, 4.0, 4.0)
+_RESTART_HINT = (
+    "That data isn't available yet — the x0x daemon may still be recovering state "
+    "after a recent restart. Try again in a moment."
+)
+
+
+def _retry_read(fn) -> dict:
+    """Call fn(), retrying up to 3 times on HTTP 404 (daemon startup recovery window).
+
+    Non-404 X0xErrors propagate immediately.  When all retries exhaust on 404,
+    raises X0xError with a user-friendly hint about the recovery window.
+    """
+    for delay in (None, *_STARTUP_RETRY_DELAYS):
+        if delay is not None:
+            time.sleep(delay)
+        try:
+            return fn()
+        except X0xError as e:
+            if "HTTP 404" in str(e):
+                continue
+            raise
+    raise X0xError(_RESTART_HINT)
 
 
 def slugify(name: str) -> str:
@@ -27,7 +54,7 @@ def slugify(name: str) -> str:
 
 
 def do_list(client: X0x) -> dict:
-    resp = client.get("/task-lists")
+    resp = _retry_read(lambda: client.get("/task-lists"))
     lists = resp.get("lists", []) or []
     labels = [(b.get("topic") or b.get("id", ""))[:24] for b in lists[:6]]
     summary = (f"{len(lists)} board(s): " + ", ".join(labels)) if lists else "No boards yet."
@@ -53,7 +80,7 @@ def do_tasks(client: X0x, params: dict) -> dict:
     list_id = (params.get("list_id") or "").strip()
     if not list_id:
         raise X0xError("Which board? I need its list_id.")
-    resp = client.get(f"/task-lists/{list_id}/tasks")
+    resp = _retry_read(lambda: client.get(f"/task-lists/{list_id}/tasks"))
     tasks = resp.get("tasks", []) or []
     by_state: dict[str, int] = {}
     for t in tasks:

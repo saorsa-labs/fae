@@ -21,7 +21,7 @@
   "integrity": {
     "algorithm": "sha256",
     "checksums": {
-      "SKILL.md": "119e5b868516b0a5a89e297dce2233e7b26fb4f78fd66c704235c1177f16f8e7",
+      "SKILL.md": "3af7ee37ac324cd6b88ff344da6c8451efc4d1a401e98881c3c8cdc58e18b5ce",
       "scripts/_x0x.py": "3dc2115b95528096cf475b575497b9798f9073ae446863664b908f7ae7fde546",
       "scripts/contacts.py": "32f794ccd5e58ee0a63d49b96755ee0f5727fe89079e1e3573b1bff8abd2c8a2",
       "scripts/ensure.py": "d1e4e00a9abf05fd2843420013fa3a6ff808e5405c9fe8e15721385be1abac2f",
@@ -29,11 +29,11 @@
       "scripts/forwards.py": "64f9bbe4dcb5177b880b5f30b4a5c4f46fb2d71d5e0664424225da1ed67a865f",
       "scripts/groups.py": "ee4bedb4113d8a277ad47a30d716ab8ab96558827ab99cbdf3576df47fd87af2",
       "scripts/gui.py": "cc6c5a38033f6428cd63ce707d587540c7a31fdba2dfae9a1b5f40d3ff613946",
-      "scripts/kanban.py": "762ebb66104a7a7d75c8fc7f3853f320ea0b9e27161bf3618cd576e430c39666",
+      "scripts/kanban.py": "83f56cb27a8fafcd3264eb8e4813d5654ad95da32f79b71eaf20dbddbb10fa98",
       "scripts/message.py": "c4458d1bb8751a90d071474f18ae17ea1c55fd89cfb48b3bd3973a7116957c87",
       "scripts/presence.py": "a35798fbc987335ce0c0320041ff80094030570f57edaa0e16337c9a7652e951",
-      "scripts/stores.py": "e13500ddc3c736903ca7a228634552c9ce8f4150022578d409d268f01fdf443b",
-      "scripts/swarm.py": "927925ccffe5507611cd6e2048fcc8c27b97b1abcf0b9690e7ec00f521502796"
+      "scripts/stores.py": "c7c1306d7c18ce245d8130f4fb9bc27079794adbe42c1cde0c0c8fcb149c9409",
+      "scripts/swarm.py": "21fc2161c001d6a98c5350256a243a928fde221578060d81ff3d542cc0bc0d8f"
     },
     "signature": null
   }
