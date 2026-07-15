@@ -581,6 +581,10 @@ struct FaeConfig: Codable {
             return "gemma_4_12b"
         case "auto":
             return "auto"
+        case "qwen3_8b":
+            // Legacy preset (pre-Qwen3.5 catalogue) — resolve to the closest
+            // current tier silently, like other legacy presets.
+            return "qwen3_5_9b"
         default:
             NSLog("FaeConfig: unknown model preset '%@' — falling back to auto", preset)
             return "auto"

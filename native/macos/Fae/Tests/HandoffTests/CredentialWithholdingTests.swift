@@ -21,6 +21,27 @@ final class CredentialDetectorTests: XCTestCase {
         )
     }
 
+    func testDetectsHuggingFaceToken() {
+        // Live incident 2026-07-15: an hf_ token reached plain conversation —
+        // the prefix must be an explicit positive, not left to the entropy
+        // heuristic alone.
+        XCTAssertTrue(
+            SensitiveDataRedactor.looksLikeCredential("hf_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"),
+            "Hugging Face hf_ token must be detected"
+        )
+    }
+
+    func testRedactMasksHuggingFaceTokenInSentence() {
+        // SessionStore's choke point relies on redact() — an hf_ token embedded
+        // in a sentence (below the 32-char lone-token heuristic's reach) must
+        // still be masked before persistence.
+        let redacted = SensitiveDataRedactor.redact(
+            "my key is hf_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456 thanks")
+        XCTAssertNotNil(redacted)
+        XCTAssertFalse(redacted?.contains("hf_ABCDE") ?? true, "raw hf_ token must not survive redact()")
+        XCTAssertTrue(redacted?.contains("[REDACTED]") ?? false, "hf_ token must be replaced with a marker")
+    }
+
     func testDetectsSlackBotToken() {
         XCTAssertTrue(
             SensitiveDataRedactor.looksLikeCredential("xoxb" + "-123456789012-ABCDEFGHIJKLMNO"),

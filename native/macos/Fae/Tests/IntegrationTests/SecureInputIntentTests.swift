@@ -104,4 +104,106 @@ final class SecureInputIntentTests: XCTestCase {
         XCTAssertFalse(SecureInputIntent.claimsCredentialSaved("I haven't saved your api key yet."))
         XCTAssertFalse(SecureInputIntent.claimsCredentialSaved("Your api key was not stored."))
     }
+
+    // Live incident 2026-07-15: both replies Fae actually produced after the
+    // owner's HF key went uncaptured. The first was caught by the original
+    // verb set; the second ("secured") slipped through — both must now trip
+    // the backstop so a false "it's saved" claim never stands.
+    func testClaimsCredentialSavedCatchesLiveIncidentPhrases() {
+        XCTAssertTrue(SecureInputIntent.claimsCredentialSaved(
+            "Got it, the Hugging Face API key is securely stored."))
+        XCTAssertTrue(SecureInputIntent.claimsCredentialSaved(
+            "I've got your Hugging Face API key secured."))
+    }
+
+    func testClaimsCredentialSavedCatchesWidenedVerbs() {
+        XCTAssertTrue(SecureInputIntent.claimsCredentialSaved(
+            "Your API key is safe with me."))
+        XCTAssertTrue(SecureInputIntent.claimsCredentialSaved(
+            "I'm keeping your token protected."))
+        XCTAssertTrue(SecureInputIntent.claimsCredentialSaved(
+            "I've remembered your password."))
+        // "keychain" is itself credential context — no separate noun needed.
+        XCTAssertTrue(SecureInputIntent.claimsCredentialSaved(
+            "It's in your keychain now."))
+        XCTAssertTrue(SecureInputIntent.claimsCredentialSaved(
+            "I put that in the keychain for you."))
+    }
+
+    func testClaimsCredentialSavedWidenedVerbsKeepPrecision() {
+        // Widened verbs still require a secret noun (or "keychain") nearby.
+        XCTAssertFalse(SecureInputIntent.claimsCredentialSaved(
+            "Your files are safe and stored in Documents."))
+        XCTAssertFalse(SecureInputIntent.claimsCredentialSaved(
+            "I've remembered your birthday."))
+        // Negation guard applies to the widened verbs too.
+        XCTAssertFalse(SecureInputIntent.claimsCredentialSaved(
+            "I haven't secured your api key yet."))
+    }
+
+    // MARK: - Credential-shaped input_request detection (auto-secure)
+
+    func testCredentialRequestStoreKeyDetectsHuggingFacePrompt() {
+        // The live incident's request shape: prompt names the provider + noun.
+        XCTAssertEqual(
+            SecureInputIntent.credentialRequestStoreKey(
+                prompt: "Enter your Hugging Face API key to continue"),
+            "huggingface_token")
+    }
+
+    func testCredentialRequestStoreKeyUsesProviderSlot() {
+        XCTAssertEqual(
+            SecureInputIntent.credentialRequestStoreKey(
+                prompt: "Paste the OpenRouter API key", title: "API Key Required"),
+            "openrouter.apiKey")
+    }
+
+    func testCredentialRequestStoreKeyFallsBackToNounSlot() {
+        XCTAssertEqual(
+            SecureInputIntent.credentialRequestStoreKey(prompt: "Please enter the password"),
+            "password")
+    }
+
+    func testCredentialRequestStoreKeyNilForOrdinaryInput() {
+        XCTAssertNil(SecureInputIntent.credentialRequestStoreKey(prompt: "What's your name?"))
+        XCTAssertNil(SecureInputIntent.credentialRequestStoreKey(prompt: "Paste the article URL"))
+    }
+
+    // MARK: - Intercepted-token slot inference (composer paste path)
+
+    func testInterceptedTokenSlotFromPrefix() {
+        XCTAssertEqual(
+            SecureInputIntent.storeKey(forInterceptedToken: "hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"),
+            "huggingface_token")
+        XCTAssertEqual(
+            SecureInputIntent.storeKey(forInterceptedToken: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcd"),
+            "github_token")
+        XCTAssertEqual(
+            SecureInputIntent.storeKey(forInterceptedToken: "sk-ant-abc123def456ghi789"),
+            "anthropic_api_key")
+        XCTAssertEqual(
+            SecureInputIntent.storeKey(forInterceptedToken: "sk-proj-abc123def456ghi789"),
+            "openai_api_key")
+    }
+
+    func testInterceptedTokenSlotFromContextHintThenGeneric() {
+        XCTAssertEqual(
+            SecureInputIntent.storeKey(
+                forInterceptedToken: "ZZZZ1234YYYY5678XXXX",
+                contextHint: "I'm ready for your Hugging Face API key"),
+            "huggingface_token")
+        XCTAssertEqual(
+            SecureInputIntent.storeKey(forInterceptedToken: "ZZZZ1234YYYY5678XXXX"),
+            "captured_credential")
+    }
+
+    func testInterceptedTokenSlotsAreSafeKeychainKeys() {
+        for token in ["hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", "ghp_ABCDEFGHIJKLMNOP",
+                      "sk-abc", "xoxb-1234", "AKIA1234", "ZZZZ1234"] {
+            XCTAssertTrue(
+                InputRequestTool.isSafeKeychainKey(
+                    SecureInputIntent.storeKey(forInterceptedToken: token)),
+                "slot for \(token) must be a safe Keychain key")
+        }
+    }
 }
