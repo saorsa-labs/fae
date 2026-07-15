@@ -323,6 +323,14 @@ struct FaeConfig: Codable {
         var maxRecallChars: Int = 2000
         var autoIngestInbox: Bool = true
         var generateDigests: Bool = true
+        /// Session-store GC (audit MEDIUM "session store has no GC"): closed
+        /// conversation sessions older than this many days are pruned from
+        /// fae.db at startup and by the daily `memory_gc` task. 0 disables
+        /// age-based pruning.
+        var sessionRetentionDays: Int = 90
+        /// Hard cap on stored closed sessions — the newest N survive even
+        /// inside the retention window. 0 disables the cap.
+        var maxStoredSessions: Int = 500
     }
 
     // MARK: - Speaker
@@ -1205,6 +1213,12 @@ struct FaeConfig: Codable {
                 case "generateDigests":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.memory.generateDigests = v
+                case "sessionRetentionDays":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.memory.sessionRetentionDays = v
+                case "maxStoredSessions":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.memory.maxStoredSessions = v
                 default: break
                 }
             case "voiceIdentity":
@@ -1470,6 +1484,8 @@ struct FaeConfig: Codable {
         lines.append("maxRecallResults = \(memory.maxRecallResults)")
         lines.append("autoIngestInbox = \(memory.autoIngestInbox ? "true" : "false")")
         lines.append("generateDigests = \(memory.generateDigests ? "true" : "false")")
+        lines.append("sessionRetentionDays = \(memory.sessionRetentionDays)")
+        lines.append("maxStoredSessions = \(memory.maxStoredSessions)")
         lines.append("")
 
         lines.append("[scheduler]")

@@ -53,6 +53,10 @@ actor FaeScheduler {
     /// Action receipt store for GC — set by FaeCore.
     private var receiptStore: ReceiptStore?
 
+    /// Conversation session store for retention GC during memory_gc — set by
+    /// FaeCore (audit MEDIUM: "session store has no GC").
+    private var sessionStore: SessionStore?
+
     /// Config value reader for meta-optimization — set by FaeCore.
     /// Maps config key (e.g. "llm.temperature") to current string value.
     private var metaOptConfigReader: ((_ key: String) -> String?)?
@@ -155,6 +159,11 @@ actor FaeScheduler {
     /// Wire the action receipt store for GC during memory_gc.
     func setReceiptStore(_ store: ReceiptStore) {
         receiptStore = store
+    }
+
+    /// Wire the conversation session store for retention GC during memory_gc.
+    func setSessionStore(_ store: SessionStore) {
+        sessionStore = store
     }
 
     /// Wire the shared personal lexicon so vocabulary harvest uses the same actor instance.
@@ -527,6 +536,25 @@ actor FaeScheduler {
             let pruned = await store.pruneExpired()
             if pruned > 0 {
                 NSLog("FaeScheduler: memory_gc — pruned %d expired receipts", pruned)
+            }
+        }
+
+        // Session-store retention GC (audit MEDIUM: "session store has no GC").
+        // Closed sessions past the retention window are deleted; the open
+        // (active) session is never touched.
+        if let store = sessionStore {
+            do {
+                let result = try await store.pruneExpiredSessions(
+                    retentionDays: memoryConfig.sessionRetentionDays,
+                    maxSessions: memoryConfig.maxStoredSessions
+                )
+                if result.prunedSessions > 0 {
+                    NSLog(
+                        "FaeScheduler: memory_gc — pruned %d closed sessions (%d messages)",
+                        result.prunedSessions, result.prunedMessages)
+                }
+            } catch {
+                NSLog("FaeScheduler: session store prune error: %@", error.localizedDescription)
             }
         }
 

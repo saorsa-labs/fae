@@ -102,6 +102,15 @@ final class RustUiShellController: PillInputRouting {
     /// kept the pill saying "Loading … 100%" forever after startup finished.
     private var lastPipelineState: FaePipelineState?
 
+    /// Sink-delivered mirror of `FaeCore.llmLaneDegradationNotice` (same
+    /// willSet-staleness rule as `lastPipelineState`). Non-nil while the
+    /// daemon LLM lane is down and turns run on the MLX fallback.
+    private var lastDegradationNotice: String?
+
+    /// Sink-delivered mirror of `FaeCore.runtimeErrorReason` — a short
+    /// actionable reason shown on the pill for `.error` when one is known.
+    private var lastRuntimeErrorReason: String?
+
     // MARK: - Crash Restart Policy
 
     /// Maximum automatic restarts after unexpected exits before asking the
@@ -327,6 +336,24 @@ final class RustUiShellController: PillInputRouting {
             }
             .store(in: &cancellables)
 
+        // Failure-visibility: daemon-lane degradation notice + actionable
+        // error reason both ride the existing pill status channel.
+        faeCore?.$llmLaneDegradationNotice
+            .removeDuplicates()
+            .sink { [weak self] notice in
+                self?.lastDegradationNotice = notice
+                self?.sendRuntimeStatus()
+            }
+            .store(in: &cancellables)
+
+        faeCore?.$runtimeErrorReason
+            .removeDuplicates()
+            .sink { [weak self] reason in
+                self?.lastRuntimeErrorReason = reason
+                self?.sendRuntimeStatus()
+            }
+            .store(in: &cancellables)
+
         // Real startup progress for the whisper pill + status chip. The model
         // stages emit overall fractions (0.05…1.0); forward the monotonic max
         // so the bar never walks backwards as stages interleave.
@@ -459,7 +486,7 @@ final class RustUiShellController: PillInputRouting {
         // lastPipelineState is the sink-delivered value; the property read is
         // a fallback for calls outside the sink (panel open, label change).
         let state = lastPipelineState ?? faeCore?.pipelineState
-        let phase = state?.rawValue ?? "starting"
+        var phase = state?.rawValue ?? "starting"
         let model = conversation?.loadedModelLabel.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let message: String
         let progress: Double?
@@ -470,7 +497,16 @@ final class RustUiShellController: PillInputRouting {
             // nil until the first stage reports, never a fake placeholder.
             progress = startupProgress > 0 ? startupProgress : nil
         case .running:
-            message = model.isEmpty ? "Ready" : "Ready · \(model)"
+            if let notice = lastDegradationNotice, !notice.isEmpty {
+                // Daemon LLM lane down — running on the MLX fallback. The
+                // distinct "degraded" phase lets the pill show the notice
+                // while idle without hijacking Listening/Thinking/Speaking
+                // feedback during a turn (fae-ui-shell pill_status).
+                phase = "degraded"
+                message = notice
+            } else {
+                message = model.isEmpty ? "Ready" : "Ready · \(model)"
+            }
             progress = 1.0
         case .stopping:
             message = "Stopping"
@@ -479,7 +515,10 @@ final class RustUiShellController: PillInputRouting {
             message = "Stopped"
             progress = nil
         case .error:
-            message = "Runtime needs attention"
+            // Prefer the short actionable reason when one is known; the orb
+            // host falls back to its generic "Fae needs attention" when the
+            // message is empty.
+            message = lastRuntimeErrorReason ?? "Runtime needs attention"
             progress = nil
         case nil:
             message = "Starting Fae"
