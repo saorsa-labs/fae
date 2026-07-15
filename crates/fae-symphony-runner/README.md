@@ -45,23 +45,12 @@ cargo tree -i x0x-symphony-core
 The output must list **only** `fae-symphony-runner` as a dependent — `fae-daemon`
 must never appear.
 
-## Dependency mechanics (git-rev pin)
+## Dependency mechanics (crates.io pin)
 
-The `x0x-symphony-*` crates are consumed as **git dependencies pinned to a
-commit rev** (see `Cargo.toml`), not path deps. This is deliberate: the crate is
-developed in a git *worktree* whose depth under `projects/` differs from the
-folded `projects/fae/` checkout, so a fixed relative path dep would resolve to
-two different places. A git-rev pin is location-independent.
-
-x0x-symphony is a **private, unpublished** repo. On a machine without a cargo
-git credential helper, export:
-
-```bash
-export CARGO_NET_GIT_FETCH_WITH_CLI=true   # reuse your CLI ssh credential
-```
-
-`Cargo.toml` documents a `dev override` path form and a `TODO(publish)` for the
-eventual crates.io pin.
+The `x0x-symphony-*` crates are consumed from **crates.io** (currently `0.1.2`
+— see `Cargo.toml`), not path or git deps, so no sibling checkout or git
+credential is needed. `Cargo.toml` documents a `dev override` path form for
+editing symphony in-tree.
 
 ## Configuration
 
@@ -78,6 +67,14 @@ Environment variables (or a TOML file via `FAE_SYMPHONY_CONFIG`):
 | `FAE_DAEMON_TOKEN_PATH` | **yes** | — | fae-daemon bootstrap token file (0600) |
 | `FAE_DAEMON_CLIENT_ID` | no | bootstrap client id | control-plane client id (needs `agent:delegate`) |
 | `FAE_SYMPHONY_POLL_SECS` | no | `5` | poll-loop interval |
+
+**Supervised mode (owner-opt-in):** with `FAE_SYMPHONY_ENABLED=1` the daemon
+spawns and supervises this binary itself (restart with bounded exponential
+backoff, kill on daemon shutdown) and injects `FAE_DAEMON_SOCKET` /
+`FAE_DAEMON_TOKEN_PATH` for its own socket — only the `FAE_SYMPHONY_*` config
+above needs to be set. Binary lookup: `FAE_SYMPHONY_RUNNER_BIN` → beside
+`fae-daemon` → `PATH`. See `fae-daemon/src/symphony.rs` and the workspace
+`README.md`.
 
 ## Tests
 

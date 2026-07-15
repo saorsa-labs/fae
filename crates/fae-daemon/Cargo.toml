@@ -52,7 +52,9 @@ getrandom.workspace = true
 sha2 = { workspace = true }
 hmac = { workspace = true }
 hex = { workspace = true }
-tokio = { workspace = true }
+# `process` + `time`: the symphony-runner sidecar supervisor (src/symphony.rs)
+# spawns/kills the child and sleeps between backoff restarts.
+tokio = { workspace = true, features = ["process", "time"] }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 futures-util = { workspace = true }

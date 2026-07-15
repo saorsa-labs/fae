@@ -35,14 +35,14 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-# ── x0x-symphony: crates.io 0.1.0 pins (published 2026-07-04) ───────────────
-# Local dev override: swap each `version = "0.1.0"` for the sibling path dep
+# ── x0x-symphony: crates.io 0.1.2 pins (published 2026-07) ──────────────────
+# Local dev override: swap each `version = "0.1.2"` for the sibling path dep
 # `{ path = "../../../x0x-symphony/crates/<name>" }` when editing symphony in-tree.
-x0x-symphony-core             = "0.1.0"
-x0x-symphony-orchestrator     = "0.1.0"
-x0x-symphony-tracker-x0x-crdt = "0.1.0"
-x0x-symphony-signing          = "0.1.0"
-x0x-symphony-workspace        = "0.1.0"
+x0x-symphony-core             = "0.1.2"
+x0x-symphony-orchestrator     = "0.1.2"
+x0x-symphony-tracker-x0x-crdt = "0.1.2"
+x0x-symphony-signing          = "0.1.2"
+x0x-symphony-workspace        = "0.1.2"
 
 [dev-dependencies]
 tempfile = "3"

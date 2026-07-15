@@ -35,27 +35,33 @@ use crate::provider::{
 /// personal adapter is the only one we load, so it is always id 0.
 const PERSONAL_LORA_ID: u32 = 0;
 
-/// Process-global registry of live `llama-server` child PIDs. Maintained by
-/// [`LlamaServerHandle`]'s spawn/Drop so a hard teardown (the daemon's
+/// Process-global registry of live sidecar child PIDs. Maintained by
+/// [`LlamaServerHandle`]'s spawn/Drop (and by the daemon's supervised
+/// fae-symphony-runner sidecar) so a hard teardown (the daemon's
 /// `spawn_parent_watch` calls `process::exit`, which skips `Drop`) can still
 /// kill every sidecar before the daemon vanishes. Best-effort: a crashed daemon
 /// can't run this, but the common quit/SIGKILL-of-daemon path is covered.
 ///
-/// This lives in the engine (not the daemon) because the `Child` is owned here;
-/// the daemon only needs [`kill_all_registered_sidecars`] at shutdown.
+/// This lives in the engine (not the daemon) because the llama `Child` is
+/// owned here; the daemon registers its own sidecars via
+/// [`register_sidecar`]/[`unregister_sidecar`] and calls
+/// [`kill_all_registered_sidecars`] at shutdown.
 static SIDECAR_PIDS: std::sync::OnceLock<std::sync::Mutex<Vec<u32>>> = std::sync::OnceLock::new();
 
 fn sidecar_pids() -> &'static std::sync::Mutex<Vec<u32>> {
     SIDECAR_PIDS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
-fn register_sidecar(pid: u32) {
+/// Register a live sidecar child PID for teardown reaping (see
+/// [`kill_all_registered_sidecars`]). Never panics.
+pub fn register_sidecar(pid: u32) {
     if let Ok(mut guard) = sidecar_pids().lock() {
         guard.push(pid);
     }
 }
 
-fn unregister_sidecar(pid: u32) {
+/// Remove a reaped sidecar child PID from the teardown registry. Never panics.
+pub fn unregister_sidecar(pid: u32) {
     if let Ok(mut guard) = sidecar_pids().lock() {
         guard.retain(|&p| p != pid);
     }

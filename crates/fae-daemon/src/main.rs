@@ -87,6 +87,13 @@ mod session;
 /// on any SHA-256 mismatch, and prepares `uv run --script` commands that route
 /// through the EXISTING governed ToolHost bash path (no second execution lane).
 mod skillhost;
+/// Phase F follow-on — owner-opt-in supervised `fae-symphony-runner` sidecar
+/// (`FAE_SYMPHONY_ENABLED=1`): the daemon spawns and supervises the runner
+/// (restart with bounded exponential backoff, kill on shutdown, PID registered
+/// in fae-engine's sidecar registry) so joining a group-of-Fae work queue is a
+/// product lifecycle. The daemon still links NO x0x-symphony crate — the
+/// runner stays a pure socket client of `conversation.delegate`.
+mod symphony;
 /// ADR-013 Vision A — the daemon tool/skill execution host (fluers substrate).
 /// Dormant in A1: wiring + reachability proof only. A2 builds the governed
 /// ToolHost (fluers native tools + Skills over `SessionEnv`, behind a Fae
@@ -550,6 +557,16 @@ async fn main() -> DaemonResult<()> {
         agents: agents.clone(),
     })
     .await;
+
+    // ── Symphony runner sidecar (owner-opt-in via FAE_SYMPHONY_ENABLED) ──
+    // Supervised `fae-symphony-runner` child: claims group-of-Fae TaskItems
+    // from x0xd and executes them through THIS daemon's `conversation.delegate`
+    // (socket + bootstrap-token path injected into its env). OFF by default;
+    // misconfiguration is loud but never blocks startup. The handle lives for
+    // the daemon's lifetime; the parent-watch / `exit_fatal` `process::exit`
+    // paths reap the child via fae-engine's sidecar registry (same as the
+    // llama-server sidecar).
+    let _symphony_sidecar = symphony::setup(&socket_path, &token_path);
 
     // Serves until the process is killed. Fails closed on bind/permission error.
     transport::serve_unix(

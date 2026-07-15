@@ -35,7 +35,10 @@ const SENSITIVE_MARKERS: &[&str] = &[
     "PRIVATE_KEY",
 ];
 
-fn is_sensitive_name(name: &str) -> bool {
+/// `true` when `name` carries a secret marker (shared with the symphony
+/// sidecar's passthrough filter — a secret-named var never crosses even when a
+/// passthrough prefix would otherwise admit it).
+pub(crate) fn is_sensitive_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     SENSITIVE_MARKERS.iter().any(|m| upper.contains(m))
 }
