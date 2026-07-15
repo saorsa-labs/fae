@@ -39,26 +39,13 @@ jobs:
 
       - name: Install Linux shell and daemon dependencies
         run: |
-          # arm64 runners intermittently lack IPv6 routes to ports.ubuntu.com; force IPv4 + retries.
-          echo 'Acquire::ForceIPv4 "true"; Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99-fae-ci-ipv4 >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            pkg-config \
-            libasound2-dev \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libx11-dev \
-            libxdo-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcursor-dev \
-            libxkbcommon-dev \
-            libwayland-dev \
-            xvfb \
-            imagemagick
+          bash scripts/ci/apt-install-retry.sh \
+            build-essential pkg-config \
+            libasound2-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev \
+            libx11-dev libxdo-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxkbcommon-dev libwayland-dev \
+            xvfb imagemagick
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
