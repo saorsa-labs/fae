@@ -17,10 +17,37 @@ Actions (params.action):
 
 import os
 import sys
+import time
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _x0x import X0x, X0xError, b64, unb64_text, read_params, emit, fail  # noqa: E402
+
+# Delay schedule for retrying 404s during the x0xd startup state-recovery window
+# (~10 s after daemon restart).  Three retries at 4 s each = ~12 s total budget.
+_STARTUP_RETRY_DELAYS = (4.0, 4.0, 4.0)
+_RESTART_HINT = (
+    "That data isn't available yet — the x0x daemon may still be recovering state "
+    "after a recent restart. Try again in a moment."
+)
+
+
+def _retry_read(fn, on_persistent_error: str) -> dict:
+    """Call fn() (a GET), retrying up to 3 times on HTTP 404 startup recovery window.
+
+    on_persistent_error is the sanitized message raised for any non-404 X0xError.
+    When all retries exhaust on 404, raises with the restart hint instead.
+    """
+    for delay in (None, *_STARTUP_RETRY_DELAYS):
+        if delay is not None:
+            time.sleep(delay)
+        try:
+            return fn()
+        except X0xError as e:
+            if "HTTP 404" in str(e):
+                continue
+            raise X0xError(on_persistent_error) from None
+    raise X0xError(_RESTART_HINT) from None
 
 
 def _required_text(value, message: str, *, max_length: int = 1024) -> str:
@@ -51,10 +78,10 @@ def _segment(value: str) -> str:
 
 
 def do_list(client: X0x) -> dict:
-    try:
-        resp = client.get("/stores")
-    except X0xError:
-        raise X0xError("I couldn't list the shared stores right now.") from None
+    resp = _retry_read(
+        lambda: client.get("/stores"),
+        "I couldn't list the shared stores right now.",
+    )
     stores = resp.get("stores", []) or []
     summary = f"{len(stores)} shared store(s) joined." if stores else "No shared stores are joined yet."
     return {"ok": True, "stores": stores, "count": len(stores), "summary": summary}
@@ -89,10 +116,10 @@ def do_join(client: X0x, params: dict) -> dict:
 
 def do_keys(client: X0x, params: dict) -> dict:
     store_id = _store_id(params)
-    try:
-        resp = client.get(f"/stores/{_segment(store_id)}/keys")
-    except X0xError:
-        raise X0xError("I couldn't list the keys in that shared store.") from None
+    resp = _retry_read(
+        lambda: client.get(f"/stores/{_segment(store_id)}/keys"),
+        "I couldn't list the keys in that shared store.",
+    )
     keys = resp.get("keys", []) or []
     summary = f"{len(keys)} key(s) in that shared store." if keys else "That shared store has no keys yet."
     return {
@@ -107,10 +134,10 @@ def do_keys(client: X0x, params: dict) -> dict:
 def do_get(client: X0x, params: dict) -> dict:
     store_id = _store_id(params)
     key = _key(params)
-    try:
-        resp = client.get(f"/stores/{_segment(store_id)}/{_segment(key)}")
-    except X0xError:
-        raise X0xError("I couldn't read that value from the shared store.") from None
+    resp = _retry_read(
+        lambda: client.get(f"/stores/{_segment(store_id)}/{_segment(key)}"),
+        "I couldn't read that value from the shared store.",
+    )
     encoded = resp.get("value") or ""
     return {
         **resp,

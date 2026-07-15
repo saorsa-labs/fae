@@ -30,13 +30,30 @@ def do_publish(client: X0x, params: dict) -> dict:
     if payload is None or not isinstance(payload, str) or payload == "":
         raise X0xError("I need the task payload to publish.")
     topic = (params.get("topic") or DEFAULT_TASK_TOPIC).strip()
+    # Subscribe before publishing: the x0x gossip layer silently drops publishes
+    # from agents that are not mesh members of the topic.  Subscribing here is
+    # idempotent and ensures local mesh membership before the payload goes out.
+    subscribed = True
+    try:
+        client.post("/subscribe", {"topic": topic})
+    except X0xError:
+        subscribed = False
     # pub/sub payloads are base64-encoded.
     resp = client.post("/publish", {"topic": topic, "payload": b64(payload)})
+    warning = (
+        ""
+        if subscribed
+        else (
+            " Note: could not confirm mesh subscription before publishing"
+            " — the message may not reach all peers."
+        )
+    )
     return {
         "ok": True,
         "message_id": resp.get("message_id"),
         "topic": topic,
-        "summary": f"Published the task to '{topic}'.",
+        "subscribed_before_publish": subscribed,
+        "summary": f"Published the task to '{topic}'.{warning}",
     }
 
 
