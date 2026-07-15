@@ -3333,9 +3333,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// flag guarantees a single fire per install regardless of call site.
     func startConversationalOnboardingIfNeeded() {
         let flagKey = "fae.onboarding.conversationStarted"
-        guard !FaeEnvironment.defaults.bool(forKey: flagKey) else { return }
+        let action = ConversationalOnboardingPolicy.action(
+            alreadyDelivered: FaeEnvironment.defaults.bool(forKey: flagKey),
+            pipelineReady: pipelineState == .running
+                && pipelineCoordinator != nil
+                && skillManagerRef != nil
+        )
+        guard action != .skip else { return }
 
-        guard pipelineState == .running,
+        guard action == .start,
               let coordinator = pipelineCoordinator,
               let sm = skillManagerRef
         else {

@@ -66,15 +66,26 @@ Ground truth (scouted 2026-07-05, file:line evidence in session records):
   a RemoteAllowed decision; default remains local-always.
 
 ### W4 — Onboarding as a conversation
-- First launch: shrink the native modal to mic permission + the local-first
-  promise, then TRIGGER the conversational skill (today it never fires).
-- Rewrite first-launch-onboarding SKILL.md: story-driven — name, city ("that's
-  how I'll know your weather and your mornings"), what they do — each fact
-  immediately demonstrated; PTT reality ("hold right Option, or press and hold
-  my orb"); remove dead S18 steps (voice-enrollment beeps, photo banner).
-- Add a location/city profile extractor to MemoryOrchestrator capture patterns.
-- capability-discovery keeps the one-nudge drip; add cloud-brain + handoff to
-  its pitch list.
+- LANDED (2026-07-15): first launch: shrink the native modal to mic permission
+  + the local-first promise, then TRIGGER the conversational skill.
+  Front-load is mic-only (`OnboardingController.requestFirstLaunchPermissions`,
+  driven by `FirstLaunchPermissionPolicy`); contacts/calendar/reminders are
+  JIT on first tool use (`AppleTools.requestPermission` →
+  `JitPermissionController`). The skill fires exactly once
+  (`FaeCore.startConversationalOnboardingIfNeeded`, flag
+  `fae.onboarding.conversationStarted`, `ConversationalOnboardingPolicy`),
+  deferring until the pipeline reports `.running` — the ~8GB first-run model
+  download is survived, not raced. Denied permissions still never auto-open
+  System Settings; camera/screen stay deferred to first use.
+- LANDED (earlier): rewrite first-launch-onboarding SKILL.md: story-driven —
+  name, city ("that's how I'll know your weather and your mornings"), what
+  they do — each fact immediately demonstrated; PTT reality ("hold right
+  Option, or press and hold my orb"); remove dead S18 steps (voice-enrollment
+  beeps, photo banner).
+- LANDED (earlier): location/city profile extractor in MemoryOrchestrator
+  capture patterns (`extractLocation`).
+- PARTIAL: capability-discovery keeps the one-nudge drip; cloud-brain is in
+  its pitch list — the handoff pitch is still to add.
 
 ### W5 — Menu purge + Advanced mode
 - Orb context menu (primary): Talk to Fae · Settings… · ── · Hand off to…
