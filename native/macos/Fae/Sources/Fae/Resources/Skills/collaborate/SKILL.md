@@ -54,14 +54,22 @@ send messages *through* the user's Fae. That is a separate, explicit consent. Af
 successful import, ask once, in plain language:
 *"Shall I let <name> talk to you through me?"*
 
-- **Yes** → `self_config {action: "append_list_value", key: "x0x.allowList", value: "<agent_id>"}`
-  (use the `agent_id` the import returned). Confirm warmly: *"Done — <name> can reach you
-  through me now."* Fae will take a few seconds to wake the peer connection.
+- **Yes** → `self_config {action: "peer_grant", agent_id: "<agent_id>", label: "<name>", tier: "chat"}`
+  (use the `agent_id` the import returned — confirm it with the user if there is any
+  doubt which agent they mean). This is the AUTHORITATIVE grant path: it shows the
+  user an approval card they must physically click, then the grant goes live in
+  seconds with no restart. If they don't approve the card, nothing changes — accept
+  that quietly. On success confirm warmly: *"Done — <name> can reach you through me now."*
 - **No** → leave it. Say plainly: *"No problem — they're saved as a contact, but they
   can't message you through me. You can change that anytime."*
+- To undo later ("stop letting <name> message me") → `self_config {action: "peer_revoke",
+  agent_id: "<agent_id>"}` — immediate, no card needed.
 
-Only ever append to `x0x.allowList` (a normal friend) or, for the user's own other
-devices, `x0x.ownerFleet`. Never add someone the user didn't just choose to.
+Use `tier: "chat"` for a friend; `tier: "owner_fleet"` ONLY for the user's own other
+devices (it additionally allows session handoff). Never grant someone the user didn't
+just choose to. The older `append_list_value` action still exists but requires a daemon
+restart to apply — prefer `peer_grant`. Any consent decision is also recorded in the
+peer audit log automatically.
 
 ## How to use it
 

@@ -368,11 +368,13 @@ enum DaemonAgentClient {
     /// conversation turn can never wedge forever if nobody is present to answer
     /// (overnight / proactive routed mutation), the card is dismissed, or the
     /// response notification is lost.
-    private static let approvalTimeoutSeconds: Double = 75
+    static let approvalTimeoutSeconds: Double = 75
 
     /// Present Fae's governance approval card and await the user's yes/no. Reuses
     /// the existing `.faeGovernanceConfirmation*` round-trip (the same card tool
-    /// approvals use).
+    /// approvals use). Internal (not private) so other deliberate-consent flows
+    /// — `self_config peer_grant` — reuse THIS card instead of inventing one;
+    /// they may pass a shorter `timeoutSeconds` (still deny-on-timeout).
     ///
     /// Three racers can settle the wait — the user's response notification, the
     /// backstop timeout, and Task cancellation (a cancelled turn) — and each
@@ -382,7 +384,11 @@ enum DaemonAgentClient {
     /// no-op. Timeout and cancellation both DENY (fail-closed). This mirrors the
     /// cancellation-aware one-shot pattern in `DaemonToolHostSession`.
     @MainActor
-    private static func requestApproval(title: String, message: String) async -> Bool {
+    static func requestApproval(
+        title: String,
+        message: String,
+        timeoutSeconds: Double = DaemonAgentClient.approvalTimeoutSeconds
+    ) async -> Bool {
         let requestID = UUID().uuidString
         let waiter = ApprovalWaiter(requestID: requestID)
         return await withTaskCancellationHandler {
@@ -412,7 +418,7 @@ enum DaemonAgentClient {
                 // Backstop timeout — deny if nobody answers before the daemon's
                 // own confirm window has comfortably closed.
                 Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(approvalTimeoutSeconds))
+                    try? await Task.sleep(for: .seconds(timeoutSeconds))
                     waiter.resolve(false, postDismissal: true)
                 }
             }

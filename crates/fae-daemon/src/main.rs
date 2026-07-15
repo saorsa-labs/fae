@@ -632,10 +632,17 @@ async fn setup_peer_ingress(b: PeerIngressBackends) -> Option<Arc<peer::PeerOutb
         }
     };
     let audit_path = b.data_dir.join("peer_envelope_audit.jsonl");
+    let allowlist_path = b.data_dir.join("peer_allowlist.json");
+    // Outbound handoff targets honour file-granted owner-fleet peers from
+    // startup; the INGRESS side additionally live-reloads the file per frame
+    // (an outbound-fleet change made after launch applies on the next respawn).
+    let initial_file_grants = peer::allowlist::load(&allowlist_path);
+    let mut owner_fleet = cfg.owner_fleet.clone();
+    owner_fleet.extend(initial_file_grants.owner_fleet.iter().cloned());
     let outbound = Arc::new(peer::PeerOutbound::new(
         client,
         own_agent_id.clone(),
-        cfg.owner_fleet.clone(),
+        owner_fleet,
         audit_path.clone(),
     ));
     let deps = peer::PeerIngressDeps {
@@ -646,6 +653,7 @@ async fn setup_peer_ingress(b: PeerIngressBackends) -> Option<Arc<peer::PeerOutb
         playbacks: b.playbacks,
         agents: b.agents,
         audit_path,
+        allowlist_path,
     };
     // A never-cancelled token: the daemon runs the ingress for its whole life
     // (the process exit tears it down). The handle mirrors the toolhost cancel

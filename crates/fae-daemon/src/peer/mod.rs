@@ -30,6 +30,7 @@
 //! path for pre-signing peers. See `signing.rs` for the key model, canonical
 //! bytes, DST, and the pubkey→sender binding.
 
+pub mod allowlist;
 pub mod config;
 pub mod handler;
 pub mod handoff;
@@ -389,6 +390,10 @@ pub struct PeerIngressDeps {
     /// accept/reject rows to; the supervisor appends transport-level drops here
     /// too so one file is the complete peer-ingress audit trail.
     pub audit_path: PathBuf,
+    /// `<fae data dir>/peer_allowlist.json` — the owner-granted live allowlist
+    /// ([`allowlist`]). Unioned with the env lists and re-read whenever its
+    /// fingerprint changes, so a consent grant goes live without a restart.
+    pub allowlist_path: PathBuf,
 }
 
 /// The peer-ingress supervisor: connect the SSE stream, gate every frame, and
@@ -414,11 +419,17 @@ async fn run_ingress(
     outbound: Arc<PeerOutbound>,
     cancel: CancellationToken,
 ) {
-    let verifier = FaeSenderVerifier::new(
-        cfg.chat_allow.clone(),
-        cfg.owner_fleet.clone(),
-        cfg.allow_unsigned,
-    );
+    // Sender trust = env lists ∪ the owner's file-backed grants
+    // (`peer_allowlist.json`). The watcher re-reads the file when it changes,
+    // so a `peer_grant` takes effect on the NEXT inbound frame — no daemon
+    // restart. Env-only remains the fail-closed floor when the file is
+    // missing or malformed.
+    let env_sets = allowlist::AllowlistSets {
+        chat_allow: cfg.chat_allow.clone(),
+        owner_fleet: cfg.owner_fleet.clone(),
+    };
+    let mut allowlist_watcher = allowlist::AllowlistWatcher::new(deps.allowlist_path.clone());
+    let mut verifier = effective_verifier(&env_sets, allowlist_watcher.sets(), cfg.allow_unsigned);
     if cfg.allow_unsigned {
         tracing::warn!(
             "peer ingress running with FAE_X0X_ALLOW_UNSIGNED=1: unsigned/placeholder \
@@ -460,6 +471,14 @@ async fn run_ingress(
                         // fall through to backoff + reconnect.
                         break;
                     };
+                    if allowlist_watcher.reload_if_changed() {
+                        verifier = effective_verifier(
+                            &env_sets,
+                            allowlist_watcher.sets(),
+                            cfg.allow_unsigned,
+                        );
+                        tracing::info!("peer allowlist reloaded from file");
+                    }
                     handle_frame(&frame, &verifier, &cfg, &deps, &outbound, &sink).await;
                 }
             }
@@ -474,6 +493,18 @@ async fn run_ingress(
         }
     }
     tracing::info!("peer ingress stopped");
+}
+
+/// Build the verifier from env grants ∪ file grants — the single place the
+/// two trust sources are merged, so they cannot drift apart. `allow_unsigned`
+/// passes through unchanged (a file grant never relaxes signature policy).
+fn effective_verifier(
+    env: &allowlist::AllowlistSets,
+    file: &allowlist::AllowlistSets,
+    allow_unsigned: bool,
+) -> FaeSenderVerifier {
+    let merged = env.union_with(file);
+    FaeSenderVerifier::new(merged.chat_allow, merged.owner_fleet, allow_unsigned)
 }
 
 /// Process ONE inbound frame through the full membrane: transport pre-check →
