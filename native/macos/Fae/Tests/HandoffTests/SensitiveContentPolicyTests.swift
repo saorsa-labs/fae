@@ -47,14 +47,18 @@ final class SensitiveContentPolicyTests: XCTestCase {
         ])
 
         await fulfillment(of: [required], timeout: 2.0)
-        // UX W2: the structural credential guard now fires FIRST for
-        // credential-looking values — better than the old placeholder, which
-        // silently discarded the value; the guard instructs the model to
-        // re-ask with store_key so the secret can actually be stored. The
-        // invariant that matters: the raw value never reaches the model.
-        XCTAssertTrue(
-            result.output.contains("withheld"),
+        // Live incident 2026-07-15: a credential-shaped prompt now auto-derives
+        // a Keychain slot and stores the value (the model cannot opt out by
+        // omitting store_key); without a derivable slot the structural guard
+        // withholds and instructs a secure re-ask. Either way, the invariant
+        // that matters: the raw value never reaches the model.
+        XCTAssertFalse(
+            result.output.contains("super-secret-token"),
             "secure input must never return the raw value; got: \(result.output)"
+        )
+        XCTAssertTrue(
+            result.output.contains("withheld") || result.output.contains("stored securely in keychain"),
+            "secure input must resolve to withhold or keychain storage; got: \(result.output)"
         )
         XCTAssertFalse(result.output.contains("sk-"), "no credential material in the result")
     }
