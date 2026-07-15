@@ -962,9 +962,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         canvasController.clear()
     }
 
-    /// One-time first-launch flow: read-access permissions + learning the
-    /// user's name from the Contacts Me Card. Keyed on its own flag — NOT on
-    /// owner voice enrollment (S18: enrollment is no longer part of first
+    /// One-time first-launch flow: the mic permission (PTT needs it) followed
+    /// by the conversational onboarding hand-off. Keyed on its own flag — NOT
+    /// on owner voice enrollment (S18: enrollment is no longer part of first
     /// launch; identity is the deliberate physical act at the machine).
     func requestPermissionsForFirstLaunchIfNeeded() {
         let flagKey = "fae.firstLaunch.permissionsRequested"
@@ -978,28 +978,19 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
 
-            // Request all read-access permissions up front.
+            // UX W4: mic-only front-load. Contacts, calendar, and reminders
+            // are requested just-in-time on first use of the matching Apple
+            // tool (AppleTools.requestPermission → JitPermissionController),
+            // never as a first-launch wall of dialogs.
             let onboarding = self.onboarding
-            let learnedName: String? = await withTaskGroup(of: String?.self) { group in
-                group.addTask { @MainActor in
-                    onboarding.requestAllReadPermissions()
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    return onboarding.userName
-                }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: 30_000_000_000)
-                    return nil
-                }
-                let result = await group.next() ?? nil
-                group.cancelAll()
-                return result
-            }
+            onboarding.requestFirstLaunchPermissions()
 
-            if let name = learnedName, !name.isEmpty {
+            // If contacts access already exists (upgrade installs), read the
+            // Me Card silently — this never prompts.
+            onboarding.readMeCardIfAuthorized()
+            if let name = onboarding.userName, !name.isEmpty {
                 self.faeCore.userName = name
                 NSLog("Fae: learned user name from contacts: %@", name)
-            } else {
-                NSLog("Fae: contacts access not granted or Me Card not found")
             }
 
             // UX W4: the first-launch permission phase is done — hand off to the

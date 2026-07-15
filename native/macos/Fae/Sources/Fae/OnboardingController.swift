@@ -20,12 +20,53 @@ enum OnboardingPhase: String, CaseIterable {
     }
 }
 
+/// UX W4 — first-launch permission policy.
+///
+/// The native first-launch flow front-loads ONLY the microphone permission:
+/// push-to-talk cannot work without it. Contacts, calendar, and reminders are
+/// requested just-in-time on first use of the corresponding Apple tool
+/// (`AppleTools.requestPermission` → `JitPermissionController`), so a new user
+/// never faces a wall of four permission dialogs before Fae has said a word.
+enum FirstLaunchPermissionPolicy {
+    /// Permissions the native onboarding flow requests at first launch.
+    static let requested: [String] = ["microphone"]
+
+    /// Permissions that must never be requested at first launch — they are
+    /// granted just-in-time when the matching Apple tool first runs.
+    static let deferredToFirstUse: [String] = ["contacts", "calendar", "reminders"]
+}
+
+/// Decision for firing the conversational first-launch onboarding turn.
+enum ConversationalOnboardingAction: Equatable {
+    /// Already delivered once on this install — never re-fire.
+    case skip
+    /// Pipeline not ready (models still loading) — record intent and retry
+    /// when the runtime reports ready.
+    case deferred
+    /// Fire now and persist the delivered flag.
+    case start
+}
+
+/// Pure decision logic for the one-shot conversational onboarding trigger,
+/// used by `FaeCore.startConversationalOnboardingIfNeeded()` so the one-shot
+/// and deferral semantics are unit-testable without a running core.
+enum ConversationalOnboardingPolicy {
+    static func action(
+        alreadyDelivered: Bool,
+        pipelineReady: Bool
+    ) -> ConversationalOnboardingAction {
+        if alreadyDelivered { return .skip }
+        return pipelineReady ? .start : .deferred
+    }
+}
+
 /// Manages onboarding state and native system permission requests.
 ///
 /// `OnboardingController` drives the native onboarding screens and bridges
-/// to the macOS permission system. It requests microphone, contacts, calendar,
-/// and mail access on behalf of the user, persists the results, and updates
-/// the native UI.
+/// to the macOS permission system. At first launch it requests microphone
+/// access only (see `FirstLaunchPermissionPolicy`); the remaining permission
+/// helpers exist for just-in-time and menu-driven requests, persist the
+/// results, and update the native UI.
 @MainActor
 final class OnboardingController: ObservableObject {
 
@@ -274,13 +315,30 @@ final class OnboardingController: ObservableObject {
         onPermissionResult?("mail", "settings")
     }
 
-    /// Request all read-access permissions that haven't been asked yet.
-    /// Called on first launch to ensure Fae has at least read access by default.
-    func requestAllReadPermissions() {
-        requestMicrophone()
-        requestContacts()
-        requestCalendar()
-        requestReminders()
+    /// Request the first-launch permissions — mic-only (UX W4).
+    ///
+    /// Driven by `FirstLaunchPermissionPolicy.requested` so the front-load
+    /// stays testably minimal. Contacts, calendar, and reminders are
+    /// deliberately NOT requested here: the Apple tools request them
+    /// just-in-time on first use via `JitPermissionController`.
+    func requestFirstLaunchPermissions() {
+        for permission in FirstLaunchPermissionPolicy.requested {
+            switch permission {
+            case "microphone":
+                requestMicrophone()
+            case "contacts":
+                requestContacts()
+            case "calendar":
+                requestCalendar()
+            case "reminders":
+                requestReminders()
+            default:
+                NSLog(
+                    "OnboardingController: unknown first-launch permission '%@'",
+                    permission
+                )
+            }
+        }
     }
 
     // MARK: - System Settings
