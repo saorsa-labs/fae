@@ -62,6 +62,12 @@ struct SessionSearchResult: Sendable, Equatable {
     let score: Double
 }
 
+/// Outcome of one `SessionStore.pruneExpiredSessions` pass.
+struct SessionPruneResult: Sendable, Equatable {
+    let prunedSessions: Int
+    let prunedMessages: Int
+}
+
 actor SessionStore {
     private let dbQueue: DatabaseQueue
 
@@ -233,6 +239,80 @@ actor SessionStore {
                     """,
                 arguments: [closedAt, closedAt, id]
             )
+        }
+    }
+
+    /// Retention GC (production-readiness audit MEDIUM: "session store has no
+    /// GC — unbounded fae.db growth"). Prunes CLOSED sessions that fall outside
+    /// the retention window, then caps the remaining closed-session count to
+    /// the most recent `maxSessions`. Open sessions (the live conversation)
+    /// are never deleted, regardless of age. Messages and summaries are
+    /// deleted explicitly — not via FK cascade — because SQLite only fires the
+    /// external-content FTS delete triggers for direct DELETEs, and a cascade
+    /// would silently strand rows in `session_message_fts`.
+    ///
+    /// Pass 0 to disable either dimension. Runs at app startup (FaeCore) and
+    /// daily from the scheduler's `memory_gc` task.
+    @discardableResult
+    func pruneExpiredSessions(
+        retentionDays: Int,
+        maxSessions: Int,
+        now: Date = Date()
+    ) throws -> SessionPruneResult {
+        guard retentionDays > 0 || maxSessions > 0 else {
+            return SessionPruneResult(prunedSessions: 0, prunedMessages: 0)
+        }
+        return try dbQueue.write { db in
+            var ids: Set<String> = []
+            if retentionDays > 0 {
+                let cutoff = Self.unixTimestamp(
+                    now.addingTimeInterval(-Double(retentionDays) * 86_400))
+                let expired = try String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT id FROM conversation_sessions
+                        WHERE status != 'open' AND last_message_at < ?
+                        """,
+                    arguments: [cutoff]
+                )
+                ids.formUnion(expired)
+            }
+            if maxSessions > 0 {
+                let overflow = try String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT id FROM conversation_sessions
+                        WHERE status != 'open'
+                        ORDER BY last_message_at DESC, id DESC
+                        LIMIT -1 OFFSET ?
+                        """,
+                    arguments: [maxSessions]
+                )
+                ids.formUnion(overflow)
+            }
+            guard !ids.isEmpty else {
+                return SessionPruneResult(prunedSessions: 0, prunedMessages: 0)
+            }
+            var prunedMessages = 0
+            var prunedSessions = 0
+            for id in ids {
+                try db.execute(
+                    sql: "DELETE FROM session_messages WHERE session_id = ?",
+                    arguments: [id]
+                )
+                prunedMessages += db.changesCount
+                try db.execute(
+                    sql: "DELETE FROM session_summaries WHERE session_id = ?",
+                    arguments: [id]
+                )
+                try db.execute(
+                    sql: "DELETE FROM conversation_sessions WHERE id = ?",
+                    arguments: [id]
+                )
+                prunedSessions += db.changesCount
+            }
+            return SessionPruneResult(
+                prunedSessions: prunedSessions, prunedMessages: prunedMessages)
         }
     }
 

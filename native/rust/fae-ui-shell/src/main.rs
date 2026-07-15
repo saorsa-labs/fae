@@ -1500,7 +1500,10 @@ fn apply_bridge_command(
             message,
             progress,
         } => {
-            let should_show = !matches!(phase.as_str(), "running" | "stopped");
+            // "degraded" (daemon lane down, MLX fallback) is a running state:
+            // the pill carries the notice; the orb must stay idle-quiet, not
+            // animate as if a turn or startup were in flight.
+            let should_show = !matches!(phase.as_str(), "running" | "stopped" | "degraded");
             orb_ui.set_status(phase, message, progress);
             state.set_active(should_show);
             state.set_status_progress(orb_ui.status_progress, should_show);
@@ -2120,8 +2123,26 @@ fn pill_status(
                 .unwrap_or_default();
             Some(("info", format!("{}{}", orb_ui.status_message, pct), "{}"))
         }
-        "error" => Some(("alert", "Fae needs attention".to_string(), "{}")),
+        "error" => {
+            // Failure-visibility: Swift sends a short actionable reason when
+            // it knows one (model download, daemon launch, disk); keep the
+            // generic nudge only when no reason arrived.
+            let text = if orb_ui.status_message.trim().is_empty() {
+                "Fae needs attention".to_string()
+            } else {
+                orb_ui.status_message.clone()
+            };
+            Some(("alert", text, "{}"))
+        }
         "stopping" | "stopped" => None,
+        // Daemon LLM lane down — running on the in-process fallback engine.
+        // Turn feedback (Listening/Thinking) still owns the pill during a
+        // turn and the streaming reply still shows through while Speaking;
+        // the notice claims the pill only while idle, and clears the moment
+        // Swift reports the daemon lane recovered.
+        "degraded" if matches!(orb_ui.ui_mode, FaeUiState::Quiescent) => {
+            Some(("info", orb_ui.status_message.clone(), "{muted:true}"))
+        }
         _ => match orb_ui.ui_mode {
             FaeUiState::Listening => Some((
                 "listen",

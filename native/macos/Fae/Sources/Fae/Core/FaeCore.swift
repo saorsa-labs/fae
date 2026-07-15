@@ -34,6 +34,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var thinkingLevel: FaeThinkingLevel = .fast
     @Published var hasOwnerPhoto: Bool = false
 
+    /// Failure-visibility: warm, user-facing notice that the daemon LLM lane
+    /// is down and turns run on the in-process MLX fallback. Set ONCE per
+    /// degradation (never re-announced per turn), cleared when the daemon
+    /// lane recovers. RustUiShellController surfaces it through the existing
+    /// pill status channel as phase "degraded".
+    @Published private(set) var llmLaneDegradationNotice: String?
+
+    /// Short, actionable reason for the most recent `pipelineState == .error`,
+    /// surfaced on the pill instead of the generic "Fae needs attention" when
+    /// a specific cause is known. Nil when no specific reason exists.
+    @Published private(set) var runtimeErrorReason: String?
+
     /// Whether Fae is currently speaking (TTS playback in progress).
     /// Exposed for the test harness to wait until speech completes.
     func isSpeaking() async -> Bool {
@@ -225,6 +237,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
         eventBus.send(.runtimeState(.starting))
         pipelineState = .starting
+        // A fresh start invalidates any previous failure surface.
+        runtimeErrorReason = nil
+        llmLaneDegradationNotice = nil
 
         // One-time migrations.
         Self.migrateCustomInstructionsToDirective()
@@ -349,6 +364,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                             error.localizedDescription)
                         await DaemonEndpointStore.shared.set(nil)
                         await daemonEngine.shutdown()
+                        // Failure-visibility: the MLX fallback must never be
+                        // silent — surface a one-time warm notice through the
+                        // pill status channel plus a diagnostics event.
+                        // Cleared on daemon recovery (handleDaemonEndpointsChanged).
+                        llmLaneDegradationNotice =
+                            "Running on my backup brain — replies may be slower."
+                        eventBus.send(
+                            .runtimeProgress(stage: "llm_daemon_fallback_mlx", progress: 0))
                     }
                 } else if runtimeConfig.tts.useDaemonEngine {
                     NSLog(
@@ -371,6 +394,21 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let sessionStore = try SessionStore(dbQueue: sharedDBQueue)
                 let workflowTraceStore = try WorkflowTraceStore(dbQueue: sharedDBQueue)
                 _ = try? await sessionStore.closeOpenSessions()
+                // Session-store retention GC at startup (audit MEDIUM: "session
+                // store has no GC — unbounded fae.db growth"). The scheduler's
+                // daily memory_gc task repeats this while the app stays running.
+                do {
+                    let pruned = try await sessionStore.pruneExpiredSessions(
+                        retentionDays: runtimeConfig.memory.sessionRetentionDays,
+                        maxSessions: runtimeConfig.memory.maxStoredSessions)
+                    if pruned.prunedSessions > 0 {
+                        NSLog(
+                            "FaeCore: session GC pruned %d closed sessions (%d messages)",
+                            pruned.prunedSessions, pruned.prunedMessages)
+                    }
+                } catch {
+                    NSLog("FaeCore: session GC failed: %@", error.localizedDescription)
+                }
                 let entityStore = EntityStore(dbQueue: sharedDBQueue)
 
                 // Neural embedding engine — load tier in background, non-blocking.
@@ -576,6 +614,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     if let store = receiptStore {
                         await sched.setReceiptStore(store)
                     }
+                    await sched.setSessionStore(sessionStore)
                     await sched.setSpeakHandler { [weak coordinator] text in
                         await coordinator?.speakDirect(text)
                     }
@@ -746,10 +785,39 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let errMsg = "FaeCore: failed to start pipeline: \(error.localizedDescription)"
                 NSLog("%@", errMsg)
                 debugLog(debugConsoleRef, .pipeline, errMsg)
+                // Actionable-error surface: give the pill a short, plain
+                // reason when one is recognizable (model download, daemon
+                // launch) instead of the generic "Fae needs attention".
+                runtimeErrorReason = Self.pillErrorReason(for: error)
                 pipelineState = .error
                 eventBus.send(.runtimeState(.error))
             }
         }
+    }
+
+    /// Map a startup failure to a SHORT, non-technical, actionable pill
+    /// message. Returns nil when the cause isn't recognizable — the UI then
+    /// keeps its generic "needs attention" fallback.
+    static func pillErrorReason(for error: Error) -> String? {
+        let text = error.localizedDescription.lowercased()
+        if text.contains("download") || text.contains("hugging")
+            || (text.contains("model") && (text.contains("missing") || text.contains("not found")))
+            || text.contains("models.lock")
+        {
+            return "A model didn't finish downloading — check your connection, then relaunch."
+        }
+        if text.contains("network") || text.contains("offline") || text.contains("internet")
+            || text.contains("timed out")
+        {
+            return "Couldn't reach the network to finish setting up — check your connection."
+        }
+        if text.contains("daemon") || text.contains("socket") {
+            return "My local engine didn't start — quitting and reopening usually fixes this."
+        }
+        if text.contains("disk") || text.contains("no space") || text.contains("file exists") {
+            return "Something's off with disk space or files — free up space, then relaunch."
+        }
+        return nil
     }
 
     // MARK: - B-Swift Phase B: daemon supervisor callbacks
@@ -768,6 +836,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             NSLog(
                 "FaeCore: daemon endpoints (re)published — socket %@",
                 endpoints.socketPath)
+            // Daemon lane is live again — clear the "backup brain" pill notice
+            // (set by the startup MLX fallback) and log the recovery.
+            if llmLaneDegradationNotice != nil {
+                llmLaneDegradationNotice = nil
+                NSLog("FaeCore: daemon LLM lane recovered — clearing degradation notice")
+                eventBus.send(
+                    .runtimeProgress(stage: "llm_daemon_lane_recovered", progress: 1.0))
+            }
             // Reconnect daemon TTS if configured: it dropped with the dead
             // daemon and needs a fresh socket to the revived process. The
             // pipeline holds THIS exact `ttsEngine` instance, so reconnecting it
