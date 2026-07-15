@@ -138,11 +138,27 @@ jobs:
 
       - name: Build fae-daemon (release, native)
         working-directory: crates
-        run: env -u RUSTFLAGS cargo build --release -p fae-daemon --all-features
+        run: env -u RUSTFLAGS cargo build --locked --release -p fae-daemon --all-features
 
       - name: Build fae-ui-shell (release, native)
         working-directory: native/rust/fae-ui-shell
-        run: env -u RUSTFLAGS cargo build --release
+        run: env -u RUSTFLAGS cargo build --locked --release
+
+      - name: Verify binary architecture (honest arch gate)
+        run: |
+          set -euo pipefail
+          # Prove the built binaries' ELF machine type matches the advertised
+          # arch before anything is packaged or signed. A wrong-target cross
+          # artifact or a stale build from another arch is caught here. The
+          # packaging script re-checks this internally too; failing here keeps
+          # the signal sharp before the runtime download.
+          python3 scripts/build-linux-package.py \
+            --verify-arch-only --arch ${{ matrix.arch }} \
+            --daemon crates/target/release/fae-daemon \
+            --ui-shell native/rust/fae-ui-shell/target/release/fae-ui-shell
+          echo "── file(1) confirmation ──"
+          file crates/target/release/fae-daemon
+          file native/rust/fae-ui-shell/target/release/fae-ui-shell
 
       - name: Install + SHA-verify llama.cpp runtime
         run: |
@@ -152,25 +168,25 @@ jobs:
 
       - name: Build packages (.deb + AppImage)
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_PRIVATE_KEY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.GPG_PRIVATE_KEY || '' }}
+          GPG_PASSPHRASE: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.GPG_PASSPHRASE || '' }}
         run: |
           set -euo pipefail
           GPG_ARG=()
-          if [ -n "${GPG_PRIVATE_KEY:-}" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            if [ -z "${GPG_PRIVATE_KEY:-}" ] || [ -z "${GPG_PASSPHRASE:-}" ]; then
+              echo "::error::GPG_PRIVATE_KEY and GPG_PASSPHRASE are required to sign Linux release packages for tag pushes"
+              exit 1
+            fi
             export GNUPGHOME="$(mktemp -d)"
             echo "$GPG_PRIVATE_KEY" | gpg --batch --import
             FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
-            # Cache the passphrase for the non-interactive signer.
             echo "allow-loopback-pinentry" >> "$GNUPGHOME/gpg-agent.conf"
             gpgconf --kill gpg-agent || true
             GPG_ARG=(--gpg-key "$FPR")
-            echo "Signing with imported key $FPR"
-          elif [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "::error::GPG_PRIVATE_KEY is required to sign Linux release packages for tag pushes"
-            exit 1
+            echo "Signing tag release with imported key $FPR"
           else
-            echo "::warning::GPG_PRIVATE_KEY not set — building UNSIGNED packages (workflow_dispatch dry-run only)"
+            echo "::warning::workflow_dispatch is an unsigned dry-run; organization signing secrets are not exposed"
           fi
           DAEMON="crates/target/release/fae-daemon"
           UISHELL="native/rust/fae-ui-shell/target/release/fae-ui-shell"
@@ -181,7 +197,7 @@ jobs:
 
       - name: Integrity gate (runtime SHA vs lock + GPG verify)
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.GPG_PRIVATE_KEY || '' }}
         run: |
           set -euo pipefail
           RUNTIME="build/linux/LlamaCpp-${{ matrix.arch }}/llama-server"
