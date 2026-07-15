@@ -44,6 +44,11 @@ actor SkillManager {
     private var runningProcesses: [String: Process] = [:]
     private var skillCache: [String: SkillMetadata] = [:]
     private var activatedBodies: [String: String] = [:]
+    /// Insertion-ordered list of activated skill names — oldest first.
+    /// Maintained alongside `activatedBodies` to enforce `maxActivatedSkills`.
+    private var activationOrder: [String] = []
+    /// Maximum number of skill bodies kept in the active context at once.
+    private let maxActivatedSkills = 5
 
     /// Optional plugin manager for discovering plugin-provided skills.
     private var pluginManager: PluginManager?
@@ -347,7 +352,7 @@ actor SkillManager {
         }
 
         if let body = record.fullBody {
-            activatedBodies[skillName] = body
+            recordActivation(skillName: skillName, body: body)
             NSLog("SkillManager: activated skill '%@' (%d chars)", skillName, body.count)
             return body
         }
@@ -357,6 +362,7 @@ actor SkillManager {
     /// Deactivate a skill — remove its body from the active context.
     func deactivate(skillName: String) {
         activatedBodies.removeValue(forKey: skillName)
+        activationOrder.removeAll { $0 == skillName }
     }
 
     /// All currently activated skill bodies for injection into context.
@@ -370,6 +376,7 @@ actor SkillManager {
                   let body = activatedBodies[skillName]
             else {
                 activatedBodies.removeValue(forKey: skillName)
+                activationOrder.removeAll { $0 == skillName }
                 continue
             }
             activeEntries.append((skillName, body))
@@ -391,11 +398,42 @@ actor SkillManager {
                   metadata.isEnabled
             else {
                 activatedBodies.removeValue(forKey: skillName)
+                activationOrder.removeAll { $0 == skillName }
                 continue
             }
             activeNames.append(skillName)
         }
         return activeNames
+    }
+
+    // MARK: - Activation helpers
+
+    /// Insert a body into the activated cache, maintaining the LRU-style order and evicting
+    /// the oldest entry when `maxActivatedSkills` is exceeded.
+    private func recordActivation(skillName: String, body: String) {
+        activatedBodies[skillName] = body
+        activationOrder.removeAll { $0 == skillName }
+        activationOrder.append(skillName)
+        while activationOrder.count > maxActivatedSkills {
+            let oldest = activationOrder.removeFirst()
+            activatedBodies.removeValue(forKey: oldest)
+            NSLog("SkillManager: evicted oldest activated skill '%@' (cap=%d)", oldest, maxActivatedSkills)
+        }
+    }
+
+    /// Inject an activated body directly, applying the same LRU-cap logic as `activate`.
+    ///
+    /// Bypasses filesystem and metadata checks. Use only in tests and internal tooling.
+    func activateBodyDirectly(skillName: String, body: String) {
+        recordActivation(skillName: skillName, body: body)
+    }
+
+    /// Returns the set of skill names currently in the activated body cache.
+    ///
+    /// Does not validate skill metadata. For validated results use `activatedSkillNames()`.
+    /// Exposed for testing the LRU eviction behaviour.
+    func activatedBodyKeys() -> Set<String> {
+        Set(activatedBodies.keys)
     }
 
     // MARK: - Execution
@@ -876,6 +914,7 @@ actor SkillManager {
         try FileManager.default.removeItem(at: skillDir)
         skillCache.removeValue(forKey: name)
         activatedBodies.removeValue(forKey: name)
+        activationOrder.removeAll { $0 == name }
         NSLog("SkillManager: deleted skill '%@'", name)
     }
 

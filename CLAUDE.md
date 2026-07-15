@@ -370,13 +370,13 @@ for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d
 | `channel-discord` | Executable | Discord channel integration |
 | `channel-whatsapp` | Executable | WhatsApp channel integration |
 | `channel-imessage` | Executable | iMessage channel integration |
-| `channel-hub` | Executable | Unified channel management hub |
-| `document-analyst` | Executable | Document analysis and processing |
-| `email-triage` | Executable | Email prioritization and triage |
-| `file-organizer` | Executable | File organization and management |
-| `focus-defender` | Executable | Focus mode and distraction blocking |
-| `smart-home` | Executable | Smart home device control |
-| `system-health` | Executable | System health monitoring and reporting |
+| `channel-hub` | Instruction | Unified channel management hub |
+| `document-analyst` | Instruction | Document analysis and processing |
+| `email-triage` | Instruction | Email prioritization and triage |
+| `file-organizer` | Instruction | File organization and management |
+| `focus-defender` | Instruction | Focus mode and distraction blocking |
+| `smart-home` | Instruction | Smart home device control |
+| `system-health` | Instruction | System health monitoring and reporting |
 | `cloud-brain-setup` | Instruction | Guided setup for the cloud brain lane (OpenRouter/remote) |
 | `collaborate` | Executable | Fae↔Fae / human collaboration over x0x via x0xd REST |
 | `connect-account` | Executable | Connect mail/calendar/contacts from an email + app password (voice-guided, cross-OS) |

@@ -209,4 +209,35 @@ final class SkillManagerStaticTests: XCTestCase {
         let result = SkillManager.firstBlockedURL(in: "https://example.com/path")
         XCTAssertNil(result)
     }
+
+    // MARK: - activatedBodies LRU cap
+
+    func testActivatedBodiesLRUCapEvictsOldest() async {
+        let manager = SkillManager()
+        // Activate 6 skills — cap is 5, so the first should be evicted.
+        await manager.activateBodyDirectly(skillName: "s1", body: "body-1")
+        await manager.activateBodyDirectly(skillName: "s2", body: "body-2")
+        await manager.activateBodyDirectly(skillName: "s3", body: "body-3")
+        await manager.activateBodyDirectly(skillName: "s4", body: "body-4")
+        await manager.activateBodyDirectly(skillName: "s5", body: "body-5")
+        await manager.activateBodyDirectly(skillName: "s6", body: "body-6")
+
+        let keys = await manager.activatedBodyKeys()
+        XCTAssertEqual(keys.count, 5, "LRU cap should keep exactly 5 activated skill bodies")
+        XCTAssertFalse(keys.contains("s1"), "Oldest skill 's1' should have been evicted")
+        XCTAssertTrue(keys.contains("s2"), "Second skill 's2' should be present")
+        XCTAssertTrue(keys.contains("s6"), "Most recent skill 's6' should be present")
+    }
+
+    func testActivatedBodiesLRUCapUnderLimit() async {
+        let manager = SkillManager()
+        // Activating fewer than 5 should evict nothing.
+        await manager.activateBodyDirectly(skillName: "a", body: "body-a")
+        await manager.activateBodyDirectly(skillName: "b", body: "body-b")
+
+        let keys = await manager.activatedBodyKeys()
+        XCTAssertEqual(keys.count, 2, "No eviction should occur below the cap")
+        XCTAssertTrue(keys.contains("a"))
+        XCTAssertTrue(keys.contains("b"))
+    }
 }

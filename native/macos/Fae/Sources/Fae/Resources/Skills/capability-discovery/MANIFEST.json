@@ -5,8 +5,7 @@
   ],
   "allowedTools": [
     "activate_skill",
-    "self_config",
-    "voice_identity"
+    "self_config"
   ],
   "allowedDomains": [],
   "dataClasses": [],

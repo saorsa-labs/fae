@@ -72,24 +72,20 @@ This is the most important part. List EVERY model in the pipeline with its load 
 - Check: Am I speaking out loud? If yes, TTS is loaded.
 - If TTS failed: I can only show text responses.
 
-### 2d. Speaker Encoder (Voice Identity) — OFTEN BROKEN
+### 2d. Speaker Encoder (Echo Rejection)
 
 - **Primary**: WeSpeaker ResNet34-LM (Core ML, 256-dim embeddings)
 - **Legacy fallback**: ECAPA-TDNN (Core ML, 1024-dim)
-- **Emergency fallback**: Mel-spectral statistics (640-dim) — DEGRADED, cannot distinguish speakers
-- **Purpose**: Identifies WHO is speaking (owner vs stranger vs Fae echo)
+- **Purpose**: `fae_self` echo rejection only — prevents Fae from hearing her own TTS output (voice identity retired in S18; PTT is the access gate)
 - **Model file**: `wespeaker.mlmodelc` in Resources/Models/SpeakerEncoder/
 
 ```
-bash "ls -la ~/Library/Application\\ Support/fae/speakers.json 2>/dev/null && python3 -c \"import json; d=json.load(open('$(echo ~/Library/Application\\ Support/fae/speakers.json)')); [print(f'{p[\\\"label\\\"]}: role={p[\\\"role\\\"]}, embeddings={len(p[\\\"embeddings\\\"])}, centroid_dim={len(p[\\\"centroid\\\"])}') for p in d]\" 2>/dev/null || echo 'No speaker profiles found'"
+bash "ls -la ~/Library/Application\\ Support/fae/speakers.json 2>/dev/null | head -1 || echo 'No speaker profiles file'"
 ```
 
 Check and report:
-- Which encoder loaded? (WeSpeaker 256-dim = GOOD, mel-spectral 640-dim = BAD)
-- Owner profile centroid dimension — does it match the loaded encoder?
-- If dimensions mismatch: "Voice identity is broken — need to re-enroll"
-- If mel-spectral fallback: "WeSpeaker model missing or failed to load — voice identity degraded, Fae responds to everyone"
-- If no owner profile: "No voice enrolled — use the enrollment banner"
+- Speaker encoder loaded (WeSpeaker 256-dim = GOOD, mel-spectral 640-dim = degraded echo rejection)
+- If mel-spectral fallback: "WeSpeaker model missing — echo rejection is degraded, update to latest version or reinstall"
 
 ### 2e. Vision Language Model (VLM)
 
@@ -142,12 +138,14 @@ Check and report:
 
 ## 4. Speaker Profile Status
 
-Use `voice_identity check_status` to review:
-- Is a primary user enrolled?
-- How many profiles exist? (owner, fae_self, guests)
+```
+bash "ls -la ~/Library/Application\\ Support/fae/speakers.json 2>/dev/null || echo 'No speaker profiles file'"
+```
+
+Report from the JSON (if it exists):
+- How many profiles exist? (fae_self for echo rejection; owner/guest entries if present are legacy)
 - Embedding dimensions for each profile
-- Consistency score
-- Any dimension mismatches with current encoder?
+- Flag if fae_self profile is missing (echo rejection degraded)
 
 ## 5. Scheduler & Awareness
 
@@ -195,13 +193,13 @@ Structure your spoken summary as:
    - STT: [status]
    - LLM: [model name, context size]
    - TTS: [status, voice]
-   - Speaker: [encoder type, dimension] — **flag if mel-spectral**
+   - Speaker encoder: [encoder type, dimension] — **flag if mel-spectral (degraded echo rejection)**
    - VLM: [status]
    - VAD: [status]
    - Keyword: [status]
    - Embedding: [status]
 3. **Audio**: [VP on/off, Voice Isolation on/off, noise gate active]
-4. **Voice identity**: [owner enrolled, profile health, dimension match]
+4. **Speaker profiles**: [fae_self echo-rejection profile present / missing]
 5. **Issues found**: List each with severity and fix
 6. **Recommendations**: What the user should do
 
@@ -210,8 +208,7 @@ Structure your spoken summary as:
 | Issue | Fix |
 |-------|-----|
 | Mel-spectral fallback | "WeSpeaker model not loading — update to latest version or reinstall" |
-| Dimension mismatch | "Re-enroll your voice — tap the enrollment banner" |
-| No owner profile | "I need to learn your voice — tap 'Let me get to know you'" |
+| fae_self profile missing | "Echo-rejection profile not found — restart Fae to rebuild it" |
 | Low disk space | "Free up disk space — I need room for model downloads" |
 | Voice Isolation off | "Switch to Voice Isolation in Control Center for cleaner audio" |
 | VP disabled (dev mode) | "You're in dev mode — Voice Processing is disabled for testing" |
