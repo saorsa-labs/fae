@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 bytemuck = { version = "1.16", features = ["derive"] }
 env_logger = "0.11"
+libc = "0.2"
 log = "0.4"
 muda = "0.19"
 pollster = "0.3"
@@ -17,6 +18,7 @@ wgpu = "0.20"
 # `transparent` is opt-in (private `drawsBackground` API): without it the
 # whisper pill's webview paints an opaque canvas behind the frosted pill.
 wry = { version = "0.55", features = ["transparent"] }
+zeroize = "1.8"
 
 [dependencies.fae-control-plane]
 path = "../../../crates/fae-control-plane"
