@@ -160,9 +160,9 @@ jobs:
             native/rust/fae-ui-shell
 
       - name: cargo check (daemon workspace, all targets)
-        run: env -u RUSTFLAGS cargo check --workspace --all-targets
+        run: env -u RUSTFLAGS cargo check --workspace --all-targets --locked
         working-directory: crates
 
       - name: cargo check (orb host)
-        run: env -u RUSTFLAGS cargo check --all-targets
+        run: env -u RUSTFLAGS cargo check --all-targets --locked
         working-directory: native/rust/fae-ui-shell

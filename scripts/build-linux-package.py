@@ -29,6 +29,7 @@ import hashlib
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -39,6 +40,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # Debian arch <-> Rust target triple <-> runtime-lock platform key.
+#
+# Windows is a tracked future port (the daemon + orb-host are portable Rust
+# crates), but NO Windows artifact is produced here: there is no signed
+# llama.cpp/Piper runtime lock, no .msi/.zip packaging path, and no CI lane.
+# Do NOT add a "windows" key until a real build + integrity path exists — an
+# ARCH_MAP entry with no honest binary behind it would advertise a build that
+# cannot be produced or verified. See verify_elf_arch for the honesty gate.
 ARCH_MAP = {
     "amd64": {
         "triple": "x86_64-unknown-linux-gnu",
@@ -76,10 +84,70 @@ def make_executable(path: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+# ELF e_machine values (EM_*). Only the two arches Fae ships are mapped; any
+# other machine type is rejected so a wrong-arch (or non-ELF) binary can never
+# be packaged under a misleading arch label.
+_ELF_MACHINE = {
+    "amd64": 0x3E,   # EM_X86_64
+    "arm64": 0xB7,   # EM_AARCH64
+}
+_ELF_MACHINE_NAME = {0x3E: "x86-64", 0xB7: "aarch64"}
+
+
+def verify_elf_arch(path: Path, arch: str) -> str:
+    """Assert an ELF binary's machine type matches the advertised Debian arch.
+
+    Reads only the 20-byte ELF header (no execution) and is therefore safe to
+    run on any host — including macOS, where it proves a cross/native Linux
+    artifact before packaging. Raises SystemExit on any mismatch: bad magic,
+    wrong ELF class, wrong endianness, or an e_machine that does not match
+    `arch`. Returns the parsed machine name (e.g. "x86-64").
+
+    This is the honesty gate for the Linux release path: packaging refuses to
+    label a binary `amd64` unless its ELF header truly is EM_X86_64, and
+    `arm64` ↔ EM_AARCH64. A binary cross-built for the wrong target, a stale
+    artifact from another arch, or a stray non-ELF file is caught here — never
+    shipped under a label it does not match.
+    """
+    expected = _ELF_MACHINE.get(arch)
+    if expected is None:
+        raise SystemExit(f"verify_elf_arch: unknown arch {arch!r}")
+    hdr = path.read_bytes()[:20]
+    if len(hdr) < 20 or hdr[:4] != b"\x7fELF":
+        raise SystemExit(f"{path}: not an ELF binary (bad magic) — refusing to "
+                         f"package a non-ELF file as {arch}")
+    ei_class = hdr[4]   # 1 = 32-bit, 2 = 64-bit
+    ei_data = hdr[5]    # 1 = little-endian, 2 = big-endian
+    if ei_class != 2:
+        raise SystemExit(f"{path}: expected 64-bit ELF (EI_CLASS=2), got "
+                         f"{ei_class} — only 64-bit Linux is shipped")
+    if ei_data != 1:
+        raise SystemExit(f"{path}: expected little-endian ELF (EI_DATA=1), got "
+                         f"{ei_data}")
+    # e_machine is a uint16 at offset 0x12 (18) in the file's byte order. Both
+    # Fae targets are little-endian, but honor EI_DATA for correctness.
+    endian = "<" if ei_data == 1 else ">"
+    (machine,) = struct.unpack_from(endian + "H", hdr, 18)
+    name = _ELF_MACHINE_NAME.get(machine, f"0x{machine:x}")
+    if machine != expected:
+        raise SystemExit(
+            f"{path}: ELF machine {name} (0x{machine:x}) does not match "
+            f"advertised arch {arch!r} (expected {_ELF_MACHINE_NAME[expected]}, "
+            f"0x{expected:x}) — a wrong-arch binary must never be packaged")
+    return name
+
+
 def assemble_payload(staging: Path, arch: str, version: str,
                      daemon: Path, ui_shell: Path | None) -> Path:
     """Lay out the FHS install tree under <staging>/payload and return it."""
     info = ARCH_MAP[arch]
+    # Honesty gate: refuse to package a binary whose ELF machine type does not
+    # match the advertised arch. Catches a wrong-target cross artifact, a stale
+    # build from another arch, or a stray non-ELF file before it lands in a .deb
+    # or AppImage. (Also reachable standalone via --verify-arch-only.)
+    print(f"  verify ELF arch: daemon → {verify_elf_arch(daemon, arch)}")
+    if ui_shell is not None:
+        print(f"  verify ELF arch: ui-shell → {verify_elf_arch(ui_shell, arch)}")
     payload = staging / "payload"
     fae_root = payload / "usr" / "lib" / "fae"
     bin_dir = fae_root / "bin"
@@ -295,18 +363,34 @@ _PLACEHOLDER_PNG = bytes.fromhex(
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", choices=sorted(ARCH_MAP), required=True)
-    ap.add_argument("--version", required=True)
+    ap.add_argument("--version", default=None,
+                    help="release version (required unless --verify-arch-only)")
     ap.add_argument("--daemon", type=Path, required=True, help="path to built fae-daemon")
     ap.add_argument("--ui-shell", type=Path, default=None, help="path to built fae-ui-shell")
     ap.add_argument("--out-dir", type=Path, default=ROOT / "build" / "linux" / "dist")
     ap.add_argument("--gpg-key", default=None, help="GPG key id/fingerprint to sign the .deb")
     ap.add_argument("--skip-appimage", action="store_true")
+    ap.add_argument("--verify-arch-only", action="store_true",
+                    help="only assert the ELF arch of --daemon (and --ui-shell); "
+                         "no packaging, no runtime download — safe for CI gates "
+                         "and self-tests")
     args = ap.parse_args()
 
     if not args.daemon.is_file():
         raise SystemExit(f"daemon not found: {args.daemon}")
     if args.ui_shell is not None and not args.ui_shell.is_file():
         raise SystemExit(f"ui-shell not found: {args.ui_shell}")
+
+    if args.verify_arch_only:
+        print(f"== Verify ELF architecture ({args.arch}) ==")
+        print(f"  daemon: {verify_elf_arch(args.daemon, args.arch)}")
+        if args.ui_shell is not None:
+            print(f"  ui-shell: {verify_elf_arch(args.ui_shell, args.arch)}")
+        print("== arch OK ==")
+        return 0
+
+    if not args.version:
+        raise SystemExit("--version is required (omit only with --verify-arch-only)")
 
     out_dir = args.out_dir.expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
