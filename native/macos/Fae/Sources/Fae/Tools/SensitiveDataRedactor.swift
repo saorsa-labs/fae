@@ -9,6 +9,7 @@ enum SensitiveDataRedactor {
         #"(?i)sk-[A-Za-z0-9]{12,}"#,
         #"(?i)xox[baprs]-[A-Za-z0-9\-]{10,}"#,
         #"(?i)ghp_[A-Za-z0-9]{20,}"#,
+        #"(?i)\bhf_[A-Za-z0-9]{20,}"#,
         #"(?i)AIza[0-9A-Za-z\-_]{20,}"#,
         // AWS access key ID (20 chars) — below the 32-char long-token heuristic
         // and the 8+ provider patterns above, so match it explicitly. Uppercase.
@@ -78,7 +79,7 @@ enum SensitiveDataRedactor {
     /// returned to the LLM in plaintext.
     ///
     /// Checks three signal classes:
-    ///  1. Known provider prefixes — sk-, ghp_, AIza, xox[baprs]-
+    ///  1. Known provider prefixes — sk-, ghp_, hf_, AIza, xox[baprs]-
     ///  2. High-entropy no-whitespace token ≥ 20 compact alphanumeric chars
     ///  3. Request-context hint: prompt/title contains a credential keyword
     ///     AND the value has no whitespace and is ≥ 8 chars
@@ -93,6 +94,7 @@ enum SensitiveDataRedactor {
             #"(?i)sk-[A-Za-z0-9]{12,}"#,
             #"(?i)xox[baprs]-[A-Za-z0-9\-]{10,}"#,
             #"(?i)ghp_[A-Za-z0-9]{20,}"#,
+            #"(?i)\bhf_[A-Za-z0-9]{20,}"#,
             #"(?i)AIza[0-9A-Za-z\-_]{20,}"#,
         ]
         for pattern in prefixPatterns {

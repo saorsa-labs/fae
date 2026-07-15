@@ -901,11 +901,26 @@ struct InputRequestTool: Tool {
         let prompt = input["prompt"] as? String ?? "Please enter a value"
         let title = input["title"] as? String
         let placeholder = input["placeholder"] as? String ?? ""
-        let secure = input["secure"] as? Bool ?? false
         let multiline = input["multiline"] as? Bool ?? false
         let minLength = input["min_length"] as? Int ?? 0
         let regexPattern = input["regex"] as? String
-        let storeKey = input["store_key"] as? String
+
+        // Auto-secure (live incident 2026-07-15): the 4B model asks for API
+        // keys/tokens/passwords WITHOUT secure/store_key, which would return the
+        // raw value into model context. When the prompt is credential-shaped,
+        // force the masked card and derive a Keychain slot — the model cannot
+        // opt out of secure handling by omitting the flags.
+        let explicitStoreKey = (input["store_key"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let inferredStoreKey = explicitStoreKey == nil
+            ? SecureInputIntent.credentialRequestStoreKey(prompt: prompt, title: title)
+            : nil
+        let storeKey = explicitStoreKey ?? inferredStoreKey
+        let secure = (input["secure"] as? Bool ?? false) || inferredStoreKey != nil
+        if let inferredStoreKey {
+            NSLog(
+                "InputRequestTool: credential-shaped prompt without store_key — forcing secure capture to keychain slot %@",
+                inferredStoreKey)
+        }
         let returnToModel = input["return_to_model"] as? Bool ?? !secure
 
         let text = await InputRequestBridge.shared.request(
@@ -1106,6 +1121,34 @@ actor InputRequestBridge {
     func commitSecureStore(key: String, value: String) throws {
         try CredentialManager.store(key: key, value: value)
         secureStoreCompletions += 1
+        // Structured audit line (never the value) — the receipt of record for a
+        // secure capture, greppable next to the anti-hallucination counter.
+        NSLog("InputRequestBridge: SECURITY — credential stored to keychain slot %@ (store #%d)",
+              key, secureStoreCompletions)
+        Self.mirrorToProviderConvention(key: key, value: value)
+    }
+
+    /// Some providers' CLI tools read a well-known file, not the Keychain —
+    /// write the credential where those tools actually look, so "store my
+    /// Hugging Face key" makes `hf`/`huggingface_hub` work immediately.
+    /// Best-effort: the Keychain write above is the source of truth; a mirror
+    /// failure is logged loudly but does not fail the store.
+    private static func mirrorToProviderConvention(key: String, value: String) {
+        guard key == "huggingface_token" else { return }
+        let tokenURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/token")
+        do {
+            try FileManager.default.createDirectory(
+                at: tokenURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try value.write(to: tokenURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
+            NSLog("InputRequestBridge: mirrored huggingface_token to ~/.cache/huggingface/token")
+        } catch {
+            NSLog("InputRequestBridge: FAILED to mirror huggingface_token to ~/.cache/huggingface/token — %@",
+                  error.localizedDescription)
+        }
     }
 
     /// Open a secure input card and, on submit, store the value to the Keychain

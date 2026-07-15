@@ -190,6 +190,37 @@ actor PipelineCoordinator {
     /// user turn, so the backstop can detect a "saved your key" claim that no
     /// Keychain write actually backed.
     private var secureStoresAtTurnStart = 0
+    /// Set when `injectText` intercepted a bare pasted credential and committed
+    /// it to the Keychain BEFORE the turn's snapshot is taken. Consumed at the
+    /// snapshot so the anti-hallucination backstop credits that write to the
+    /// turn (otherwise a truthful "stored" claim would be "corrected").
+    private var interceptedCredentialStoreForNextTurn = false
+
+    /// Duplicate-injection guard (live incident 2026-07-15): the composer gives
+    /// no feedback while a turn is queued behind a slow LLM, so users re-send
+    /// the same text; both copies became full daemon turns (identical audit
+    /// arg_hash 3.8s apart) and Fae replied twice.
+    private var lastInjectedText: String?
+    private var lastInjectedAt: Date?
+
+    /// Pure decision for the duplicate-injection guard: drop a resend of the
+    /// EXACT same text within `duplicateInjectionWindow` while a generation is
+    /// still active for the earlier copy. Identical resends while idle are
+    /// deliberate new turns and pass through.
+    static func isDuplicateInjection(
+        text: String,
+        previousText: String?,
+        previousAt: Date?,
+        now: Date,
+        generationActive: Bool
+    ) -> Bool {
+        guard generationActive, let previousText, let previousAt else { return false }
+        guard text == previousText else { return false }
+        return now.timeIntervalSince(previousAt) < duplicateInjectionWindow
+    }
+
+    /// Resend window for `isDuplicateInjection` (seconds).
+    static let duplicateInjectionWindow: TimeInterval = 10
 
     /// System-prompt block for audio turns — proven against Gemma 4 E4B (the
     /// daemon strips nothing; Swift strips the [heard] line + tool residue).
@@ -1146,12 +1177,67 @@ actor PipelineCoordinator {
             + "claim it is saved until the card is submitted.]"
     }
 
+    /// Intercept a bare credential-shaped token pasted into the composer.
+    ///
+    /// Fires only for a SINGLE whitespace-free token that
+    /// `SensitiveDataRedactor.looksLikeCredential` flags (provider prefix or
+    /// high-entropy) — a sentence that merely mentions a key is conversation and
+    /// passes through. On success the value is in the Keychain (provider slot
+    /// inferred from the token prefix, e.g. hf_ → huggingface_token) and only a
+    /// placeholder reaches the LLM/history. On failure the value is withheld.
+    ///
+    /// - Returns: The replacement text for the turn, or nil to inject as-is.
+    private func interceptBareCredential(_ text: String) async -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.contains(" "), !trimmed.contains("\n"), !trimmed.contains("\t")
+        else { return nil }
+        guard SensitiveDataRedactor.looksLikeCredential(trimmed) else { return nil }
+        // A long plain word ("antidisestablishmentarianism") trips the entropy
+        // heuristic but is not a secret — require a provider prefix or a digit.
+        let hasProviderShape = trimmed.range(
+            of: #"(?i)^(hf_|sk-|ghp_|glpat-|xox|aiza|akia)"#, options: .regularExpression
+        ) != nil
+        let hasDigit = trimmed.rangeOfCharacter(from: .decimalDigits) != nil
+        guard hasProviderShape || hasDigit else { return nil }
+
+        let storeKey = SecureInputIntent.storeKey(forInterceptedToken: trimmed)
+        do {
+            try await InputRequestBridge.shared.commitSecureStore(key: storeKey, value: trimmed)
+            interceptedCredentialStoreForNextTurn = true
+            NSLog("PipelineCoordinator: SECURITY — bare credential intercepted before injection; stored to keychain slot %@", storeKey)
+            return "[credential captured and stored: \(storeKey)]"
+        } catch {
+            NSLog("PipelineCoordinator: SECURITY — bare credential intercepted but Keychain store FAILED (%@); value withheld from conversation", error.localizedDescription)
+            return "[a credential was detected and withheld; storing it to the Keychain failed — "
+                + "ask the user to try again via the secure input card]"
+        }
+    }
+
     // MARK: - Text Injection
 
     /// Inject text directly into the LLM (bypasses STT).
     func injectText(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // Duplicate-injection guard: drop an identical resend while the earlier
+        // copy's generation is still active (double-submit with no feedback).
+        let generationActive = assistantGenerating
+            || assistantGenerationTracker.hasActiveGeneration
+        if Self.isDuplicateInjection(
+            text: trimmed,
+            previousText: lastInjectedText,
+            previousAt: lastInjectedAt,
+            now: Date(),
+            generationActive: generationActive
+        ) {
+            NSLog("PipelineCoordinator: dropping duplicate injected text (identical resend within %.0fs while generating)",
+                  Self.duplicateInjectionWindow)
+            return
+        }
+        lastInjectedText = trimmed
+        lastInjectedAt = Date()
 
         // UX auto-cancel: a new injected turn supersedes any outstanding input
         // request. Answering a pill prompt posts `input_response` (never reaches
@@ -1174,6 +1260,16 @@ actor PipelineCoordinator {
                 + "collaborate skill's contacts import with card_ref \"\(ref)\".]"
             NSLog("PipelineCoordinator: intercepted pasted x0x card → %@ (%d bytes stashed)",
                   ref, card.count)
+        }
+
+        // SECURITY (live incident 2026-07-15): a raw credential typed/pasted
+        // into the composer must NEVER become a conversation turn — the live
+        // HF key entered plain context (and the daemon) this way. A bare
+        // credential-shaped token is committed straight to the Keychain via the
+        // single secure-store path and replaced with a placeholder; on a store
+        // failure the value is WITHHELD (fail closed), never injected.
+        if let replacement = await interceptBareCredential(effectiveText) {
+            effectiveText = replacement
         }
 
         // Do NOT run the keyword spotter on typed/pasted text. The spotter uses
@@ -2400,6 +2496,13 @@ actor PipelineCoordinator {
         // can tell a real save from a hallucinated one.
         secureCaptureOpenedThisTurn = false
         secureStoresAtTurnStart = await InputRequestBridge.shared.secureStoreCount()
+        if interceptedCredentialStoreForNextTurn {
+            // The composer interception already committed this turn's credential
+            // to the Keychain (before the snapshot). Credit it to the turn so
+            // the backstop doesn't "correct" a truthful "stored" claim.
+            secureStoresAtTurnStart -= 1
+            interceptedCredentialStoreForNextTurn = false
+        }
         if proactiveContext != nil {
             ttsState.lastUserTurnEndedAt = nil
         } else if ttsState.lastUserTurnEndedAt == nil {

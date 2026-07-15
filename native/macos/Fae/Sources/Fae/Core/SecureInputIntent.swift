@@ -80,10 +80,18 @@ enum SecureInputIntent {
     /// "I saved that to your reminders" / "I stored the file" — only claims
     /// mentioning an api key / password / token / secret / credential count.
     /// A negation near the verb ("I have NOT saved your key") does not count.
+    ///
+    /// Live incident 2026-07-15: "I've got your Hugging Face API key secured."
+    /// slipped past the original saved/stored/kept verb set, so the model's
+    /// false claim went uncorrected. The claim vocabulary now also covers
+    /// secured / protected / remembered / safe / keeping / "got your …" /
+    /// "in the/your keychain" — still gated on a secret noun in the window.
     static func claimsCredentialSaved(_ reply: String) -> Bool {
         let lower = reply.lowercased()
         let ns = lower as NSString
-        guard let verbRe = try? NSRegularExpression(pattern: #"\b(saved|stored|kept)\b"#) else {
+        let claimPattern =
+            #"\b(saved|stored|kept|secured|protected|remembered|safe|keeping|got your|in (?:the |your )?keychain)\b"#
+        guard let verbRe = try? NSRegularExpression(pattern: claimPattern) else {
             return false
         }
         let matches = verbRe.matches(in: lower, range: NSRange(location: 0, length: ns.length))
@@ -93,7 +101,9 @@ enum SecureInputIntent {
             let windowStart = max(0, verbStart - 60)
             let windowEnd = min(ns.length, match.range.location + match.range.length + 60)
             let window = ns.substring(with: NSRange(location: windowStart, length: windowEnd - windowStart))
-            guard firstSecretNoun(in: window) != nil else { continue }
+            // A "keychain" mention is itself credential context — "it's in your
+            // keychain" claims storage without naming the secret again.
+            guard firstSecretNoun(in: window) != nil || window.contains("keychain") else { continue }
             // Negation guard: reject "have not saved", "haven't stored", etc.
             let negStart = max(0, verbStart - 24)
             let negWindow = ns.substring(with: NSRange(location: negStart, length: verbStart - negStart))
@@ -101,6 +111,58 @@ enum SecureInputIntent {
             return true
         }
         return false
+    }
+
+    // MARK: - Credential-shaped input_request detection
+
+    /// Returns the Keychain slot to store under when an `input_request` prompt
+    /// is credential-shaped (mentions a secret noun), or nil for ordinary input
+    /// (names, URLs, addresses, code snippets).
+    ///
+    /// Live incident 2026-07-15: the 4B model called `input_request` for a
+    /// Hugging Face API key WITHOUT `secure`/`store_key`, so the raw key was
+    /// destined for plain model context. This detector lets the tool force the
+    /// masked card + Keychain store when the model forgets.
+    ///
+    /// Provider slot first (huggingface → huggingface_token, …), else a
+    /// noun-derived slot ("api key" → api_key). Always a safe Keychain key.
+    static func credentialRequestStoreKey(prompt: String, title: String? = nil) -> String? {
+        let lower = [prompt, title ?? ""].joined(separator: " ").lowercased()
+        guard let noun = firstSecretNoun(in: lower) else { return nil }
+        for provider in providerKeys where lower.contains(provider.needle) {
+            return provider.key
+        }
+        let nounKey = slugify(noun)
+        return InputRequestTool.isSafeKeychainKey(nounKey) ? nounKey : "secret"
+    }
+
+    /// Keychain slot for a raw credential token intercepted before it could be
+    /// injected into conversation (composer paste path). Inferred from the
+    /// token's own provider prefix, then from `contextHint` (e.g. the assistant
+    /// prompt that asked for it), else a generic slot.
+    static func storeKey(forInterceptedToken token: String, contextHint: String = "") -> String {
+        let lower = token.lowercased()
+        let prefixSlots: [(prefix: String, key: String)] = [
+            ("hf_", "huggingface_token"),
+            ("ghp_", "github_token"),
+            ("glpat-", "gitlab_token"),
+            ("sk-ant-", "anthropic_api_key"),
+            ("sk-or-", "openrouter.apiKey"),
+            ("sk-", "openai_api_key"),
+            ("akia", "aws_access_key_id"),
+            ("xox", "slack_token"),
+            ("aiza", "google_api_key"),
+        ]
+        for slot in prefixSlots where lower.hasPrefix(slot.prefix) {
+            return slot.key
+        }
+        let hintLower = contextHint.lowercased()
+        if !hintLower.isEmpty {
+            for provider in providerKeys where hintLower.contains(provider.needle) {
+                return provider.key
+            }
+        }
+        return "captured_credential"
     }
 
     // MARK: - Internals

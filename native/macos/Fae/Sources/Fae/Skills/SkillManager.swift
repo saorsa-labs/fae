@@ -1186,12 +1186,22 @@ actor SkillManager {
             // requires a manifest with checksums. Same isEnabled=false path a
             // policyViolation takes.
             adjusted.isEnabled = false
-            NSLog("SkillManager: disabling executable skill '%@' — missing MANIFEST.json", metadata.name)
+            logManifestDisableOnce(skill: metadata.name, reason: "missing MANIFEST.json")
         } catch {
             adjusted.isEnabled = false
-            NSLog("SkillManager: disabling executable skill '%@' — invalid/missing manifest", metadata.name)
+            logManifestDisableOnce(skill: metadata.name, reason: "invalid/missing manifest")
         }
         return adjusted
+    }
+
+    /// Skills whose manifest-disable has already been logged this session —
+    /// validation runs on every scan (every few minutes), so the disable itself
+    /// stays repeated (fail closed) but the log line fires once per skill.
+    private var loggedManifestDisables: Set<String> = []
+
+    private func logManifestDisableOnce(skill: String, reason: String) {
+        guard loggedManifestDisables.insert(skill).inserted else { return }
+        NSLog("SkillManager: disabling executable skill '%@' — %@", skill, reason)
     }
 
     private func loadManifest(for metadata: SkillMetadata) throws -> SkillCapabilityManifest {

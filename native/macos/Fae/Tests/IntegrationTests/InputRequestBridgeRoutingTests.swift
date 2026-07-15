@@ -178,4 +178,59 @@ final class InputRequestBridgeRoutingTests: XCTestCase {
         let again = await InputRequestBridge.shared.cancelPending()
         XCTAssertFalse(again, "cancelPending is a no-op when nothing is pending")
     }
+
+    /// Live incident 2026-07-15: the same input response was delivered twice
+    /// (identical daemon audit arg_hash 3.8s apart) and Fae replied twice. A
+    /// response must be consumed EXACTLY once per request_id — the first
+    /// `.faeInputResponse` resolves the continuation; any duplicate (pill echo,
+    /// overlay race after a late ack, user double-submit) must be a no-op, not
+    /// a double-resume and not a second turn.
+    func test_inputResponse_isConsumedExactlyOnce_perRequestId() async {
+        let mock = await MainActor.run { MockPillRouter(connected: true) }
+        await MainActor.run {
+            PillInputRouter.shared = mock
+            mock.onRequest = { requestId in
+                NotificationCenter.default.post(
+                    name: .faePillInputAck,
+                    object: nil,
+                    userInfo: ["request_id": requestId]
+                )
+                // Deliver the SAME response twice, then a conflicting one —
+                // only the first may win. A double-resume of the continuation
+                // would crash this process, so surviving is itself the assert.
+                for text in ["first-answer", "first-answer", "second-answer"] {
+                    NotificationCenter.default.post(
+                        name: .faeInputResponse,
+                        object: nil,
+                        userInfo: ["request_id": requestId, "text": text]
+                    )
+                }
+            }
+        }
+
+        let result = await InputRequestBridge.shared.request(prompt: "api key?")
+        XCTAssertEqual(result, "first-answer", "the first response wins; duplicates are dropped")
+
+        // Give the duplicate posts time to (harmlessly) land, then prove the
+        // bridge is still fully functional for the next request.
+        try? await Task.sleep(for: .milliseconds(100))
+        let mock2 = await MainActor.run { () -> MockPillRouter in
+            let mock2 = MockPillRouter(connected: true)
+            PillInputRouter.shared = mock2
+            mock2.onRequest = { requestId in
+                NotificationCenter.default.post(
+                    name: .faePillInputAck, object: nil,
+                    userInfo: ["request_id": requestId]
+                )
+                NotificationCenter.default.post(
+                    name: .faeInputResponse, object: nil,
+                    userInfo: ["request_id": requestId, "text": "fresh"]
+                )
+            }
+            return mock2
+        }
+        _ = mock2
+        let next = await InputRequestBridge.shared.request(prompt: "and your city?")
+        XCTAssertEqual(next, "fresh", "a stale duplicate must not leak into the next request")
+    }
 }
