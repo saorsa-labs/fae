@@ -2312,6 +2312,28 @@ final class FaeCore: ObservableObject, HostCommandSender {
             persistConfig(reason: "config.patch.\(key)")
             applyX0xConfigRespawn()
 
+        case "x0x.allowList.remove", "x0x.ownerFleet.remove":
+            // Consent bridge revoke (peer_revoke) — strip an agent id from the
+            // env-backed config lists so neither the running daemon (after the
+            // respawn below) nor the next spawn can resurrect a peer revoked
+            // from the live file allowlist. No-op when the id isn't present.
+            guard let agentID = sanitizedString(value)?.lowercased(),
+                  SelfConfigTool.isHex64(agentID)
+            else { return }
+            let removed: Bool
+            if key == "x0x.allowList.remove" {
+                let before = config.x0x.allowList.count
+                config.x0x.allowList.removeAll { $0 == agentID }
+                removed = config.x0x.allowList.count != before
+            } else {
+                let before = config.x0x.ownerFleet.count
+                config.x0x.ownerFleet.removeAll { $0 == agentID }
+                removed = config.x0x.ownerFleet.count != before
+            }
+            guard removed else { return }
+            persistConfig(reason: "config.patch.\(key)")
+            applyX0xConfigRespawn()
+
         case "llm.thinking_enabled":
             guard let value = value as? Bool else { return }
             setThinkingEnabled(value)

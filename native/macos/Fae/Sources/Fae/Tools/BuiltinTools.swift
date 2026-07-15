@@ -190,12 +190,14 @@ struct SelfConfigTool: Tool {
         Actions: adjust_setting (change a live setting like speed, temperature, thinking mode), \
         get_settings (view all adjustable settings and current values), \
         append_list_value (add an x0x agent id to a peer allow-list — x0x.allowList or x0x.ownerFleet), \
+        peer_grant (let a contact's agent reach the user through Fae — shows the owner an approval card, then the grant goes live without a restart), \
+        peer_revoke (immediately remove a granted peer — no card needed), \
         get_directive, set_directive, append_directive, clear_directive (manage standing orders), \
         rollback_improvement (undo the most recent overnight self-improvement change). \
         Legacy aliases: get_instructions, set_instructions, append_instructions, clear_instructions.
         """
     let parametersSchema = #"""
-        {"action": "string (required: adjust_setting|get_settings|append_list_value|get_directive|set_directive|append_directive|clear_directive|rollback_improvement)", "key": "string (required for adjust_setting and append_list_value)", "value": "any (required for adjust_setting, append_list_value, and set/append)"}
+        {"action": "string (required: adjust_setting|get_settings|append_list_value|peer_grant|peer_revoke|get_directive|set_directive|append_directive|clear_directive|rollback_improvement)", "key": "string (required for adjust_setting and append_list_value)", "value": "any (required for adjust_setting, append_list_value, and set/append)", "agent_id": "string (required for peer_grant and peer_revoke: 64-hex x0x agent id)", "label": "string (optional for peer_grant: the person's name)", "tier": "string (optional for peer_grant: chat|owner_fleet, default chat)"}
         """#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
@@ -456,6 +458,88 @@ struct SelfConfigTool: Tool {
             await MainActor.run { Self.configPatcher?("\(key).append", agentID) }
             return .success("Added agent \(agentID.prefix(12))… to \(key). The change is live.")
 
+        case "peer_grant":
+            // Consent→allowlist bridge: the AUTHORITATIVE way to let a
+            // contact's agent reach the user through Fae. Trust is explicit —
+            // an x0x card import never auto-upgrades — so the grant NEVER
+            // proceeds without the owner's hardware-click governance card,
+            // even on owner-auto-approved turns. The approved grant is written
+            // to `peer_allowlist.json`, which the daemon live-reloads per
+            // inbound frame: no respawn needed.
+            guard let rawGrantID = input["agent_id"] as? String else {
+                return .error("Missing required parameter: agent_id")
+            }
+            let grantID = rawGrantID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard Self.isHex64(grantID) else {
+                return .error("That isn't a valid agent id (needs 64 hexadecimal characters).")
+            }
+            let tier = ((input["tier"] as? String) ?? PeerAllowlistStore.chatTier)
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard PeerAllowlistStore.supportedTiers.contains(tier) else {
+                return .error("tier must be \"chat\" or \"owner_fleet\".")
+            }
+            let label = ((input["label"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let display = label.isEmpty ? "agent \(grantID.prefix(12))…" : label
+            let tierText = tier == PeerAllowlistStore.ownerFleetTier
+                ? "as one of the user's own devices (owner fleet — including session handoff)"
+                : "to send messages to the user through Fae"
+            // 25s card: inside the executor's 30s tool timeout, and generous
+            // next to the 10s SecurityOverride card. Timeout = deny.
+            let approved = await DaemonAgentClient.requestApproval(
+                title: "Allow a new Fae peer?",
+                message: "Allow \(display) \(tierText)?",
+                timeoutSeconds: 25
+            )
+            guard approved else {
+                PeerAllowlistStore.appendConsentAudit(
+                    agentID: grantID, granted: false, reason: "owner_consent_denied")
+                return .error(
+                    "The user did not approve the peer grant on the card. Nothing was changed.")
+            }
+            do {
+                try PeerAllowlistStore.grant(
+                    agentID: grantID,
+                    label: label.isEmpty ? String(grantID.prefix(12)) : label,
+                    tier: tier)
+            } catch {
+                return .error("Failed to write the peer allowlist: \(error.localizedDescription)")
+            }
+            PeerAllowlistStore.appendConsentAudit(
+                agentID: grantID, granted: true, reason: "owner_consent_granted")
+            return .success(
+                "Granted — \(display) can now reach the user through Fae (tier: \(tier)). "
+                    + "The change is live; no restart needed.")
+
+        case "peer_revoke":
+            // Removing access is always safe — no approval card. Clears BOTH
+            // the live file grant and any env-backed config-list entry (the
+            // config removal triggers a silent daemon respawn so a grant baked
+            // into the running daemon's env dies too).
+            guard let rawRevokeID = input["agent_id"] as? String else {
+                return .error("Missing required parameter: agent_id")
+            }
+            let revokeID = rawRevokeID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard Self.isHex64(revokeID) else {
+                return .error("That isn't a valid agent id (needs 64 hexadecimal characters).")
+            }
+            let removedFromFile: Bool
+            do {
+                removedFromFile = try PeerAllowlistStore.revoke(agentID: revokeID)
+            } catch {
+                return .error("Failed to update the peer allowlist: \(error.localizedDescription)")
+            }
+            await MainActor.run {
+                Self.configPatcher?("x0x.allowList.remove", revokeID)
+                Self.configPatcher?("x0x.ownerFleet.remove", revokeID)
+            }
+            PeerAllowlistStore.appendConsentAudit(
+                agentID: revokeID, granted: false, reason: "owner_consent_revoked")
+            let scope = removedFromFile ? "live grant removed" : "no live file grant found"
+            return .success(
+                "Revoked agent \(revokeID.prefix(12))… (\(scope); any config-list entry is "
+                    + "also being cleared).")
+
         case "get_directive", "get_instructions":
             let current = Self.readInstructions()
             if current.isEmpty {
@@ -511,7 +595,7 @@ struct SelfConfigTool: Tool {
 
         default:
             return .error(
-                "Unknown action: \(action). Use: adjust_setting, get_settings, append_list_value, get_directive, set_directive, append_directive, clear_directive, rollback_improvement"
+                "Unknown action: \(action). Use: adjust_setting, get_settings, append_list_value, peer_grant, peer_revoke, get_directive, set_directive, append_directive, clear_directive, rollback_improvement"
             )
         }
     }

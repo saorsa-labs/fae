@@ -145,10 +145,12 @@ fn fae_integrity_relative() -> &'static [&'static str] {
         "Library/Application Support/fae/directive.md",
         "Library/Application Support/fae/models.lock",
         "Library/Application Support/fae/grant-store.json",
+        "Library/Application Support/fae/peer_allowlist.json",
         "Library/Application Support/fae-dev/speakers.json",
         "Library/Application Support/fae-dev/directive.md",
         "Library/Application Support/fae-dev/models.lock",
         "Library/Application Support/fae-dev/grant-store.json",
+        "Library/Application Support/fae-dev/peer_allowlist.json",
     ]
 }
 
