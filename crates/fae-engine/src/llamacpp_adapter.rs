@@ -388,6 +388,74 @@ pub enum LlamaModelSource {
     },
 }
 
+/// KV-cache element type for the `llama-server` sidecar (`--cache-type-k/-v`).
+///
+/// Only two vetted lanes are exposed: `F16` (llama.cpp's default, exact) and
+/// `Q8` (`q8_0`, 8-bit — roughly half the KV memory, near-lossless upstream;
+/// lower-bit types measurably degrade quality and are intentionally not
+/// offered). Quantized V-cache requires flash attention, which
+/// [`LlamaServerConfig::args`] always passes (`-fa on`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KvCacheType {
+    /// fp16 KV cache — llama.cpp default, bit-exact attention state.
+    F16,
+    /// `q8_0` quantized KV cache — ~2x smaller, near-lossless.
+    Q8,
+}
+
+impl KvCacheType {
+    /// The llama-server `--cache-type-k/-v` value for this type.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            KvCacheType::F16 => "f16",
+            KvCacheType::Q8 => "q8_0",
+        }
+    }
+}
+
+impl std::fmt::Display for KvCacheType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// System-RAM threshold below which the KV cache defaults to quantized `q8_0`
+/// (production-readiness audit 2026-07-05, MEDIUM: fp16 KV with a 32K window on
+/// an 8–16 GB machine oversubscribes memory). At or above 32 GiB, fp16 stays
+/// the default — memory headroom is ample and exactness wins.
+pub const KV_QUANT_RAM_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+
+/// Choose the sidecar KV-cache type from an explicit override and detected RAM.
+///
+/// - `override_raw` (the `FAE_KV_CACHE` env var): `"fp16"`/`"f16"` forces exact,
+///   `"q8"`/`"q8_0"` forces quantized; any other non-empty value is a hard
+///   error (fail loud — this knob is set by operators, not end users).
+/// - No override: total RAM below [`KV_QUANT_RAM_THRESHOLD_BYTES`] selects
+///   [`KvCacheType::Q8`]; at/above the threshold — or when RAM could not be
+///   detected — [`KvCacheType::F16`] keeps today's exact behavior rather than
+///   silently trading quality on an unknown machine.
+pub fn select_kv_cache_type(
+    override_raw: Option<&str>,
+    total_ram_bytes: Option<u64>,
+) -> Result<KvCacheType, String> {
+    if let Some(raw) = override_raw {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return match trimmed.to_ascii_lowercase().as_str() {
+                "fp16" | "f16" => Ok(KvCacheType::F16),
+                "q8" | "q8_0" => Ok(KvCacheType::Q8),
+                other => Err(format!(
+                    "invalid FAE_KV_CACHE={other:?} — valid values are 'fp16' and 'q8'"
+                )),
+            };
+        }
+    }
+    Ok(match total_ram_bytes {
+        Some(bytes) if bytes < KV_QUANT_RAM_THRESHOLD_BYTES => KvCacheType::Q8,
+        _ => KvCacheType::F16,
+    })
+}
+
 /// How to launch a `llama-server` sidecar. The daemon resolves the binary and
 /// model source; this struct only assembles the command line.
 #[derive(Debug, Clone)]
@@ -412,6 +480,9 @@ pub struct LlamaServerConfig {
     pub ctx_size: u32,
     /// GPU layers to offload (`999` = all on Metal/CUDA/Vulkan).
     pub ngl: u32,
+    /// KV-cache element type (`--cache-type-k/-v`). RAM-tiered by the daemon
+    /// via [`select_kv_cache_type`]; `F16` emits no flags (llama.cpp default).
+    pub kv_cache_type: KvCacheType,
     /// Root directory for the sidecar pidfile (`<root>/llama-server.<port>.pid`),
     /// used by [`LlamaServerHandle::spawn`] to reclaim a stale sidecar left by a
     /// prior unclean daemon death (Facet B — the crash-loop gate-closer). `None`
@@ -526,6 +597,15 @@ impl LlamaServerConfig {
             "--reasoning-format".to_owned(),
             "none".to_owned(),
         ]);
+        // F16 is llama-server's own default — emit nothing so the high-RAM
+        // command line is byte-identical to the pre-quantization one.
+        // Quantized V-cache requires flash attention; `-fa on` above satisfies it.
+        if self.kv_cache_type != KvCacheType::F16 {
+            args.push("--cache-type-k".to_owned());
+            args.push(self.kv_cache_type.as_str().to_owned());
+            args.push("--cache-type-v".to_owned());
+            args.push(self.kv_cache_type.as_str().to_owned());
+        }
         if let Some(tokens) = self.mtp_draft_tokens {
             args.push("--spec-type".to_owned());
             args.push("draft-mtp".to_owned());
@@ -1660,6 +1740,7 @@ mod tests {
             port: 18080,
             ctx_size: 8192,
             ngl: 999,
+            kv_cache_type: KvCacheType::F16,
             pidfile_root: None,
         };
         let args = config.args();
@@ -1697,6 +1778,7 @@ mod tests {
             port: 18080,
             ctx_size: 8192,
             ngl: 999,
+            kv_cache_type: KvCacheType::F16,
             pidfile_root: None,
         };
         let args = config.args();
@@ -1705,6 +1787,98 @@ mod tests {
             .windows(2)
             .any(|w| w == ["--mmproj", "/tmp/mmproj.gguf"]));
         assert!(args.windows(2).any(|w| w == ["--reasoning", "off"]));
+        // F16 KV cache is the llama-server default — no cache-type flags, so the
+        // high-RAM command line is unchanged from the pre-quantization one.
+        assert!(!args.iter().any(|arg| arg.starts_with("--cache-type")));
+    }
+
+    #[test]
+    fn config_args_emit_quantized_kv_cache_flags() {
+        let config = LlamaServerConfig {
+            binary: "/tmp/llama-server".to_owned(),
+            model: LlamaModelSource::Local {
+                model_gguf: "/tmp/model.gguf".to_owned(),
+                mmproj: None,
+                mtp_draft: None,
+            },
+            lora_gguf: None,
+            alias: "gemma-4".to_owned(),
+            enable_thinking: false,
+            mtp_draft_tokens: None,
+            port: 18080,
+            ctx_size: 8192,
+            ngl: 999,
+            kv_cache_type: KvCacheType::Q8,
+            pidfile_root: None,
+        };
+        let args = config.args();
+        assert!(args.windows(2).any(|w| w == ["--cache-type-k", "q8_0"]));
+        assert!(args.windows(2).any(|w| w == ["--cache-type-v", "q8_0"]));
+        // Quantized V-cache requires flash attention — args must keep `-fa on`.
+        assert!(args.windows(2).any(|w| w == ["-fa", "on"]));
+    }
+
+    // Why these matter (audit 2026-07-05 MEDIUM): fp16 KV with a 32K window
+    // oversubscribes an 8 GB machine. Below 32 GiB the daemon must default to
+    // q8_0; at/above (or when RAM is unknown) it must keep today's exact fp16
+    // so quality never changes silently on capable machines.
+    #[test]
+    fn kv_cache_tier_quantizes_below_32gb_only() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(
+            select_kv_cache_type(None, Some(8 * GIB)),
+            Ok(KvCacheType::Q8)
+        );
+        assert_eq!(
+            select_kv_cache_type(None, Some(16 * GIB)),
+            Ok(KvCacheType::Q8)
+        );
+        assert_eq!(
+            select_kv_cache_type(None, Some(KV_QUANT_RAM_THRESHOLD_BYTES - 1)),
+            Ok(KvCacheType::Q8)
+        );
+        assert_eq!(
+            select_kv_cache_type(None, Some(KV_QUANT_RAM_THRESHOLD_BYTES)),
+            Ok(KvCacheType::F16)
+        );
+        assert_eq!(
+            select_kv_cache_type(None, Some(64 * GIB)),
+            Ok(KvCacheType::F16)
+        );
+        // Unknown RAM keeps the exact fp16 default (no silent quality change).
+        assert_eq!(select_kv_cache_type(None, None), Ok(KvCacheType::F16));
+    }
+
+    #[test]
+    fn kv_cache_override_beats_ram_tier_and_rejects_garbage() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        // Force fp16 on a low-RAM machine; force q8 on a high-RAM one.
+        assert_eq!(
+            select_kv_cache_type(Some("fp16"), Some(8 * GIB)),
+            Ok(KvCacheType::F16)
+        );
+        assert_eq!(
+            select_kv_cache_type(Some("q8"), Some(64 * GIB)),
+            Ok(KvCacheType::Q8)
+        );
+        // Aliases, case, and whitespace are accepted.
+        assert_eq!(
+            select_kv_cache_type(Some("f16"), None),
+            Ok(KvCacheType::F16)
+        );
+        assert_eq!(
+            select_kv_cache_type(Some(" Q8_0 "), None),
+            Ok(KvCacheType::Q8)
+        );
+        // Empty/blank override falls through to the RAM tier.
+        assert_eq!(
+            select_kv_cache_type(Some(""), Some(8 * GIB)),
+            Ok(KvCacheType::Q8)
+        );
+        // A typo must fail loud, not silently pick a cache type.
+        let err = select_kv_cache_type(Some("q4_0"), None).expect_err("garbage rejected");
+        assert!(err.contains("FAE_KV_CACHE"));
+        assert!(err.contains("q4_0"));
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
@@ -1742,6 +1916,7 @@ mod tests {
             port: 18080,
             ctx_size: 8192,
             ngl: 999,
+            kv_cache_type: KvCacheType::F16,
             pidfile_root: None,
         }
     }
@@ -1847,6 +2022,7 @@ mod tests {
             port: 1,
             ctx_size: 8192,
             ngl: 999,
+            kv_cache_type: KvCacheType::F16,
             pidfile_root: None,
         };
         let adapter =
@@ -1969,6 +2145,7 @@ mod tests {
             port: 1,
             ctx_size: 8192,
             ngl: 999,
+            kv_cache_type: KvCacheType::F16,
             pidfile_root: None,
         }
     }

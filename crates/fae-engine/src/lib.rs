@@ -36,8 +36,9 @@ mod tts;
 mod voice_tts_adapter;
 
 pub use llamacpp_adapter::{
-    kill_all_registered_sidecars, LazyLlamaServerAdapter, LlamaModelSource, LlamaServerAdapter,
-    LlamaServerConfig, LlamaServerHandle, RemoteModelArtifact,
+    kill_all_registered_sidecars, select_kv_cache_type, KvCacheType, LazyLlamaServerAdapter,
+    LlamaModelSource, LlamaServerAdapter, LlamaServerConfig, LlamaServerHandle,
+    RemoteModelArtifact, KV_QUANT_RAM_THRESHOLD_BYTES,
 };
 pub use mistralrs_adapter::LocalMistralrsAdapter;
 pub use mock::{MockAdapter, DEFAULT_MOCK_CONTEXT_WINDOW};

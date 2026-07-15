@@ -40,8 +40,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fae_engine::{
-    ChatEvent, ChatMessage, ChatRequest, LlamaModelSource, LlamaServerAdapter, LlamaServerConfig,
-    ProviderAdapter, Role, ToolSpec,
+    ChatEvent, ChatMessage, ChatRequest, KvCacheType, LlamaModelSource, LlamaServerAdapter,
+    LlamaServerConfig, ProviderAdapter, Role, ToolSpec,
 };
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -114,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         port: 18135,
         ctx_size: 4096,
         ngl: 99,
+        kv_cache_type: KvCacheType::F16,
         pidfile_root: None,
     };
     eprintln!("[v2-calib] spawning sidecar (BASE model, no LoRA)…");

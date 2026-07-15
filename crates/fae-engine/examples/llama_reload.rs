@@ -7,8 +7,8 @@
 //! ```
 
 use fae_engine::{
-    ChatEvent, ChatMessage, ChatRequest, LlamaModelSource, LlamaServerAdapter, LlamaServerConfig,
-    ProviderAdapter, Role,
+    ChatEvent, ChatMessage, ChatRequest, KvCacheType, LlamaModelSource, LlamaServerAdapter,
+    LlamaServerConfig, ProviderAdapter, Role,
 };
 use futures_util::StreamExt;
 
@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         port: 18100,
         ctx_size: 4096,
         ngl: 99,
+        kv_cache_type: KvCacheType::F16,
         pidfile_root: None,
     };
     eprintln!("[reload] spawning managed sidecar (no LoRA)…");

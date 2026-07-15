@@ -21,7 +21,9 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::panic)]
 
-use fae_engine::{LlamaModelSource, LlamaServerAdapter, LlamaServerConfig, ProviderAdapter};
+use fae_engine::{
+    KvCacheType, LlamaModelSource, LlamaServerAdapter, LlamaServerConfig, ProviderAdapter,
+};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -79,6 +81,7 @@ fn standin_config(port: u16, pidfile_root: &Path) -> LlamaServerConfig {
         port,
         ctx_size: 4096,
         ngl: 0,
+        kv_cache_type: KvCacheType::F16,
         pidfile_root: Some(pidfile_root.to_path_buf()),
     }
 }
