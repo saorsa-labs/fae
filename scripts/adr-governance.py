@@ -244,20 +244,22 @@ def base_ref() -> tuple[str | None, str | None, bool]:
     resolved_base: str | None = None
     is_push = False
 
+    # The exact event SHA wins over the branch ref: ``origin/<base>`` tracks the
+    # *moving* base tip, so a base-branch advance after the PR opened would
+    # otherwise make a branch-new ADR look pre-existing and skip its checks.
+    base_sha = os.environ.get("GITHUB_BASE_SHA")
+    if base_sha:
+        has_event_selector = True
+        resolved = _resolve(base_sha)
+        if _is_valid_base(resolved, head):
+            resolved_base = resolved
+
     ref = os.environ.get("GITHUB_BASE_REF")
-    if ref:
+    if resolved_base is None and ref:
         has_event_selector = True
         resolved = _resolve(f"origin/{ref}")
         if _is_valid_base(resolved, head):
             resolved_base = resolved
-
-    if resolved_base is None:
-        base_sha = os.environ.get("GITHUB_BASE_SHA")
-        if base_sha:
-            has_event_selector = True
-            resolved = _resolve(base_sha)
-            if _is_valid_base(resolved, head):
-                resolved_base = resolved
 
     if resolved_base is None:
         before = os.environ.get("GITHUB_BEFORE")

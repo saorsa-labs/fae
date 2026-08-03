@@ -2088,6 +2088,87 @@ def main() -> int:
             and "docs/adr/0042-test.md" in out,
         ))
 
+    # -----------------------------------------------------------------------
+    # Base-selector precedence: the exact PR base SHA must win over the
+    # moving base branch ref.
+    #
+    # `is_new` (adr-governance.py :609) asks whether the path exists *at the
+    # base commit*, and only new ADRs get required-section validation. So if
+    # the base branch advances after the PR opens and independently adds the
+    # same path, resolving the base via `origin/<GITHUB_BASE_REF>` makes the
+    # branch's own new ADR look pre-existing and silently skips its
+    # structural checks. Consulting GITHUB_BASE_SHA first closes that race.
+    #
+    # Topology: A = exact PR base (no ADR); feature adds a structurally
+    # INVALID ADR (no '## Validation'); main advances to B, which adds a
+    # valid ADR at the same path; refs/remotes/origin/main -> B.
+    # Mutation proof: restoring GITHUB_BASE_REF precedence turns the red arm
+    # green while the control arm below stays green.
+    # -----------------------------------------------------------------------
+    _ADR_NO_VALIDATION = _ADR_PROPOSED[: _ADR_PROPOSED.index("## Validation")]
+
+    def _seed_base_race(work: Path) -> str:
+        """Build the topology above; return the exact PR base SHA (A)."""
+        _init_repo(work)
+        base_a = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=work, text=True
+        ).strip()
+        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=work, check=True)
+        (work / "docs" / "adr").mkdir(parents=True)
+        (work / "docs" / "adr" / "0042-test.md").write_text(_ADR_NO_VALIDATION)
+        subprocess.run(["git", "add", "."], cwd=work, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "branch-new ADR missing a section"],
+            cwd=work, check=True,
+        )
+        # Base branch advances independently at the same path.
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=work, check=True)
+        (work / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+        (work / "docs" / "adr" / "0042-test.md").write_text(_ADR_PROPOSED)
+        subprocess.run(["git", "add", "."], cwd=work, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "upstream adds same ADR path"],
+            cwd=work, check=True,
+        )
+        base_b = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=work, text=True
+        ).strip()
+        # No real remote in a temp repo — plant the tracking ref directly.
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", base_b],
+            cwd=work, check=True,
+        )
+        subprocess.run(["git", "checkout", "-q", "feature"], cwd=work, check=True)
+        return base_a
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        base_a = _seed_base_race(work)
+        rc, out = _run_validator(
+            work,
+            env_overrides={"GITHUB_BASE_REF": "main", "GITHUB_BASE_SHA": base_a},
+        )
+        results.append(check(
+            "base precedence: exact GITHUB_BASE_SHA beats advanced origin/<BASE_REF>",
+            rc == 1
+            and "missing required section '## Validation'" in out
+            and "docs/adr/0042-test.md" in out,
+        ))
+
+    # Discriminating control — same topology, GITHUB_BASE_SHA absent. The
+    # only base selector is the advanced branch ref, so the ADR genuinely
+    # does exist at the resolved base and the structural check is skipped.
+    # This is the exact behaviour the red arm above must NOT fall back to
+    # when the exact SHA is available.
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        _seed_base_race(work)
+        rc, out = _run_validator(work, env_overrides={"GITHUB_BASE_REF": "main"})
+        results.append(check(
+            "base precedence control: BASE_REF-only base skips the section check",
+            rc == 0 and "missing required section" not in out,
+        ))
+
     failed = results.count(False)
     print(f"\n{len(results) - failed}/{len(results)} passed")
     return 1 if failed else 0
