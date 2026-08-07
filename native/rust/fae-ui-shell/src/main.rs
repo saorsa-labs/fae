@@ -648,6 +648,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // (assistant.generating / audio.level / playback_ended). Derives the orb
     // mode WITHOUT the thinking→idle→thinking / speaking→idle→speaking flicker.
     let mut orb_state_machine = orb_state::OrbStateMachine::new();
+    let mut orb_visibility = OrbVisibilityState::new();
     // Stable epoch for the state machine's `now_ms` clock (monotonic).
     let process_start = Instant::now();
     // Last OrbUiState we applied from the state machine — lets us skip redundant
@@ -707,7 +708,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 multiline,
                 placeholder,
             })) => {
-                window.set_visible(true);
+                window.set_visible(orb_visibility.should_be_visible());
                 pill_request_input(
                     &mut pill,
                     window,
@@ -717,6 +718,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     multiline,
                     placeholder.as_deref(),
                 );
+                pill.window.set_visible(window.is_visible());
                 window.request_redraw();
             }
             // UX auto-cancel: Swift saw a new turn start while a `request_input`
@@ -736,6 +738,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     command,
                     &mut state,
                     &mut orb_ui,
+                    &mut orb_visibility,
                     window,
                     &mut web_panels,
                     control_flow,
@@ -851,6 +854,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                         &mut last_applied_mode,
                         &mut thinking_since,
                     );
+                    if let Some(visible) = orb_visibility.on_mode(mode) {
+                        window.set_visible(visible);
+                        pill.window.set_visible(visible);
+                    }
+                    if !orb_visibility.should_be_visible() {
+                        state.set_active(false);
+                    }
                 }
                 // Forward info updates to the pill model (Step 3: the indicator).
                 if let OrbDaemonEvent::InfoUpdate(items) = &event {
@@ -1010,6 +1020,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &mut last_applied_mode,
                     &mut thinking_since,
                 );
+                if let Some(visible) = orb_visibility.on_mode(mode) {
+                    window.set_visible(visible);
+                    pill.window.set_visible(visible);
+                }
                 // Tick the thinking counter once a second (refresh_pill dedupes
                 // by content, so per-frame calls only repaint on text change).
                 if thinking_since.is_some() {
@@ -1467,6 +1481,7 @@ fn apply_bridge_command(
     command: ShellCommand,
     state: &mut State,
     orb_ui: &mut OrbUiModel,
+    orb_visibility: &mut OrbVisibilityState,
     window: &Window,
     web_panels: &mut [WebPanel],
     control_flow: &mut ControlFlow,
@@ -1488,10 +1503,10 @@ fn apply_bridge_command(
                     FaeUiState::Thinking | FaeUiState::Speaking | FaeUiState::Listening
                 );
                 orb_ui.ui_mode = ui_state;
-                state.set_active(active);
+                state.set_active(active && orb_visibility.should_be_visible());
                 state.set_emotion(ui_state, feeling.as_deref());
                 state.set_status_progress(None, false);
-                window.set_visible(true);
+                window.set_visible(orb_visibility.should_be_visible());
             }
             state.set_audio(audio);
         }
@@ -1505,14 +1520,14 @@ fn apply_bridge_command(
             // animate as if a turn or startup were in flight.
             let should_show = !matches!(phase.as_str(), "running" | "stopped" | "degraded");
             orb_ui.set_status(phase, message, progress);
-            state.set_active(should_show);
+            state.set_active(should_show && orb_visibility.should_be_visible());
             state.set_status_progress(orb_ui.status_progress, should_show);
             if let Some(progress) = orb_ui.status_progress {
                 state.set_audio(AudioPatch::Set(progress));
             }
-            // Status changes animate the orb but never hide it (S18: the orb
-            // is the talk button and must stay clickable while idle).
-            window.set_visible(true);
+            // Startup/status animation respects the explicit owner-hidden latch;
+            // routine bridge traffic must never resurrect a hidden orb.
+            window.set_visible(orb_visibility.should_be_visible());
         }
         ShellCommand::Conversation { role, text } => {
             // The pill (the conversation surface) is refreshed by the event
@@ -1544,12 +1559,23 @@ fn apply_bridge_command(
             refresh_settings_panels(web_panels, orb_ui);
         }
         ShellCommand::Show => {
+            let visible = orb_visibility.show();
             state.set_active(true);
-            window.set_visible(true);
+            window.set_visible(visible);
         }
         ShellCommand::Hide => {
+            let visible = orb_visibility.hide();
             state.set_active(false);
-            window.set_visible(false);
+            window.set_visible(visible);
+        }
+        ShellCommand::ToggleVisibility => {
+            let visible = orb_visibility.toggle();
+            let mode_active = matches!(
+                orb_ui.ui_mode,
+                FaeUiState::Thinking | FaeUiState::Speaking | FaeUiState::Listening
+            );
+            state.set_active(visible && mode_active);
+            window.set_visible(visible);
         }
         ShellCommand::RequestInput { .. } => {
             // UX W1: intercepted in the event loop (it drives the pill directly
@@ -1626,6 +1652,67 @@ struct PillPanel {
 /// here would halve the pill on a 2x screen and crush the composer layout.
 const COLLAPSED_PILL: LogicalSize<u32> = LogicalSize::new(360, 52);
 const EXPANDED_PILL: LogicalSize<u32> = LogicalSize::new(360, 440);
+
+/// Explicit owner visibility preference plus the temporary reveal granted to
+/// one assistant speaking stretch. Thinking never overrides the hidden latch;
+/// only a transition into Speaking reveals, and final Quiescent re-hides.
+#[derive(Debug)]
+struct OrbVisibilityState {
+    user_hidden: bool,
+    transient_speech_reveal: bool,
+    last_mode: orb_state::OrbMode,
+}
+
+impl OrbVisibilityState {
+    fn new() -> Self {
+        Self {
+            user_hidden: false,
+            transient_speech_reveal: false,
+            last_mode: orb_state::OrbMode::Quiescent,
+        }
+    }
+
+    fn should_be_visible(&self) -> bool {
+        !self.user_hidden || self.transient_speech_reveal
+    }
+
+    fn hide(&mut self) -> bool {
+        self.user_hidden = true;
+        self.transient_speech_reveal = false;
+        false
+    }
+
+    fn show(&mut self) -> bool {
+        self.user_hidden = false;
+        self.transient_speech_reveal = false;
+        true
+    }
+
+    fn toggle(&mut self) -> bool {
+        if self.user_hidden {
+            self.show()
+        } else {
+            self.hide()
+        }
+    }
+
+    fn on_mode(&mut self, mode: orb_state::OrbMode) -> Option<bool> {
+        let entering_speaking =
+            self.last_mode != orb_state::OrbMode::Speaking && mode == orb_state::OrbMode::Speaking;
+        self.last_mode = mode;
+
+        if entering_speaking && self.user_hidden {
+            self.transient_speech_reveal = true;
+            return Some(true);
+        }
+        if mode == orb_state::OrbMode::Quiescent && self.user_hidden && self.transient_speech_reveal
+        {
+            self.transient_speech_reveal = false;
+            return Some(false);
+        }
+        None
+    }
+}
 
 /// Orb long-press gesture state: hold ≥ [`LONG_PRESS_MS`] without moving past
 /// [`PRESS_SLOP_PX`] → talk (release sends); move first → drag the orb.
@@ -1765,7 +1852,6 @@ fn pill_request_input(
 ) {
     pill.expanded = true;
     pill.pending_input = Some(request_id.clone());
-    pill.window.set_visible(true);
     pill.window.set_inner_size(EXPANDED_PILL);
     position_pill(orb_window, pill);
     let payload = serde_json::json!({
@@ -2693,8 +2779,8 @@ fn install_edit_menubar() -> Result<(), muda::Error> {
 
 #[cfg(test)]
 mod v4_tests {
-    use super::{apply_audio_patch, rms_to_level};
-    use crate::protocol::AudioPatch;
+    use super::{apply_audio_patch, rms_to_level, OrbVisibilityState};
+    use crate::{orb_state::OrbMode, protocol::AudioPatch};
 
     fn approx(level: Option<f32>, expected: f32) -> bool {
         level.map(|v| (v - expected).abs() < 1e-5).unwrap_or(false)
@@ -2751,5 +2837,67 @@ mod v4_tests {
         let mut level = Some(0.6);
         apply_audio_patch(AudioPatch::Unchanged, &mut level);
         assert_eq!(level, Some(0.6));
+    }
+
+    #[test]
+    fn hidden_preference_survives_thinking() {
+        let mut visibility = OrbVisibilityState::new();
+        assert!(!visibility.hide());
+
+        assert_eq!(visibility.on_mode(OrbMode::Thinking), None);
+        assert!(!visibility.should_be_visible());
+    }
+
+    #[test]
+    fn entering_speaking_transiently_reveals_hidden_orb() {
+        let mut visibility = OrbVisibilityState::new();
+        visibility.hide();
+        visibility.on_mode(OrbMode::Thinking);
+
+        assert_eq!(visibility.on_mode(OrbMode::Speaking), Some(true));
+        assert!(visibility.should_be_visible());
+    }
+
+    #[test]
+    fn repeated_speaking_does_not_retrigger_transient_reveal() {
+        let mut visibility = OrbVisibilityState::new();
+        visibility.hide();
+        assert_eq!(visibility.on_mode(OrbMode::Speaking), Some(true));
+
+        assert_eq!(visibility.on_mode(OrbMode::Speaking), None);
+        assert!(visibility.should_be_visible());
+    }
+
+    #[test]
+    fn final_quiescent_rehides_transiently_revealed_orb() {
+        let mut visibility = OrbVisibilityState::new();
+        visibility.hide();
+        visibility.on_mode(OrbMode::Speaking);
+
+        assert_eq!(visibility.on_mode(OrbMode::Quiescent), Some(false));
+        assert!(!visibility.should_be_visible());
+    }
+
+    #[test]
+    fn explicit_show_during_transient_reveal_prevents_rehide() {
+        let mut visibility = OrbVisibilityState::new();
+        visibility.hide();
+        visibility.on_mode(OrbMode::Speaking);
+
+        assert!(visibility.show());
+        assert_eq!(visibility.on_mode(OrbMode::Quiescent), None);
+        assert!(visibility.should_be_visible());
+    }
+
+    #[test]
+    fn hide_during_speaking_blocks_same_mode_reveal() {
+        let mut visibility = OrbVisibilityState::new();
+        visibility.hide();
+        visibility.on_mode(OrbMode::Speaking);
+
+        assert!(!visibility.hide());
+        assert!(!visibility.should_be_visible());
+        assert_eq!(visibility.on_mode(OrbMode::Speaking), None);
+        assert!(!visibility.should_be_visible());
     }
 }

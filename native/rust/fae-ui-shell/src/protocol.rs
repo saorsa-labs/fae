@@ -115,6 +115,7 @@ pub enum ShellCommand {
     ClearConversation,
     Show,
     Hide,
+    ToggleVisibility,
     Quit,
 }
 
@@ -372,6 +373,13 @@ mod tests {
             _ => false,
         };
         assert!(decoded);
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_toggle_visibility_command() -> Result<(), serde_json::Error> {
+        let command: ShellCommand = serde_json::from_str(r#"{"type":"toggle_visibility"}"#)?;
+        assert!(matches!(command, ShellCommand::ToggleVisibility));
         Ok(())
     }
 }
